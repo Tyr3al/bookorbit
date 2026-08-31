@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 
 import type { Book } from '../../../db/schema';
 import { BookService } from '../../book/book.service';
@@ -12,6 +12,7 @@ import {
   type MapperSeriesRow,
 } from './library-item-mapper.service';
 import type { RequestUser } from '../../../common/types/request-user';
+import { parseAbsId } from '../pipes/abs-id.pipe';
 
 @Injectable()
 export class AudiobookshelfItemsService {
@@ -39,11 +40,36 @@ export class AudiobookshelfItemsService {
     return this.mapBookIds(bookIds, (input) => this.mapper.toLibraryItemMinified(input));
   }
 
+  /** ABS POST /api/items/batch/get - validates and maps a bounded all-or-nothing batch. */
+  async getBatchItems(user: RequestUser, libraryItemIds: string[]): Promise<AbsLibraryItem[]> {
+    if (!Array.isArray(libraryItemIds) || libraryItemIds.length === 0 || libraryItemIds.length > 100) {
+      throw new BadRequestException('libraryItemIds must contain between 1 and 100 ids');
+    }
+
+    let bookIds: number[];
+    try {
+      bookIds = libraryItemIds.map((id) => parseAbsId(id));
+    } catch {
+      throw new BadRequestException('libraryItemIds contains an invalid id');
+    }
+    if (new Set(bookIds).size !== bookIds.length) throw new BadRequestException('libraryItemIds must not contain duplicates');
+
+    const books = await this.repository.findExposedAudioBooksByIds(bookIds, user);
+    if (books.length !== bookIds.length) throw new NotFoundException('One or more library items were not found');
+    return this.mapBooks(bookIds, books, (input) => this.mapper.toLibraryItem(input));
+  }
+
   private async mapBookIds<T>(bookIds: number[], toItem: (input: MapLibraryItemInput) => T): Promise<T[]> {
     if (bookIds.length === 0) return [];
 
-    const [books, metadataRows, files, authorRows, narratorRows, seriesRows, genreRows] = await Promise.all([
-      this.repository.findBooksByIds(bookIds),
+    const books = await this.repository.findBooksByIds(bookIds);
+    return this.mapBooks(bookIds, books, toItem);
+  }
+
+  private async mapBooks<T>(bookIds: number[], books: Book[], toItem: (input: MapLibraryItemInput) => T): Promise<T[]> {
+    if (bookIds.length === 0) return [];
+
+    const [metadataRows, files, authorRows, narratorRows, seriesRows, genreRows] = await Promise.all([
       this.repository.findMetadataByBookIds(bookIds),
       this.repository.findAudioFilesByBookIds(bookIds),
       this.repository.findAuthorsByBookIds(bookIds),

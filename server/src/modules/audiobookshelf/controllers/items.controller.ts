@@ -11,6 +11,7 @@ import { AudiobookshelfProgressService } from '../services/audiobookshelf-progre
 import { parseAbsId } from '../pipes/abs-id.pipe';
 import { AudiobookshelfEnabledGuard } from '../audiobookshelf-enabled.guard';
 import { AudiobookshelfPlaybackService } from '../services/audiobookshelf-playback.service';
+import { GetAbsItemsBatchDto } from '../dto/get-abs-items-batch.dto';
 
 @Controller('api/items')
 @UseGuards(AudiobookshelfEnabledGuard)
@@ -21,6 +22,12 @@ export class ItemsController {
     private readonly progressService: AudiobookshelfProgressService,
     private readonly playbackService: AudiobookshelfPlaybackService,
   ) {}
+
+  @Post('batch/get')
+  @HttpCode(HttpStatus.OK)
+  async getBatch(@CurrentUser() user: RequestUser, @Body() dto: GetAbsItemsBatchDto) {
+    return { libraryItems: await this.itemsService.getBatchItems(user, dto.libraryItemIds) };
+  }
 
   @Get(':id')
   async getItem(@CurrentUser() user: RequestUser, @Param('id') id: string, @Query('include') include?: string) {

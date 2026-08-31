@@ -160,6 +160,39 @@ export class AudiobookshelfRepository {
     return this.db.select().from(schema.books).where(inArray(schema.books.id, bookIds));
   }
 
+  /** Audio books visible to an ABS user, restricted to the requested ids in one query. */
+  async findExposedAudioBooksByIds(
+    bookIds: number[],
+    user: { id: number; isSuperuser: boolean; contentFilters?: ContentFilterRules },
+  ): Promise<schema.Book[]> {
+    if (bookIds.length === 0) return [];
+    const filterClauses = !user.isSuperuser && user.contentFilters ? buildContentFilterClauses(user.contentFilters, this.db) : [];
+    const accessClause = user.isSuperuser
+      ? undefined
+      : exists(
+          this.db
+            .select({ one: sql`1` })
+            .from(schema.userLibraryAccess)
+            .where(and(eq(schema.userLibraryAccess.userId, user.id), eq(schema.userLibraryAccess.libraryId, schema.books.libraryId))),
+        );
+
+    return this.db
+      .select({ book: schema.books })
+      .from(schema.books)
+      .innerJoin(schema.libraries, eq(schema.libraries.id, schema.books.libraryId))
+      .where(
+        and(
+          inArray(schema.books.id, bookIds),
+          eq(schema.libraries.enableAudiobookshelfApi, true),
+          BOOK_VISIBLE_WHERE,
+          this.hasAudioFile(),
+          accessClause,
+          ...filterClauses,
+        ),
+      )
+      .then((rows) => rows.map((row) => row.book));
+  }
+
   findMetadataByBookIds(bookIds: number[]): Promise<schema.BookMetadata[]> {
     if (bookIds.length === 0) return Promise.resolve([]);
     return this.db.select().from(schema.bookMetadata).where(inArray(schema.bookMetadata.bookId, bookIds));
