@@ -312,14 +312,20 @@ export interface AbsAuthorExpanded extends AbsAuthor {
 export interface AbsSeries {
   id: string;
   name: string;
+  nameIgnorePrefix: string;
   description: string | null;
   addedAt: number;
   updatedAt: number;
   libraryId?: string;
 }
 
-export interface AbsSeriesExpanded extends AbsSeries {
-  items: AbsLibraryItemMinified[];
+// Real ABS's single-series detail fetch (GET /api/series/:id and
+// GET /api/libraries/:id/series/:seriesId) never embeds books, even with `include=items` - it's
+// just AbsSeries. Only the library-scoped series *list* embeds books (see AbsSeriesListItem).
+
+// The library-scoped series list embeds each series' minified books directly in the row.
+export interface AbsSeriesListItem extends AbsSeries {
+  books: AbsLibraryItemMinified[];
 }
 
 export interface AbsCollection {
@@ -369,7 +375,7 @@ export interface AbsLibraryNarrators {
 }
 
 export interface AbsPaginatedSeries {
-  results: AbsSeries[];
+  results: AbsSeriesListItem[];
   total: number;
   limit: number;
   page: number;

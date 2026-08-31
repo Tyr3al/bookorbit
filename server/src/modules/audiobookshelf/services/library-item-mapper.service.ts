@@ -48,7 +48,9 @@ export class LibraryItemMapperService {
     const authorName = authors[0]?.name ?? '';
     const authorNameLF = authors[0]?.sortName ?? authors[0]?.name ?? '';
     const narratorName = narrators.map((n) => n.name).join(', ');
-    const seriesName = series[0]?.name ?? '';
+    // Real ABS composes this as "{name} #{sequence}" when a sequence is set, not the bare name.
+    const firstSeries = series[0];
+    const seriesName = firstSeries ? (firstSeries.seriesIndex ? `${firstSeries.name} #${firstSeries.seriesIndex}` : firstSeries.name) : '';
 
     const absMetadata = {
       title: metadata?.title ?? '',
