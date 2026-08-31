@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 
 import type { BookFile } from '../../../db/schema';
 import { BookService } from '../../book/book.service';
@@ -125,26 +125,22 @@ export class AudiobookshelfProgressService {
    * server), so the response shape doesn't need to echo anything back. */
   async syncLocalSessions(user: RequestUser, sessions: unknown[]): Promise<{ results: unknown[] }> {
     for (const raw of sessions) {
-      if (typeof raw !== 'object' || raw === null) continue;
-      const session = raw as Record<string, unknown>;
-      if (typeof session.libraryItemId !== 'string') continue;
-      const bookId = fromAbsUuid(session.libraryItemId);
-      if (bookId === null) continue;
-
-      const input: UpdateProgressInput = {
-        currentTime: typeof session.currentTime === 'number' ? session.currentTime : undefined,
-        duration: typeof session.duration === 'number' ? session.duration : undefined,
-        startedAt: typeof session.startedAt === 'number' ? session.startedAt : undefined,
-        lastUpdate: typeof session.updatedAt === 'number' ? session.updatedAt : undefined,
-        isFinished: typeof session.isFinished === 'boolean' ? session.isFinished : undefined,
-      };
+      const parsed = parseLocalSession(raw);
+      if (!parsed) continue;
       try {
-        await this.updateMediaProgress(user, bookId, input);
+        await this.updateMediaProgress(user, parsed.bookId, parsed.input);
       } catch {
         // Tolerate a single bad/inaccessible session rather than failing the whole upload.
       }
     }
     return { results: [] };
+  }
+
+  /** ABS POST /api/session/local - records one locally-recorded listening session. */
+  async syncLocalSession(user: RequestUser, raw: unknown): Promise<void> {
+    const parsed = parseLocalSession(raw);
+    if (!parsed) throw new BadRequestException('Invalid local playback session');
+    await this.updateMediaProgress(user, parsed.bookId, parsed.input);
   }
 
   toMediaProgress(
@@ -235,4 +231,31 @@ function resolveIncomingUpdatedAt(input: UpdateProgressInput): Date | null {
   if (timestamp == null || !Number.isFinite(timestamp) || timestamp < 0) return null;
   const date = new Date(timestamp);
   return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function parseLocalSession(raw: unknown): { bookId: number; input: UpdateProgressInput } | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const session = raw as Record<string, unknown>;
+  if (typeof session.libraryItemId !== 'string') return null;
+  const bookId = fromAbsUuid(session.libraryItemId);
+  if (bookId === null) return null;
+  const currentTime = finiteNumber(session.currentTime);
+  const progress = finiteNumber(session.progress);
+  if (currentTime === undefined && progress === undefined) return null;
+
+  return {
+    bookId,
+    input: {
+      currentTime,
+      progress,
+      duration: finiteNumber(session.duration),
+      startedAt: finiteNumber(session.startedAt),
+      lastUpdate: finiteNumber(session.lastUpdate) ?? finiteNumber(session.updatedAt),
+      isFinished: typeof session.isFinished === 'boolean' ? session.isFinished : undefined,
+    },
+  };
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }

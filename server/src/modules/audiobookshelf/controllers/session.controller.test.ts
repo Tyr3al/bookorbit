@@ -10,13 +10,26 @@ function user(id = 7): RequestUser {
 }
 
 function makeController() {
-  const progressService = {} as AudiobookshelfProgressService;
+  const progressService = {
+    syncLocalSession: vi.fn().mockResolvedValue(undefined),
+  } as unknown as AudiobookshelfProgressService;
   const playbackService = {
     sync: vi.fn().mockResolvedValue(undefined),
     close: vi.fn().mockResolvedValue(undefined),
   } as unknown as AudiobookshelfPlaybackService;
-  return { controller: new SessionController(progressService, playbackService), playbackService };
+  return { controller: new SessionController(progressService, playbackService), playbackService, progressService };
 }
+
+describe('SessionController.syncLocalSession', () => {
+  it('records one local session and returns plain OK', async () => {
+    const { controller, progressService } = makeController();
+    const currentUser = user();
+    const body = { libraryItemId: 'item-id', currentTime: 123, extra: 'ignored' };
+
+    await expect(controller.syncLocalSession(currentUser, body)).resolves.toBe('OK');
+    expect(progressService.syncLocalSession).toHaveBeenCalledWith(currentUser, body);
+  });
+});
 
 describe('SessionController.syncSession', () => {
   it('syncs playback fields through the progress service and returns plain OK', async () => {

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { BadRequestException } from '@nestjs/common';
 
 import { AudiobookshelfProgressService } from './audiobookshelf-progress.service';
 import type { AudiobookshelfRepository } from '../audiobookshelf.repository';
@@ -205,6 +206,28 @@ describe('AudiobookshelfProgressService.updateMediaProgress', () => {
       undefined,
       true,
     );
+  });
+
+  it('records one local session using the shared progress update path', async () => {
+    const { service, bookService } = makeService();
+
+    await service.syncLocalSession(user(), { libraryItemId: toAbsUuid(7), currentTime: 30, isFinished: false, extra: 'ignored' });
+
+    expect(bookService.saveAudioProgress).toHaveBeenCalledWith(
+      1,
+      7,
+      expect.objectContaining({ positionSeconds: 30 }),
+      expect.anything(),
+      undefined,
+      false,
+    );
+  });
+
+  it('rejects malformed single local sessions', async () => {
+    const { service } = makeService();
+
+    await expect(service.syncLocalSession(user(), { currentTime: 30 })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.syncLocalSession(user(), { libraryItemId: toAbsUuid(7) })).rejects.toBeInstanceOf(BadRequestException);
   });
 });
 

@@ -21,6 +21,14 @@ export class SessionController {
     return this.progressService.syncLocalSessions(user, sessions);
   }
 
+  @Post('local')
+  @HttpCode(HttpStatus.OK)
+  @Header('Content-Type', 'text/plain')
+  async syncLocalSession(@CurrentUser() user: RequestUser, @Body() body: unknown): Promise<string> {
+    await this.progressService.syncLocalSession(user, body);
+    return 'OK';
+  }
+
   @Post(':id/sync')
   @HttpCode(HttpStatus.OK)
   @Header('Content-Type', 'text/plain')
