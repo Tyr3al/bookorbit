@@ -1,4 +1,4 @@
-import { Controller, Get, Headers, Param, Query, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Headers, HttpCode, HttpStatus, Param, Post, Query, Res, UseGuards } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
 import { createReadStream } from 'fs';
 import { stat } from 'fs/promises';
@@ -10,6 +10,7 @@ import { AudiobookshelfStreamService } from '../services/audiobookshelf-stream.s
 import { AudiobookshelfProgressService } from '../services/audiobookshelf-progress.service';
 import { parseAbsId } from '../pipes/abs-id.pipe';
 import { AudiobookshelfEnabledGuard } from '../audiobookshelf-enabled.guard';
+import { AudiobookshelfPlaybackService } from '../services/audiobookshelf-playback.service';
 
 @Controller('api/items')
 @UseGuards(AudiobookshelfEnabledGuard)
@@ -18,6 +19,7 @@ export class ItemsController {
     private readonly itemsService: AudiobookshelfItemsService,
     private readonly streamService: AudiobookshelfStreamService,
     private readonly progressService: AudiobookshelfProgressService,
+    private readonly playbackService: AudiobookshelfPlaybackService,
   ) {}
 
   @Get(':id')
@@ -26,6 +28,12 @@ export class ItemsController {
     const item = await this.itemsService.getItem(user, bookId);
     if (!include?.split(',').includes('progress')) return item;
     return { ...item, userMediaProgress: await this.progressService.getMediaProgress(user, bookId) };
+  }
+
+  @Post(':id/play')
+  @HttpCode(HttpStatus.OK)
+  play(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() body: unknown) {
+    return this.playbackService.play(user, parseAbsId(id), body);
   }
 
   @Get(':id/cover')

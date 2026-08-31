@@ -425,3 +425,45 @@ export interface AbsListeningSessions {
   itemsPerPage: number;
   sessions: unknown[];
 }
+
+/** Expanded response returned when a client starts direct playback for a book. */
+export interface AbsPlaybackSessionExpanded {
+  id: string;
+  userId: string;
+  libraryId: string;
+  libraryItemId: string;
+  bookId: string;
+  episodeId: null;
+  mediaType: 'book';
+  mediaMetadata: Record<string, unknown>;
+  chapters: AbsChapter[];
+  displayTitle: string;
+  displayAuthor: string;
+  coverPath: string | null;
+  duration: number | null;
+  playMethod: 0;
+  mediaPlayer: string;
+  deviceInfo: Record<string, unknown> | null;
+  serverVersion: string;
+  date: string;
+  dayOfWeek: string;
+  timeListening: number;
+  startTime: number;
+  currentTime: number;
+  startedAt: number;
+  updatedAt: number;
+  audioTracks: AbsPlaybackAudioTrack[];
+  libraryItem: AbsLibraryItem;
+}
+
+/** Playback tracks intentionally omit server-only audio-file fields and paths. */
+export interface AbsPlaybackAudioTrack {
+  index: number;
+  startOffset: number;
+  duration: number | null;
+  title: string;
+  contentUrl: string;
+  mimeType: string;
+  codec: string;
+  metadata: AbsFileMetadata;
+}

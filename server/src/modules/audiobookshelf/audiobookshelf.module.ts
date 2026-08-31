@@ -25,6 +25,7 @@ import { AudiobookshelfLibrariesService } from './services/audiobookshelf-librar
 import { AudiobookshelfItemsService } from './services/audiobookshelf-items.service';
 import { AudiobookshelfProgressService } from './services/audiobookshelf-progress.service';
 import { AudiobookshelfStreamService } from './services/audiobookshelf-stream.service';
+import { AudiobookshelfPlaybackService } from './services/audiobookshelf-playback.service';
 import { AudiobookshelfAuthorsService } from './services/audiobookshelf-authors.service';
 import { AudiobookshelfSeriesService } from './services/audiobookshelf-series.service';
 import { AudiobookshelfCollectionsService } from './services/audiobookshelf-collections.service';
@@ -56,6 +57,7 @@ import { AbsRefreshRouteRegistrar } from './services/abs-refresh-route.registrar
     AudiobookshelfItemsService,
     AudiobookshelfProgressService,
     AudiobookshelfStreamService,
+    AudiobookshelfPlaybackService,
     AudiobookshelfAuthorsService,
     AudiobookshelfSeriesService,
     AudiobookshelfCollectionsService,
