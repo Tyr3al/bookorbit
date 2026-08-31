@@ -60,6 +60,8 @@ function makeService(overrides: { files?: BookFile[] } = {}) {
         { userId: 1, bookId: 7, percentage: 25, currentFileId: 11, positionSeconds: 10, updatedAt: new Date('2024-01-01T00:00:00Z') },
       ]),
     findAudioFilesByBookId: vi.fn().mockResolvedValue(files),
+    findAudioFilesByBookIds: vi.fn().mockResolvedValue(files),
+    findExposedAudioBooksByIds: vi.fn().mockImplementation((bookIds: number[]) => Promise.resolve(bookIds.map((id) => ({ id })))),
     deleteProgressByUserIdAndBookId: vi.fn().mockResolvedValue(true),
   } as unknown as AudiobookshelfRepository;
   const itemsService = {
@@ -252,6 +254,129 @@ describe('AudiobookshelfProgressService.updateMediaProgress', () => {
 
     await expect(service.syncLocalSession(user(), { currentTime: 30 })).rejects.toBeInstanceOf(BadRequestException);
     await expect(service.syncLocalSession(user(), { libraryItemId: toAbsUuid(7) })).rejects.toBeInstanceOf(BadRequestException);
+  });
+});
+
+describe('AudiobookshelfProgressService.batchUpdateMediaProgress', () => {
+  it('applies accessible entries and silently skips an inaccessible one', async () => {
+    const { service, repository, bookService } = makeService();
+    vi.mocked(repository.findExposedAudioBooksByIds).mockResolvedValue([{ id: 7 }] as never);
+    vi.mocked(repository.findProgressByUserIdAndBookIds).mockResolvedValue([]);
+
+    await service.batchUpdateMediaProgress(user(), [
+      { libraryItemId: toAbsUuid(7), currentTime: 30 },
+      { libraryItemId: toAbsUuid(99), currentTime: 10 },
+    ]);
+
+    expect(bookService.saveAudioProgress).toHaveBeenCalledTimes(1);
+    expect(bookService.saveAudioProgress).toHaveBeenCalledWith(1, 7, expect.objectContaining({ positionSeconds: 30 }), expect.anything());
+  });
+
+  it('skips a stale entry using the batch-loaded progress row rather than writing', async () => {
+    const { service, repository, bookService } = makeService();
+    vi.mocked(repository.findExposedAudioBooksByIds).mockResolvedValue([{ id: 7 }] as never);
+    vi.mocked(repository.findProgressByUserIdAndBookIds).mockResolvedValue([
+      { userId: 1, bookId: 7, percentage: 25, currentFileId: 11, positionSeconds: 10, updatedAt: new Date('2025-01-01T00:00:00Z') },
+    ] as never);
+
+    await service.batchUpdateMediaProgress(user(), [
+      { libraryItemId: toAbsUuid(7), currentTime: 30, lastUpdate: Date.parse('2023-01-01T00:00:00Z') },
+    ]);
+
+    expect(bookService.saveAudioProgress).not.toHaveBeenCalled();
+  });
+
+  it('performs a single access lookup and a single file/progress load for the whole batch', async () => {
+    const { service, repository } = makeService();
+    vi.mocked(repository.findExposedAudioBooksByIds).mockResolvedValue([{ id: 7 }, { id: 8 }] as never);
+    vi.mocked(repository.findProgressByUserIdAndBookIds).mockResolvedValue([]);
+
+    await service.batchUpdateMediaProgress(user(), [
+      { libraryItemId: toAbsUuid(7), currentTime: 10 },
+      { libraryItemId: toAbsUuid(8), currentTime: 20 },
+      { libraryItemId: toAbsUuid(7), currentTime: 15 },
+    ]);
+
+    expect(repository.findExposedAudioBooksByIds).toHaveBeenCalledTimes(1);
+    expect(repository.findExposedAudioBooksByIds).toHaveBeenCalledWith([7, 8], user());
+    expect(repository.findAudioFilesByBookIds).toHaveBeenCalledTimes(1);
+    expect(repository.findAudioFilesByBookIds).toHaveBeenCalledWith([7, 8]);
+    expect(repository.findProgressByUserIdAndBookIds).toHaveBeenCalledTimes(1);
+    expect(repository.findProgressByUserIdAndBookIds).toHaveBeenCalledWith(1, [7, 8]);
+  });
+
+  it('applies repeated entries for one book in arrival order', async () => {
+    const { service, repository, bookService } = makeService();
+    vi.mocked(repository.findExposedAudioBooksByIds).mockResolvedValue([{ id: 7 }, { id: 8 }] as never);
+    vi.mocked(repository.findProgressByUserIdAndBookIds).mockResolvedValue([]);
+
+    await service.batchUpdateMediaProgress(user(), [
+      { libraryItemId: toAbsUuid(7), currentTime: 10 },
+      { libraryItemId: toAbsUuid(8), currentTime: 20 },
+      { libraryItemId: toAbsUuid(7), currentTime: 15 },
+    ]);
+
+    const positionsForBook7 = vi
+      .mocked(bookService.saveAudioProgress)
+      .mock.calls.filter((call) => call[1] === 7)
+      .map((call) => call[2].positionSeconds);
+    expect(positionsForBook7).toEqual([10, 15]);
+  });
+
+  it('keeps the newest timestamp when the same book repeats within a batch', async () => {
+    const { service, repository, bookService } = makeService();
+    vi.mocked(repository.findExposedAudioBooksByIds).mockResolvedValue([{ id: 7 }] as never);
+    vi.mocked(repository.findProgressByUserIdAndBookIds).mockResolvedValue([]);
+
+    await service.batchUpdateMediaProgress(user(), [
+      { libraryItemId: toAbsUuid(7), currentTime: 30, lastUpdate: Date.parse('2025-06-01T00:00:00Z') },
+      { libraryItemId: toAbsUuid(7), currentTime: 10, lastUpdate: Date.parse('2025-01-01T00:00:00Z') },
+    ]);
+
+    expect(bookService.saveAudioProgress).toHaveBeenCalledTimes(1);
+    expect(bookService.saveAudioProgress).toHaveBeenCalledWith(
+      1,
+      7,
+      expect.objectContaining({ positionSeconds: 30 }),
+      expect.anything(),
+      new Date(Date.parse('2025-06-01T00:00:00Z')),
+    );
+  });
+
+  it('ignores an entry with a missing or unparseable libraryItemId', async () => {
+    const { service, repository, bookService } = makeService();
+
+    await service.batchUpdateMediaProgress(user(), [{ currentTime: 10 }, { libraryItemId: 'not-a-uuid', currentTime: 10 }]);
+
+    expect(repository.findExposedAudioBooksByIds).not.toHaveBeenCalled();
+    expect(bookService.saveAudioProgress).not.toHaveBeenCalled();
+  });
+});
+
+describe('AudiobookshelfProgressService.syncLocalSessions', () => {
+  it('applies accessible sessions with a single batch access lookup and returns an empty results array', async () => {
+    const { service, repository, bookService } = makeService();
+    vi.mocked(repository.findExposedAudioBooksByIds).mockResolvedValue([{ id: 7 }] as never);
+    vi.mocked(repository.findProgressByUserIdAndBookIds).mockResolvedValue([]);
+
+    const result = await service.syncLocalSessions(user(), [
+      { libraryItemId: toAbsUuid(7), currentTime: 40 },
+      { libraryItemId: toAbsUuid(42), currentTime: 5 },
+    ]);
+
+    expect(result).toEqual({ results: [] });
+    expect(repository.findExposedAudioBooksByIds).toHaveBeenCalledTimes(1);
+    expect(bookService.saveAudioProgress).toHaveBeenCalledTimes(1);
+    expect(bookService.saveAudioProgress).toHaveBeenCalledWith(1, 7, expect.objectContaining({ positionSeconds: 40 }), expect.anything());
+  });
+
+  it('skips a book with no audio files rather than throwing', async () => {
+    const { service, repository, bookService } = makeService();
+    vi.mocked(repository.findExposedAudioBooksByIds).mockResolvedValue([{ id: 7 }] as never);
+    vi.mocked(repository.findAudioFilesByBookIds).mockResolvedValue([]);
+
+    await expect(service.syncLocalSessions(user(), [{ libraryItemId: toAbsUuid(7), currentTime: 40 }])).resolves.toEqual({ results: [] });
+    expect(bookService.saveAudioProgress).not.toHaveBeenCalled();
   });
 });
 

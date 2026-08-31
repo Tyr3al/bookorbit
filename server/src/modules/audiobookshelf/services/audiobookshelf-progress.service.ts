@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 
 import type { BookFile } from '../../../db/schema';
 import { BookService } from '../../book/book.service';
@@ -8,6 +8,7 @@ import type { AbsLibraryItemMinified, AbsMediaProgress } from '../audiobookshelf
 import type { RequestUser } from '../../../common/types/request-user';
 import { AudiobookshelfItemsService } from './audiobookshelf-items.service';
 import { toAbsUuid, toAbsCompositeUuid, fromAbsCompositeUuid, fromAbsUuid } from '../../../common/utils/abs-id.utils';
+import { sanitizeLogValue } from '../../../common/utils/log-sanitize.utils';
 
 export interface UpdateProgressInput {
   currentTime?: number;
@@ -20,6 +21,8 @@ export interface UpdateProgressInput {
 
 @Injectable()
 export class AudiobookshelfProgressService {
+  private readonly logger = new Logger(AudiobookshelfProgressService.name);
+
   constructor(
     private readonly repository: AudiobookshelfRepository,
     private readonly bookService: BookService,
@@ -124,15 +127,25 @@ export class AudiobookshelfProgressService {
   /** ABS PATCH /api/me/progress/batch/update - applies each entry, skipping ones that fail
    * (unknown/inaccessible item) rather than rejecting the whole batch, matching real ABS. */
   async batchUpdateMediaProgress(user: RequestUser, items: (UpdateProgressInput & { libraryItemId?: string })[]): Promise<void> {
-    for (const item of items) {
-      if (!item.libraryItemId) continue;
-      const bookId = fromAbsUuid(item.libraryItemId);
-      if (bookId === null) continue;
-      try {
-        await this.updateMediaProgress(user, bookId, item);
-      } catch {
-        // Real ABS logs and continues on a per-item failure rather than aborting the batch.
-      }
+    const event = 'abs.progress_batch_update';
+    const startedAt = Date.now();
+    this.logger.log(`[${event}] [start] userId=${user.id} entries=${items.length} - progress batch update started`);
+    try {
+      const entries = items.flatMap((item) => {
+        if (!item.libraryItemId) return [];
+        const bookId = fromAbsUuid(item.libraryItemId);
+        return bookId === null ? [] : [{ bookId, input: item }];
+      });
+      const outcome = await this.applyProgressBatch(user, entries);
+      this.logger.log(
+        `[${event}] [end] userId=${user.id} entries=${items.length} durationMs=${Date.now() - startedAt} applied=${outcome.applied} skipped=${outcome.skipped} failed=${outcome.failed} - progress batch update completed`,
+      );
+    } catch (error: unknown) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      this.logger.warn(
+        `[${event}] [fail] userId=${user.id} entries=${items.length} durationMs=${Date.now() - startedAt} errorClass=${err.constructor.name} error="${sanitizeLogValue(err.message)}" - progress batch update failed`,
+      );
+      throw error;
     }
   }
 
@@ -143,14 +156,24 @@ export class AudiobookshelfProgressService {
    * always answers with an empty results array regardless of input (confirmed against a real
    * server), so the response shape doesn't need to echo anything back. */
   async syncLocalSessions(user: RequestUser, sessions: unknown[]): Promise<{ results: unknown[] }> {
-    for (const raw of sessions) {
-      const parsed = parseLocalSession(raw);
-      if (!parsed) continue;
-      try {
-        await this.updateMediaProgress(user, parsed.bookId, parsed.input);
-      } catch {
-        // Tolerate a single bad/inaccessible session rather than failing the whole upload.
-      }
+    const event = 'abs.local_session_sync';
+    const startedAt = Date.now();
+    this.logger.log(`[${event}] [start] userId=${user.id} entries=${sessions.length} - local session sync started`);
+    try {
+      const entries = sessions.flatMap((raw) => {
+        const parsed = parseLocalSession(raw);
+        return parsed ? [parsed] : [];
+      });
+      const outcome = await this.applyProgressBatch(user, entries);
+      this.logger.log(
+        `[${event}] [end] userId=${user.id} entries=${sessions.length} durationMs=${Date.now() - startedAt} applied=${outcome.applied} skipped=${outcome.skipped} failed=${outcome.failed} - local session sync completed`,
+      );
+    } catch (error: unknown) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      this.logger.warn(
+        `[${event}] [fail] userId=${user.id} entries=${sessions.length} durationMs=${Date.now() - startedAt} errorClass=${err.constructor.name} error="${sanitizeLogValue(err.message)}" - local session sync failed`,
+      );
+      throw error;
     }
     return { results: [] };
   }
@@ -192,6 +215,110 @@ export class AudiobookshelfProgressService {
       ebookLocation: null,
       ebookProgress: null,
     };
+  }
+
+  /** Shared write path for the batch progress endpoints: one access check, one file load, and
+   * one progress load for the whole batch, then bounded-concurrency writes so failures on one
+   * entry don't block or abort the others. Entries are grouped per book and each group is applied
+   * in arrival order, because a client can upload several sessions for the same book in one batch
+   * and an entry carrying no timestamp bypasses the atomic stale-write guard in the upsert. */
+  private async applyProgressBatch(
+    user: RequestUser,
+    entries: { bookId: number; input: UpdateProgressInput }[],
+  ): Promise<{ applied: number; skipped: number; failed: number }> {
+    if (entries.length === 0) return { applied: 0, skipped: 0, failed: 0 };
+
+    const bookIds = [...new Set(entries.map((entry) => entry.bookId))];
+    const accessibleBooks = await this.repository.findExposedAudioBooksByIds(bookIds, user);
+    const accessibleBookIds = new Set(accessibleBooks.map((book) => book.id));
+
+    const accessibleEntries = entries.filter((entry) => accessibleBookIds.has(entry.bookId));
+    let skipped = entries.length - accessibleEntries.length;
+    if (accessibleEntries.length === 0) return { applied: 0, skipped, failed: 0 };
+
+    const accessibleBookIdsArray = [...accessibleBookIds];
+    const [files, progressRows] = await Promise.all([
+      this.repository.findAudioFilesByBookIds(accessibleBookIdsArray),
+      this.repository.findProgressByUserIdAndBookIds(user.id, accessibleBookIdsArray),
+    ]);
+
+    const filesByBookId = new Map<number, BookFile[]>();
+    for (const file of files) {
+      const list = filesByBookId.get(file.bookId);
+      if (list) list.push(file);
+      else filesByBookId.set(file.bookId, [file]);
+    }
+    const progressByBookId = new Map(progressRows.map((row) => [row.bookId, row]));
+
+    const entriesByBookId = new Map<number, typeof accessibleEntries>();
+    for (const entry of accessibleEntries) {
+      const list = entriesByBookId.get(entry.bookId);
+      if (list) list.push(entry);
+      else entriesByBookId.set(entry.bookId, [entry]);
+    }
+
+    let applied = 0;
+    let failed = 0;
+
+    await runWithConcurrency([...entriesByBookId.values()], PROGRESS_BATCH_CONCURRENCY, async (group) => {
+      const bookId = group[0].bookId;
+      const orderedFiles = (filesByBookId.get(bookId) ?? []).slice().sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.id - b.id);
+      if (orderedFiles.length === 0) {
+        skipped += group.length;
+        return;
+      }
+      let lastUpdatedAt = progressByBookId.get(bookId)?.updatedAt;
+      for (const entry of group) {
+        try {
+          const wasApplied = await this.applyProgressEntry(user, bookId, entry.input, orderedFiles, lastUpdatedAt);
+          if (!wasApplied) {
+            skipped++;
+            continue;
+          }
+          applied++;
+          lastUpdatedAt = resolveIncomingUpdatedAt(entry.input) ?? lastUpdatedAt;
+        } catch {
+          failed++;
+        }
+      }
+    });
+
+    return { applied, skipped, failed };
+  }
+
+  /** Writes a single batch entry against already-loaded files and the newest progress timestamp
+   * known for the book. Returns false when the stale-write guard skips the write, matching
+   * updateMediaProgress's no-op case. */
+  private async applyProgressEntry(
+    user: RequestUser,
+    bookId: number,
+    input: UpdateProgressInput,
+    orderedFiles: BookFile[],
+    existingUpdatedAt: Date | undefined,
+  ): Promise<boolean> {
+    const incomingUpdatedAt = resolveIncomingUpdatedAt(input);
+    if (existingUpdatedAt && incomingUpdatedAt !== null && existingUpdatedAt.getTime() > incomingUpdatedAt.getTime()) {
+      return false;
+    }
+
+    const totalDuration = orderedFiles.reduce((sum, file) => sum + (file.durationSeconds ?? 0), 0);
+    const { currentFileId, positionSeconds, percentage } = this.resolvePosition(orderedFiles, totalDuration, input);
+    const progress = { percentage, currentFileId, positionSeconds };
+
+    if (incomingUpdatedAt !== null) {
+      if (input.isFinished === undefined) {
+        await this.bookService.saveAudioProgress(user.id, bookId, progress, user, incomingUpdatedAt);
+      } else {
+        await this.bookService.saveAudioProgress(user.id, bookId, progress, user, incomingUpdatedAt, input.isFinished);
+      }
+    } else {
+      if (input.isFinished === undefined) {
+        await this.bookService.saveAudioProgress(user.id, bookId, progress, user);
+      } else {
+        await this.bookService.saveAudioProgress(user.id, bookId, progress, user, undefined, input.isFinished);
+      }
+    }
+    return true;
   }
 
   private async requireExposedBook(user: RequestUser, bookId: number): Promise<{ id: number }> {
@@ -282,4 +409,21 @@ function parseLocalSession(raw: unknown): { bookId: number; input: UpdateProgres
 
 function finiteNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+const PROGRESS_BATCH_CONCURRENCY = 4;
+
+/** Runs `task` over `items` with at most `limit` in flight at once. Each task is awaited within
+ * its own worker loop, so a rejection there must be handled by the caller - this runner does not
+ * swallow errors itself. */
+async function runWithConcurrency<T>(items: T[], limit: number, task: (item: T) => Promise<void>): Promise<void> {
+  let cursor = 0;
+  const workerCount = Math.min(limit, items.length);
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (cursor < items.length) {
+      const item = items[cursor++];
+      await task(item);
+    }
+  });
+  await Promise.all(workers);
 }
