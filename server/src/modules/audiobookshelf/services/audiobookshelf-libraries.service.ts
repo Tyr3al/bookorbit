@@ -2,7 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 
 import { AudiobookshelfRepository, type AbsItemPageQuery, type AbsItemSort } from '../audiobookshelf.repository';
 import { ABS_DEFAULT_ITEM_LIMIT, ABS_MAX_ITEM_LIMIT, ABS_PROVIDER, ABS_METADATA_PRECEDENCE } from '../audiobookshelf.constants';
-import type { AbsLibrary, AbsLibraryItemMinified, AbsPaginatedItems } from '../audiobookshelf.types';
+import type { AbsLibrary, AbsLibraryFilterData, AbsLibraryItemMinified, AbsPaginatedItems } from '../audiobookshelf.types';
 import { AudiobookshelfItemsService } from './audiobookshelf-items.service';
 import type { RequestUser } from '../../../common/types/request-user';
 import { toAbsUuid } from '../../../common/utils/abs-id.utils';
@@ -123,6 +123,41 @@ export class AudiobookshelfLibrariesService {
   ): Promise<{ book: AbsLibraryItemMinified[]; author: unknown[]; series: unknown[]; podcast: unknown[]; episode: unknown[] }> {
     const page = await this.getItemsPage(user, libraryId, { ...input, search: q });
     return { book: page.results, author: [], series: [], podcast: [], episode: [] };
+  }
+
+  /** GET /api/libraries/:id/filterdata - a library's capability summary. Some ABS clients
+   * (confirmed with Prologue) check this to decide what's worth syncing before ever calling the
+   * dedicated series/genre/etc. list endpoints, so an unimplemented (or wrong) response here can
+   * make a library look empty of series/genres/etc. persistently, even though those endpoints
+   * work fine on their own. */
+  async getFilterData(user: RequestUser, libraryId: number): Promise<AbsLibraryFilterData> {
+    await this.requireExposedLibrary(user, libraryId);
+    const contentFilters = user.isSuperuser ? undefined : user.contentFilters;
+
+    const [authorRows, seriesRows, narratorRows, bookIds, aggregates] = await Promise.all([
+      this.repository.findAuthorsWithCountsByLibraries([libraryId], contentFilters),
+      this.repository.findSeriesByLibraries([libraryId], contentFilters),
+      this.repository.findNarratorsWithCountsByLibraries([libraryId], contentFilters),
+      this.repository.findAudioBookIdsByLibraries([libraryId], contentFilters),
+      this.repository.findLibraryFilterAggregates([libraryId], contentFilters),
+    ]);
+
+    return {
+      authors: authorRows.map((row) => ({ id: toAbsUuid(row.id), name: row.name })),
+      genres: aggregates.genres,
+      tags: [],
+      series: seriesRows.map((row) => ({ id: toAbsUuid(row.id), name: row.name })),
+      narrators: narratorRows.map((row) => row.name),
+      languages: aggregates.languages,
+      publishers: aggregates.publishers,
+      publishedDecades: [...new Set(aggregates.publishedYears.map((year) => String(Math.floor(year / 10) * 10)))].sort(),
+      bookCount: bookIds.length,
+      authorCount: authorRows.length,
+      seriesCount: seriesRows.length,
+      podcastCount: 0,
+      numIssues: aggregates.missingCount,
+      loadedAt: Date.now(),
+    };
   }
 
   /** Ids of all libraries exposed to the user (used by author/series/collection scoping). */

@@ -374,6 +374,27 @@ export interface AbsLibraryNarrators {
   narrators: AbsNarrator[];
 }
 
+// GET /api/libraries/:id/filterdata - a library's capability summary. Some ABS clients
+// (confirmed with Prologue) check this before deciding what to sync/display persistently, so an
+// unimplemented endpoint here can make a library look empty of series/genres/etc. even though
+// the dedicated list endpoints work fine standalone.
+export interface AbsLibraryFilterData {
+  authors: { id: string; name: string }[];
+  genres: string[];
+  tags: string[];
+  series: { id: string; name: string }[];
+  narrators: string[];
+  languages: string[];
+  publishers: string[];
+  publishedDecades: string[];
+  bookCount: number;
+  authorCount: number;
+  seriesCount: number;
+  podcastCount: number;
+  numIssues: number;
+  loadedAt: number;
+}
+
 export interface AbsPaginatedSeries {
   results: AbsSeriesListItem[];
   total: number;

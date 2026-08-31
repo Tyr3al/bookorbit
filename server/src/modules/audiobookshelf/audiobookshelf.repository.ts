@@ -301,6 +301,50 @@ export class AudiobookshelfRepository {
       .orderBy(asc(schema.narrators.name));
   }
 
+  /** Distinct genres/languages/publishers/published-years and the missing-book count across
+   * audio books in the given libraries - the aggregates GET /api/libraries/:id/filterdata needs
+   * beyond what the authors/series/narrators list queries already cover. */
+  async findLibraryFilterAggregates(
+    libraryIds: number[],
+    contentFilters?: ContentFilterRules,
+  ): Promise<{ genres: string[]; languages: string[]; publishers: string[]; publishedYears: number[]; missingCount: number }> {
+    if (libraryIds.length === 0) {
+      return { genres: [], languages: [], publishers: [], publishedYears: [], missingCount: 0 };
+    }
+    const filterClauses = contentFilters ? buildContentFilterClauses(contentFilters, this.db) : [];
+    const audioBookWhere = and(inArray(schema.books.libraryId, libraryIds), BOOK_VISIBLE_WHERE, this.hasAudioFile(), ...filterClauses);
+
+    const [genreRows, metaRows, missingRows] = await Promise.all([
+      this.db
+        .selectDistinct({ name: schema.genres.name })
+        .from(schema.bookGenres)
+        .innerJoin(schema.genres, eq(schema.genres.id, schema.bookGenres.genreId))
+        .innerJoin(schema.books, eq(schema.books.id, schema.bookGenres.bookId))
+        .where(audioBookWhere),
+      this.db
+        .selectDistinct({
+          language: schema.bookMetadata.language,
+          publisher: schema.bookMetadata.publisher,
+          publishedYear: schema.bookMetadata.publishedYear,
+        })
+        .from(schema.bookMetadata)
+        .innerJoin(schema.books, eq(schema.books.id, schema.bookMetadata.bookId))
+        .where(audioBookWhere),
+      this.db
+        .select({ count: count() })
+        .from(schema.books)
+        .where(and(inArray(schema.books.libraryId, libraryIds), eq(schema.books.status, 'missing'))),
+    ]);
+
+    return {
+      genres: genreRows.map((row) => row.name),
+      languages: [...new Set(metaRows.map((row) => row.language).filter((value): value is string => value != null))],
+      publishers: [...new Set(metaRows.map((row) => row.publisher).filter((value): value is string => value != null))],
+      publishedYears: [...new Set(metaRows.map((row) => row.publishedYear).filter((value): value is number => value != null))],
+      missingCount: missingRows[0]?.count ?? 0,
+    };
+  }
+
   /** Authors of one specific book. */
   findAuthorIdsByBookIds(bookIds: number[]): Promise<{ bookId: number; authorId: number }[]> {
     if (bookIds.length === 0) return Promise.resolve([]);

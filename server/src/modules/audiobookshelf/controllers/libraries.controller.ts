@@ -99,6 +99,11 @@ export class LibrariesController {
   narrators(@CurrentUser() user: RequestUser, @Param('id') idParam: string) {
     return this.narratorsService.listLibraryNarrators(user, parseAbsId(idParam));
   }
+
+  @Get(':id/filterdata')
+  filterData(@CurrentUser() user: RequestUser, @Param('id') idParam: string) {
+    return this.librariesService.getFilterData(user, parseAbsId(idParam));
+  }
 }
 
 function parseOptionalInt(value: string | undefined): number | undefined {
