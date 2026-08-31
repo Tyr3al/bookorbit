@@ -5,7 +5,7 @@ import { AudiobookshelfItemsService } from './audiobookshelf-items.service';
 import { AudiobookshelfLibrariesService } from './audiobookshelf-libraries.service';
 import type { AbsAuthor, AbsAuthorExpanded, AbsLibraryItemMinified, AbsPaginatedAuthors } from '../audiobookshelf.types';
 import type { RequestUser } from '../../../common/types/request-user';
-import { toAbsUuid, fromAbsUuid } from '../../../common/utils/abs-id.utils';
+import { toAbsSeriesUuid, toAbsUuid, fromAbsUuid } from '../../../common/utils/abs-id.utils';
 import { AuthorsService } from '../../authors/authors.service';
 
 @Injectable()
@@ -130,7 +130,7 @@ export class AudiobookshelfAuthorsService {
     for (const membership of memberships) {
       const item = itemsByBookId.get(membership.bookId);
       if (!item) continue;
-      const seriesId = toAbsUuid(membership.id);
+      const seriesId = toAbsSeriesUuid(membership.id);
       let entry = seriesMap.get(seriesId);
       if (!entry) {
         entry = { id: seriesId, name: membership.name, items: [] };

@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 
-import { fromAbsUuid } from '../../../common/utils/abs-id.utils';
+import { fromAbsSeriesUuid, fromAbsUuid } from '../../../common/utils/abs-id.utils';
 
 /**
  * ABS clients (Prologue) echo back the UUID-shaped ids BookOrbit hands out in list/login
@@ -13,7 +13,15 @@ import { fromAbsUuid } from '../../../common/utils/abs-id.utils';
  * sidesteps that entirely.
  */
 export function parseAbsId(value: string): number {
-  const fromUuid = fromAbsUuid(value);
+  return parseWith(value, fromAbsUuid);
+}
+
+export function parseAbsSeriesId(value: string): number {
+  return parseWith(value, fromAbsSeriesUuid);
+}
+
+function parseWith(value: string, decodeUuid: (uuid: string) => number | null): number {
+  const fromUuid = decodeUuid(value);
   if (fromUuid !== null) return fromUuid;
 
   const asInt = Number.parseInt(value, 10);

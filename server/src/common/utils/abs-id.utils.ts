@@ -7,6 +7,7 @@
  */
 
 const ABS_UUID_PATTERN = /^00000000-0000-4000-8000-([0-9a-f]{12})$/;
+const ABS_SERIES_UUID_PATTERN = /^00000001-0000-4000-8000-([0-9a-f]{12})$/;
 
 export function toAbsUuid(id: number): string {
   const hex = id.toString(16).padStart(12, '0');
@@ -17,6 +18,23 @@ export function fromAbsUuid(uuid: string): number | null {
   const match = ABS_UUID_PATTERN.exec(uuid);
   if (!match) return null;
   return Number.parseInt(match[1], 16);
+}
+
+/**
+ * Series and collections are displayed from one shared Prologue cache. Keep series ids in a
+ * separate UUID namespace so equal integer primary keys cannot overwrite each other there.
+ */
+export function toAbsSeriesUuid(id: number): string {
+  const hex = id.toString(16).padStart(12, '0');
+  return `00000001-0000-4000-8000-${hex}`;
+}
+
+export function fromAbsSeriesUuid(uuid: string): number | null {
+  const match = ABS_SERIES_UUID_PATTERN.exec(uuid);
+  if (match) return Number.parseInt(match[1], 16);
+
+  // Accept ids issued before series had a distinct namespace so saved links keep working.
+  return fromAbsUuid(uuid);
 }
 
 /** Composite UUID for records keyed by two ids (e.g. a mediaProgress row keyed by user+book). */

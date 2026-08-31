@@ -4,7 +4,7 @@ import { basename } from 'path';
 import type { Book, BookFile, BookMetadata, BookSeries, Narrator, Author } from '../../../db/schema';
 import { ABS_BASE_PATH, ABS_SERVER_VERSION, resolveAbsAudioMimeType } from '../audiobookshelf.constants';
 import type { AbsAudioFile, AbsBookMedia, AbsChapter, AbsLibraryItem, AbsLibraryItemMinified, AbsTrack } from '../audiobookshelf.types';
-import { toAbsUuid } from '../../../common/utils/abs-id.utils';
+import { toAbsSeriesUuid, toAbsUuid } from '../../../common/utils/abs-id.utils';
 
 export interface MapperAuthorRow extends Author {
   bookId: number;
@@ -58,7 +58,7 @@ export class LibraryItemMapperService {
       subtitle: metadata?.subtitle ?? null,
       authors: authors.map((author) => ({ id: toAbsUuid(author.id), name: author.name })),
       narrators: narrators.map((n) => n.name),
-      series: series.map((s) => ({ id: toAbsUuid(s.id), name: s.name, sequence: s.seriesIndex })),
+      series: series.map((s) => ({ id: toAbsSeriesUuid(s.id), name: s.name, sequence: s.seriesIndex })),
       genres: genres.map((g) => g.name),
       publishedYear: metadata?.publishedYear != null ? String(metadata.publishedYear) : null,
       publishedDate: metadata?.publishedDate ?? null,

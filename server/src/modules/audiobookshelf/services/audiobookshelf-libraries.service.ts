@@ -5,7 +5,7 @@ import { ABS_DEFAULT_ITEM_LIMIT, ABS_MAX_ITEM_LIMIT, ABS_PROVIDER, ABS_METADATA_
 import type { AbsLibrary, AbsLibraryFilterData, AbsLibraryItemMinified, AbsPaginatedItems } from '../audiobookshelf.types';
 import { AudiobookshelfItemsService } from './audiobookshelf-items.service';
 import type { RequestUser } from '../../../common/types/request-user';
-import { toAbsUuid } from '../../../common/utils/abs-id.utils';
+import { toAbsSeriesUuid, toAbsUuid } from '../../../common/utils/abs-id.utils';
 
 /** Minimal user shape the library-scoped ABS queries need. */
 export type AbsLibraryUser = Pick<RequestUser, 'id' | 'isSuperuser'>;
@@ -146,7 +146,7 @@ export class AudiobookshelfLibrariesService {
       authors: authorRows.map((row) => ({ id: toAbsUuid(row.id), name: row.name })),
       genres: aggregates.genres,
       tags: [],
-      series: seriesRows.map((row) => ({ id: toAbsUuid(row.id), name: row.name })),
+      series: seriesRows.map((row) => ({ id: toAbsSeriesUuid(row.id), name: row.name })),
       narrators: narratorRows.map((row) => row.name),
       languages: aggregates.languages,
       publishers: aggregates.publishers,

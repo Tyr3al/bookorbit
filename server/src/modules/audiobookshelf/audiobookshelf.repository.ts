@@ -5,7 +5,7 @@ import type { ContentFilterRules } from '@bookorbit/types';
 
 import { buildContentFilterClauses } from '../../common/utils/content-filter-sql.utils';
 import { parseAbsItemFilter } from '../../common/utils/abs-filter.utils';
-import { fromAbsUuid } from '../../common/utils/abs-id.utils';
+import { fromAbsSeriesUuid, fromAbsUuid } from '../../common/utils/abs-id.utils';
 import { DB } from '../../db';
 import * as schema from '../../db/schema';
 import { ABS_AUDIO_FORMATS } from './audiobookshelf.constants';
@@ -457,7 +457,7 @@ export class AudiobookshelfRepository {
         );
       }
       case 'series': {
-        const seriesId = fromAbsUuid(value);
+        const seriesId = fromAbsSeriesUuid(value);
         if (seriesId === null) return sql`false`;
         return exists(
           this.db

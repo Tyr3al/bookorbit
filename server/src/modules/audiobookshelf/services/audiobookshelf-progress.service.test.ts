@@ -6,6 +6,7 @@ import type { AudiobookshelfItemsService } from './audiobookshelf-items.service'
 import type { BookService } from '../book/book.service';
 import type { BookFile } from '../../db/schema';
 import type { RequestUser } from '../../common/types/request-user';
+import { toAbsUuid } from '../../../common/utils/abs-id.utils';
 
 function audioFile(overrides: Partial<BookFile> = {}): BookFile {
   return {
@@ -74,7 +75,7 @@ describe('AudiobookshelfProgressService.toMediaProgress', () => {
     expect(progress.currentTime).toBe(70);
     expect(progress.duration).toBe(120);
     expect(progress.isFinished).toBe(false);
-    expect(progress.libraryItemId).toBe('7');
+    expect(progress.libraryItemId).toBe(toAbsUuid(7));
     expect(progress.mediaItemType).toBe('book');
   });
 

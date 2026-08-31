@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { LibraryItemMapperService } from './library-item-mapper.service';
 import type { MapLibraryItemInput, MapperAuthorRow, MapperNarratorRow, MapperSeriesRow } from './library-item-mapper.service';
 import type { Book, BookFile, BookMetadata } from '../../db/schema';
+import { toAbsSeriesUuid, toAbsUuid } from '../../../common/utils/abs-id.utils';
 
 const mapper = new LibraryItemMapperService();
 
@@ -158,9 +159,9 @@ describe('LibraryItemMapperService', () => {
   it('maps identity, timestamps, and file-level fields', () => {
     const item = mapper.toLibraryItem(input());
 
-    expect(item.id).toBe('7');
-    expect(item.libraryId).toBe('2');
-    expect(item.folderId).toBe('5');
+    expect(item.id).toBe(toAbsUuid(7));
+    expect(item.libraryId).toBe(toAbsUuid(2));
+    expect(item.folderId).toBe(toAbsUuid(5));
     expect(item.mediaType).toBe('book');
     expect(item.path).toBe('/books/A Collection/Book One');
     expect(item.isFile).toBe(false);
@@ -185,8 +186,13 @@ describe('LibraryItemMapperService', () => {
     const tracks = item.media.tracks;
 
     expect(tracks).toHaveLength(2);
-    expect(tracks[0]).toMatchObject({ index: 0, startOffset: 0, contentUrl: '/api/items/7/file/11', mimeType: 'audio/mpeg' });
-    expect(tracks[1]).toMatchObject({ index: 1, startOffset: 60, contentUrl: '/api/items/7/file/12' });
+    expect(tracks[0]).toMatchObject({
+      index: 0,
+      startOffset: 0,
+      contentUrl: `/abs/api/items/${toAbsUuid(7)}/file/${toAbsUuid(11)}`,
+      mimeType: 'audio/mpeg',
+    });
+    expect(tracks[1]).toMatchObject({ index: 1, startOffset: 60, contentUrl: `/abs/api/items/${toAbsUuid(7)}/file/${toAbsUuid(12)}` });
   });
 
   it('maps audioFiles with metadata and per-file duration', () => {
@@ -211,13 +217,13 @@ describe('LibraryItemMapperService', () => {
     expect(media.metadata.publisher).toBe('ACME');
     expect(media.metadata.publishedYear).toBe('2024');
     expect(media.metadata.isbn).toBe('9781234567897');
-    expect(media.metadata.authors).toEqual([{ id: '1', name: 'Jane Doe' }]);
+    expect(media.metadata.authors).toEqual([{ id: toAbsUuid(1), name: 'Jane Doe' }]);
     expect(media.metadata.authorName).toBe('Jane Doe');
     expect(media.metadata.authorNameLF).toBe('Doe, Jane');
     expect(media.metadata.narrators).toEqual(['Narrator One']);
     expect(media.metadata.narratorName).toBe('Narrator One');
-    expect(media.metadata.series).toEqual([{ id: '3', name: 'A Collection', sequence: '1' }]);
-    expect(media.metadata.seriesName).toBe('A Collection');
+    expect(media.metadata.series).toEqual([{ id: toAbsSeriesUuid(3), name: 'A Collection', sequence: '1' }]);
+    expect(media.metadata.seriesName).toBe('A Collection #1');
     expect(media.metadata.genres).toEqual(['Fantasy']);
     expect(media.duration).toBe(120);
   });
@@ -230,13 +236,16 @@ describe('LibraryItemMapperService', () => {
     const media = mapper.toLibraryItem(input({ metadata: metadata({ chapters }) })).media;
 
     expect(media.chapters).toEqual([
-      { id: 1, start: 0, end: 30, title: 'Chapter 1' },
-      { id: 2, start: 30, end: 120, title: 'Chapter 2' },
+      { id: 0, start: 0, end: 30, title: 'Chapter 1' },
+      { id: 1, start: 30, end: 120, title: 'Chapter 2' },
     ]);
   });
 
-  it('defaults to an empty chapter list when none are stored', () => {
+  it('uses audio tracks as chapters when none are stored', () => {
     const media = mapper.toLibraryItem(input({ metadata: metadata({ chapters: null }) })).media;
-    expect(media.chapters).toEqual([]);
+    expect(media.chapters).toEqual([
+      { id: 0, start: 0, end: 60, title: 'track-1' },
+      { id: 1, start: 60, end: 120, title: 'track-2' },
+    ]);
   });
 });

@@ -7,7 +7,7 @@ import { AudiobookshelfAuthorsService } from '../services/audiobookshelf-authors
 import { AudiobookshelfSeriesService } from '../services/audiobookshelf-series.service';
 import { AudiobookshelfCollectionsService } from '../services/audiobookshelf-collections.service';
 import { AudiobookshelfNarratorsService } from '../services/audiobookshelf-narrators.service';
-import { parseAbsId } from '../pipes/abs-id.pipe';
+import { parseAbsId, parseAbsSeriesId } from '../pipes/abs-id.pipe';
 import { AudiobookshelfEnabledGuard } from '../audiobookshelf-enabled.guard';
 
 @Controller('api/libraries')
@@ -73,7 +73,7 @@ export class LibrariesController {
 
   @Get(':id/series/:seriesId')
   seriesDetail(@CurrentUser() user: RequestUser, @Param('id') idParam: string, @Param('seriesId') seriesIdParam: string) {
-    return this.seriesService.getSeries(user, parseAbsId(seriesIdParam), parseAbsId(idParam));
+    return this.seriesService.getSeries(user, parseAbsSeriesId(seriesIdParam), parseAbsId(idParam));
   }
 
   @Get(':id/search')

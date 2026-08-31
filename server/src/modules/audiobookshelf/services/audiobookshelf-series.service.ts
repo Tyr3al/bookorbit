@@ -5,7 +5,7 @@ import { AudiobookshelfItemsService } from './audiobookshelf-items.service';
 import { AudiobookshelfLibrariesService } from './audiobookshelf-libraries.service';
 import type { AbsLibraryItemMinified, AbsPaginatedSeries, AbsSeries, AbsSeriesListItem } from '../audiobookshelf.types';
 import type { RequestUser } from '../../../common/types/request-user';
-import { toAbsUuid, fromAbsUuid } from '../../../common/utils/abs-id.utils';
+import { toAbsSeriesUuid, toAbsUuid, fromAbsUuid } from '../../../common/utils/abs-id.utils';
 
 @Injectable()
 export class AudiobookshelfSeriesService {
@@ -85,7 +85,7 @@ export class AudiobookshelfSeriesService {
 
   private toSeries(series: { id: number; name: string; createdAt?: Date; updatedAt?: Date }, libraryId?: string): AbsSeries {
     return {
-      id: toAbsUuid(series.id),
+      id: toAbsSeriesUuid(series.id),
       name: series.name,
       nameIgnorePrefix: series.name,
       description: null,
