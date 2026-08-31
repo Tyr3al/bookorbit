@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, ParseArrayPipe, Patch, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, HttpCode, HttpStatus, Param, ParseArrayPipe, Patch, Query, Req, UseGuards } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
 
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
@@ -55,5 +55,13 @@ export class MeController {
   @HttpCode(HttpStatus.OK)
   updateProgress(@CurrentUser() user: RequestUser, @Param('libraryItemId') libraryItemId: string, @Body() dto: UpdateAbsProgressDto) {
     return this.progressService.updateMediaProgress(user, parseAbsId(libraryItemId), dto);
+  }
+
+  @Delete('progress/:id')
+  @HttpCode(HttpStatus.OK)
+  @Header('Content-Type', 'text/plain')
+  async deleteProgress(@CurrentUser() user: RequestUser, @Param('id') id: string) {
+    await this.progressService.deleteMediaProgress(user, id);
+    return 'OK';
   }
 }

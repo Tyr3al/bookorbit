@@ -7,7 +7,7 @@ import { ABS_FINISHED_PROGRESS } from '../audiobookshelf.constants';
 import type { AbsMediaProgress } from '../audiobookshelf.types';
 import type { RequestUser } from '../../../common/types/request-user';
 import { AudiobookshelfItemsService } from './audiobookshelf-items.service';
-import { toAbsUuid, toAbsCompositeUuid, fromAbsUuid } from '../../../common/utils/abs-id.utils';
+import { toAbsUuid, toAbsCompositeUuid, fromAbsCompositeUuid, fromAbsUuid } from '../../../common/utils/abs-id.utils';
 
 export interface UpdateProgressInput {
   currentTime?: number;
@@ -55,6 +55,16 @@ export class AudiobookshelfProgressService {
     if (rows.length === 0) return null;
     const files = await this.repository.findAudioFilesByBookId(book.id);
     return this.toMediaProgress(rows[0], files);
+  }
+
+  /** ABS DELETE /api/me/progress/:id, where id identifies the user and library item. */
+  async deleteMediaProgress(user: RequestUser, progressId: string): Promise<void> {
+    const composite = fromAbsCompositeUuid(progressId);
+    if (!composite || composite.a !== user.id) throw new NotFoundException('Progress not found');
+
+    await this.requireExposedBook(user, composite.b);
+    const deleted = await this.repository.deleteProgressByUserIdAndBookId(user.id, composite.b);
+    if (!deleted) throw new NotFoundException('Progress not found');
   }
 
   /** ABS PATCH /api/me/progress/:libraryItemId - maps the payload onto audiobook_progress. */

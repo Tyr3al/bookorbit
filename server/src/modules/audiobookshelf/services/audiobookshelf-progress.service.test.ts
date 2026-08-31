@@ -6,7 +6,7 @@ import type { AudiobookshelfItemsService } from './audiobookshelf-items.service'
 import type { BookService } from '../book/book.service';
 import type { BookFile } from '../../db/schema';
 import type { RequestUser } from '../../common/types/request-user';
-import { toAbsUuid } from '../../../common/utils/abs-id.utils';
+import { toAbsCompositeUuid, toAbsUuid } from '../../../common/utils/abs-id.utils';
 
 function audioFile(overrides: Partial<BookFile> = {}): BookFile {
   return {
@@ -58,6 +58,7 @@ function makeService(overrides: { files?: BookFile[] } = {}) {
         { userId: 1, bookId: 7, percentage: 25, currentFileId: 11, positionSeconds: 10, updatedAt: new Date('2024-01-01T00:00:00Z') },
       ]),
     findAudioFilesByBookId: vi.fn().mockResolvedValue(files),
+    deleteProgressByUserIdAndBookId: vi.fn().mockResolvedValue(true),
   } as unknown as AudiobookshelfRepository;
   const itemsService = { requireExposedBook: vi.fn().mockResolvedValue({ id: 7 }) } as unknown as AudiobookshelfItemsService;
   const bookService = { saveAudioProgress: vi.fn().mockResolvedValue(undefined) } as unknown as BookService;
@@ -204,5 +205,32 @@ describe('AudiobookshelfProgressService.updateMediaProgress', () => {
       undefined,
       true,
     );
+  });
+});
+
+describe('AudiobookshelfProgressService.deleteMediaProgress', () => {
+  it('deletes progress only for the user encoded in the composite id', async () => {
+    const { service, repository, itemsService } = makeService();
+
+    await expect(service.deleteMediaProgress(user(), toAbsCompositeUuid(1, 7))).resolves.toBeUndefined();
+
+    expect(itemsService.requireExposedBook).toHaveBeenCalledWith(user(), 7);
+    expect(repository.deleteProgressByUserIdAndBookId).toHaveBeenCalledWith(1, 7);
+  });
+
+  it('rejects a composite id belonging to another user without touching progress', async () => {
+    const { service, repository, itemsService } = makeService();
+
+    await expect(service.deleteMediaProgress(user(), toAbsCompositeUuid(2, 7))).rejects.toThrow('Progress not found');
+
+    expect(itemsService.requireExposedBook).not.toHaveBeenCalled();
+    expect(repository.deleteProgressByUserIdAndBookId).not.toHaveBeenCalled();
+  });
+
+  it('returns not found when no progress row exists', async () => {
+    const { service, repository } = makeService();
+    vi.mocked(repository.deleteProgressByUserIdAndBookId).mockResolvedValue(false);
+
+    await expect(service.deleteMediaProgress(user(), toAbsCompositeUuid(1, 7))).rejects.toThrow('Progress not found');
   });
 });

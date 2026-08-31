@@ -270,6 +270,14 @@ export class AudiobookshelfRepository {
       .where(and(eq(schema.audiobookProgress.userId, userId), inArray(schema.audiobookProgress.bookId, bookIds)));
   }
 
+  async deleteProgressByUserIdAndBookId(userId: number, bookId: number): Promise<boolean> {
+    const deleted = await this.db
+      .delete(schema.audiobookProgress)
+      .where(and(eq(schema.audiobookProgress.userId, userId), eq(schema.audiobookProgress.bookId, bookId)))
+      .returning({ userId: schema.audiobookProgress.userId });
+    return deleted.length > 0;
+  }
+
   /**
    * Authors that have audio books in the given libraries, with the count of exposed books.
    * Counts books (not files), so a multi-file audiobook counts once.

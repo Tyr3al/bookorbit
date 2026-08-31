@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { fromAbsSeriesUuid, fromAbsUuid, toAbsSeriesUuid, toAbsUuid } from './abs-id.utils';
+import { fromAbsCompositeUuid, fromAbsSeriesUuid, fromAbsUuid, toAbsCompositeUuid, toAbsSeriesUuid, toAbsUuid } from './abs-id.utils';
 
 describe('Audiobookshelf ids', () => {
   it('keeps series ids distinct from other entity ids with the same database key', () => {
@@ -15,5 +15,10 @@ describe('Audiobookshelf ids', () => {
 
   it('accepts legacy series ids for saved client links', () => {
     expect(fromAbsSeriesUuid(toAbsUuid(42))).toBe(42);
+  });
+
+  it('round-trips composite progress ids', () => {
+    expect(fromAbsCompositeUuid(toAbsCompositeUuid(12, 345))).toEqual({ a: 12, b: 345 });
+    expect(fromAbsCompositeUuid(toAbsUuid(345))).toBeNull();
   });
 });

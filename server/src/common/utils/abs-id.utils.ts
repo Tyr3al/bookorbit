@@ -8,6 +8,7 @@
 
 const ABS_UUID_PATTERN = /^00000000-0000-4000-8000-([0-9a-f]{12})$/;
 const ABS_SERIES_UUID_PATTERN = /^00000001-0000-4000-8000-([0-9a-f]{12})$/;
+const ABS_COMPOSITE_UUID_PATTERN = /^00000000-0000-4000-8000-([0-9a-f]{12})$/;
 
 export function toAbsUuid(id: number): string {
   const hex = id.toString(16).padStart(12, '0');
@@ -42,4 +43,15 @@ export function toAbsCompositeUuid(a: number, b: number): string {
   const hexA = a.toString(16).padStart(6, '0').slice(-6);
   const hexB = b.toString(16).padStart(6, '0').slice(-6);
   return `00000000-0000-4000-8000-${hexA}${hexB}`;
+}
+
+export function fromAbsCompositeUuid(uuid: string): { a: number; b: number } | null {
+  const match = ABS_COMPOSITE_UUID_PATTERN.exec(uuid);
+  if (!match) return null;
+  const a = Number.parseInt(match[1].slice(0, 6), 16);
+  if (a === 0) return null;
+  return {
+    a,
+    b: Number.parseInt(match[1].slice(6), 16),
+  };
 }
