@@ -189,3 +189,22 @@ export function registerAbsConditionalGet(fastify: FastifyInstance, basePathPref
     done(null, payload);
   });
 }
+
+/**
+ * A raw TCP socket that drops mid-request (a mobile client losing signal, backgrounding the
+ * app during a range-streamed download, or seeking during audio playback) emits its own
+ * `'error'` event with no listener attached by default - Node's default behavior for an
+ * unhandled socket `'error'` is to crash the entire process, taking down every other request in
+ * flight with it. Attaching a listener to every accepted connection converts that into a normal,
+ * logged event instead. ECONNRESET/EPIPE are the expected shape of "client went away" and aren't
+ * worth logging; anything else is surfaced.
+ */
+export function registerSocketErrorGuard(fastify: FastifyInstance, onUnexpectedError: (error: NodeJS.ErrnoException) => void): void {
+  fastify.server.on('connection', (socket) => {
+    socket.on('error', (error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ECONNRESET' && error.code !== 'EPIPE') {
+        onUnexpectedError(error);
+      }
+    });
+  });
+}

@@ -24,6 +24,7 @@ import {
   registerAbsConditionalGet,
   registerConditionalHsts,
   registerEmptyBodyContentTypeParser,
+  registerSocketErrorGuard,
   shouldInjectEmptyJsonBody,
   shouldServeSpaFallback,
 } from './common/utils/bootstrap.utils';
@@ -40,6 +41,12 @@ async function bootstrap() {
   const fastify = adapter.getInstance();
   // Nest adds originalUrl to the raw request, but these helpers only use standard Fastify APIs.
   const standardFastify = fastify as unknown as FastifyInstance;
+
+  // A client (mobile app losing signal, backgrounding mid-stream) dropping its connection
+  // abruptly must never crash the whole server - see registerSocketErrorGuard for why.
+  registerSocketErrorGuard(standardFastify, (error) => {
+    process.stderr.write(`[socket] unexpected error: ${error.code ?? 'unknown'} ${error.message}\n`);
+  });
 
   // Fastify's default JSON parser rejects empty bodies, so we inject '{}' before parsing.
   fastify.addHook('preParsing', (request, _reply, payload, done) => {
