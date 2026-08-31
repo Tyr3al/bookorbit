@@ -117,32 +117,6 @@ async function bootstrap() {
     });
   }
 
-  // TEMP DIAGNOSTIC: strip Helmet/CORS headers on ABS-compat routes to test whether Prologue's
-  // client is sensitive to them. Real Audiobookshelf servers don't send these on these routes.
-  const ABS_DIAG_PREFIXES = ['/abs/login', '/abs/status', '/abs/ping', '/abs/api/'];
-  fastify.addHook('onSend', (request, reply, payload, done) => {
-    if (ABS_DIAG_PREFIXES.some((p) => request.url.startsWith(p))) {
-      for (const h of [
-        'content-security-policy',
-        'cross-origin-resource-policy',
-        'origin-agent-cluster',
-        'referrer-policy',
-        'x-content-type-options',
-        'x-dns-prefetch-control',
-        'x-download-options',
-        'x-frame-options',
-        'x-permitted-cross-domain-policies',
-        'x-xss-protection',
-        'access-control-allow-origin',
-        'access-control-allow-credentials',
-        'x-request-id',
-      ]) {
-        reply.removeHeader(h);
-      }
-    }
-    done(null, payload);
-  });
-
   // NestJS calls setNotFoundHandler during init - intercept it so non-API 404s fall back to a
   // web page instead of returning a JSON 404 (SPA routing support for BookOrbit's own client).
   const adapterAny = adapter as any;
