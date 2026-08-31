@@ -22,6 +22,13 @@ export interface AbsItemsPageInput {
   collapseseries?: string;
 }
 
+export interface AbsLibraryDetailWithFilterData {
+  library: AbsLibrary;
+  filterdata: AbsLibraryFilterData;
+  issues: number;
+  numUserPlaylists: number;
+}
+
 @Injectable()
 export class AudiobookshelfLibrariesService {
   constructor(
@@ -43,44 +50,21 @@ export class AudiobookshelfLibrariesService {
     }
 
     return {
-      libraries: libraries.map((library) => ({
-        id: toAbsUuid(library.id),
-        name: library.name,
-        folders: (foldersByLibraryId.get(library.id) ?? []).map((folder) => ({
-          id: toAbsUuid(folder.id),
-          fullPath: folder.path,
-          libraryId: toAbsUuid(library.id),
-          addedAt: folder.createdAt.getTime(),
-        })),
-        displayOrder: library.displayOrder,
-        // BookOrbit's own icon picker doesn't share ABS's icon vocabulary, and this field is
-        // purely cosmetic for ABS clients, so use a known-valid ABS icon name unconditionally.
-        icon: 'database',
-        mediaType: 'book',
-        provider: ABS_PROVIDER,
-        settings: {
-          coverAspectRatio: 1,
-          disableWatcher: !library.watch,
-          autoScanCronExpression: library.autoScanCronExpression,
-          skipMatchingMediaWithAsin: false,
-          skipMatchingMediaWithIsbn: false,
-          audiobooksOnly: true,
-          epubsAllowScriptedContent: false,
-          hideSingleBookSeries: false,
-          onlyShowLaterBooksInContinueSeries: false,
-          metadataPrecedence: [...ABS_METADATA_PRECEDENCE],
-          // Real ABS uses null here to mean "use the server default"; sending a populated value
-          // (BookOrbit's own configured threshold) breaks decoding for at least one ABS client.
-          // This field is cosmetic for a reading client - BookOrbit computes isFinished itself.
-          markAsFinishedPercentComplete: null,
-          markAsFinishedTimeRemaining: 10,
-        },
-        lastScan: library.updatedAt.getTime(),
-        lastScanVersion: '2.36.0',
-        createdAt: library.createdAt.getTime(),
-        lastUpdate: library.updatedAt.getTime(),
-      })),
+      libraries: libraries.map((library) => this.mapLibrary(library, foldersByLibraryId.get(library.id) ?? [])),
     };
+  }
+
+  /** GET /api/libraries/:id. The filterdata variant mirrors ABS's expanded library envelope. */
+  async getLibrary(user: RequestUser, libraryId: number, include?: string): Promise<AbsLibrary | AbsLibraryDetailWithFilterData> {
+    await this.requireExposedLibrary(user, libraryId);
+    const library = await this.repository.findLibraryById(libraryId);
+    if (!library) throw new NotFoundException(`Library ${libraryId} not found`);
+    const folders = await this.repository.findFoldersByLibraryIds([libraryId]);
+    const mappedLibrary = this.mapLibrary(library, folders);
+    if (!hasInclude(include, 'filterdata')) return mappedLibrary;
+
+    const filterdata = await this.getFilterData(user, libraryId);
+    return { library: mappedLibrary, filterdata, issues: filterdata.numIssues, numUserPlaylists: 0 };
   }
 
   /** Paginated audio items of one library (Prologue pages through with limit=10). */
@@ -176,6 +160,50 @@ export class AudiobookshelfLibrariesService {
     const exposed = await this.repository.isLibraryExposedForUser(libraryId, user.id, user.isSuperuser);
     if (!exposed) throw new NotFoundException(`Library ${libraryId} not found`);
   }
+
+  private mapLibrary(
+    library: Awaited<ReturnType<AudiobookshelfRepository['findLibraryById']>> extends infer T ? Exclude<T, undefined> : never,
+    folders: Awaited<ReturnType<AudiobookshelfRepository['findFoldersByLibraryIds']>>,
+  ): AbsLibrary {
+    return {
+      id: toAbsUuid(library.id),
+      name: library.name,
+      folders: folders
+        .filter((folder) => folder.libraryId === library.id)
+        .map((folder) => ({
+          id: toAbsUuid(folder.id),
+          fullPath: folder.path,
+          libraryId: toAbsUuid(library.id),
+          addedAt: folder.createdAt.getTime(),
+        })),
+      displayOrder: library.displayOrder,
+      icon: 'database',
+      mediaType: 'book',
+      provider: ABS_PROVIDER,
+      settings: {
+        coverAspectRatio: 1,
+        disableWatcher: !library.watch,
+        autoScanCronExpression: library.autoScanCronExpression,
+        skipMatchingMediaWithAsin: false,
+        skipMatchingMediaWithIsbn: false,
+        audiobooksOnly: true,
+        epubsAllowScriptedContent: false,
+        hideSingleBookSeries: false,
+        onlyShowLaterBooksInContinueSeries: false,
+        metadataPrecedence: [...ABS_METADATA_PRECEDENCE],
+        markAsFinishedPercentComplete: null,
+        markAsFinishedTimeRemaining: 10,
+      },
+      lastScan: library.updatedAt.getTime(),
+      lastScanVersion: '2.36.0',
+      createdAt: library.createdAt.getTime(),
+      lastUpdate: library.updatedAt.getTime(),
+    };
+  }
+}
+
+function hasInclude(value: string | undefined, requested: string): boolean {
+  return (value ?? '').split(',').some((part) => part.trim().toLowerCase() === requested);
 }
 
 function clampLimit(value: number | undefined): number {

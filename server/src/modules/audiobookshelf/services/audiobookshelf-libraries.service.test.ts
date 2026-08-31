@@ -5,9 +5,21 @@ import { AudiobookshelfLibrariesService } from './audiobookshelf-libraries.servi
 
 const user = { id: 7, isSuperuser: false, contentFilters: {} } as RequestUser;
 
+const library = {
+  id: 3,
+  name: 'Audiobooks',
+  displayOrder: 1,
+  watch: true,
+  autoScanCronExpression: null,
+  updatedAt: new Date(2000),
+  createdAt: new Date(1000),
+};
+
 function createService() {
   const repository = {
     isLibraryExposedForUser: vi.fn().mockResolvedValue(true),
+    findLibraryById: vi.fn().mockResolvedValue(library),
+    findFoldersByLibraryIds: vi.fn().mockResolvedValue([]),
     countAudioBooks: vi.fn().mockResolvedValue(2),
     findAudioBookIds: vi.fn().mockResolvedValue([1, 2]),
   };
@@ -56,5 +68,44 @@ describe('AudiobookshelfLibrariesService item pages', () => {
 
     await service.getItemsPage(user, 3, { sort: 'not-a-sort' });
     expect(repository.findAudioBookIds).toHaveBeenLastCalledWith(3, expect.objectContaining({ sort: 'title' }), user.contentFilters);
+  });
+});
+
+describe('AudiobookshelfLibrariesService library details', () => {
+  it('returns a single exposed library', async () => {
+    const { service, repository } = createService();
+
+    const result = await service.getLibrary(user, 3);
+
+    expect(repository.isLibraryExposedForUser).toHaveBeenCalledWith(3, 7, false);
+    expect(repository.findLibraryById).toHaveBeenCalledWith(3);
+    expect(result).toMatchObject({ id: expect.any(String), name: 'Audiobooks', mediaType: 'book', folders: [] });
+    expect(result).not.toHaveProperty('filterdata');
+  });
+
+  it('returns ABS expanded envelope when filterdata is included', async () => {
+    const { service, repository } = createService();
+    vi.spyOn(service, 'getFilterData').mockResolvedValue({
+      authors: [],
+      genres: [],
+      tags: [],
+      series: [],
+      narrators: [],
+      languages: [],
+      publishers: [],
+      publishedDecades: [],
+      bookCount: 0,
+      authorCount: 0,
+      seriesCount: 0,
+      podcastCount: 0,
+      numIssues: 0,
+      loadedAt: 1000,
+    });
+
+    const result = await service.getLibrary(user, 3, 'progress, filterdata');
+
+    expect(repository.findFoldersByLibraryIds).toHaveBeenCalledWith([3]);
+    expect(result).toMatchObject({ issues: 0, numUserPlaylists: 0, filterdata: { bookCount: 0 } });
+    expect(result).toHaveProperty('library.name', 'Audiobooks');
   });
 });

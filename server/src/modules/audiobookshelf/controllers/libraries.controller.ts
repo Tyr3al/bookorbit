@@ -26,6 +26,11 @@ export class LibrariesController {
     return this.librariesService.findLibraries(user);
   }
 
+  @Get(':id')
+  detail(@CurrentUser() user: RequestUser, @Param('id') idParam: string, @Query('include') include?: string) {
+    return this.librariesService.getLibrary(user, parseAbsId(idParam), include);
+  }
+
   @Get(':id/items')
   items(
     @CurrentUser() user: RequestUser,
