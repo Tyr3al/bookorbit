@@ -21,6 +21,7 @@ import {
   parseTrustProxy,
   buildHelmetOptions,
   buildEmptyJsonBodyStream,
+  registerAbsConditionalGet,
   registerConditionalHsts,
   registerEmptyBodyContentTypeParser,
   shouldInjectEmptyJsonBody,
@@ -94,6 +95,7 @@ async function bootstrap() {
 
   await app.register(fastifyHelmet as never, buildHelmetOptions({ allowCloudflareInsights }));
   registerConditionalHsts(standardFastify);
+  registerAbsConditionalGet(standardFastify, ABS_BASE_PATH);
 
   await app.register(fastifyCompress as never, { encodings: ['gzip', 'br'] });
 

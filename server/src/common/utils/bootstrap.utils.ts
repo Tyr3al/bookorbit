@@ -2,6 +2,7 @@ import { UnsupportedMediaTypeException } from '@nestjs/common';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { IncomingHttpHeaders } from 'http';
 import { Readable } from 'stream';
+import { createHash } from 'crypto';
 
 const DEFAULT_TRUST_PROXY = 'loopback,linklocal,uniquelocal';
 const EMPTY_JSON_BODY = '{}';
@@ -155,6 +156,36 @@ export function applyConditionalHsts(request: Pick<FastifyRequest, 'protocol'>, 
 export function registerConditionalHsts(fastify: FastifyInstance): void {
   fastify.addHook('onSend', (request, reply, payload, done) => {
     applyConditionalHsts(request, reply);
+    done(null, payload);
+  });
+}
+
+export function computeWeakEtag(payload: string): string {
+  return `W/"${createHash('sha1').update(payload).digest('base64')}"`;
+}
+
+/**
+ * Real Audiobookshelf sends an ETag on its GET responses and answers a matching
+ * `If-None-Match` with a bodyless 304. ABS clients (Prologue) rely on this: when a request comes
+ * back 304, they trust their own already-parsed local copy of the data instead of re-parsing a
+ * fresh body - so a server that never sends 304s (always 200, always a full body) can end up
+ * fighting the client's own cache/merge logic on repeat fetches of the same resource, even though
+ * every individual response is itself correct. Runs before response compression is applied so the
+ * hash is computed over the actual JSON, not compressed bytes.
+ */
+export function registerAbsConditionalGet(fastify: FastifyInstance, basePathPrefix: string): void {
+  fastify.addHook('onSend', (request, reply, payload, done) => {
+    if (request.method !== 'GET' || !request.url.startsWith(basePathPrefix) || typeof payload !== 'string') {
+      done(null, payload);
+      return;
+    }
+    const etag = computeWeakEtag(payload);
+    void reply.header('ETag', etag);
+    if (getHeaderValue(request.headers['if-none-match']) === etag) {
+      reply.code(304);
+      done(null, undefined);
+      return;
+    }
     done(null, payload);
   });
 }
