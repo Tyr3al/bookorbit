@@ -1,5 +1,5 @@
 import { BadRequestException, Inject, Injectable, Optional } from '@nestjs/common';
-import { SQL, and, asc, count, eq, inArray, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
+import { SQL, and, asc, count, eq, inArray, isNotNull, isNull, lte, ne, or, sql } from 'drizzle-orm';
 import { SUPPORTED_BOOK_FORMATS } from '../upload/upload-validator.service';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
@@ -2362,14 +2362,21 @@ export class BookRepository {
     return row ?? null;
   }
 
-  async upsertAudioProgress(userId: number, bookId: number, currentFileId: number, positionSeconds: number, percentage: number) {
-    const now = new Date();
+  async upsertAudioProgress(
+    userId: number,
+    bookId: number,
+    currentFileId: number,
+    positionSeconds: number,
+    percentage: number,
+    updatedAt = new Date(),
+  ) {
     const [row] = await this.db
       .insert(audiobookProgress)
-      .values({ userId, bookId, currentFileId, positionSeconds, percentage, updatedAt: now })
+      .values({ userId, bookId, currentFileId, positionSeconds, percentage, updatedAt })
       .onConflictDoUpdate({
         target: [audiobookProgress.userId, audiobookProgress.bookId],
-        set: { currentFileId, positionSeconds, percentage, updatedAt: now },
+        set: { currentFileId, positionSeconds, percentage, updatedAt },
+        setWhere: lte(audiobookProgress.updatedAt, updatedAt),
       })
       .returning();
     return row;

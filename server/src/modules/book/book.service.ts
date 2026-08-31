@@ -2044,7 +2044,7 @@ export class BookService {
     return this.bookRepo.findAudioProgress(userId, bookId);
   }
 
-  async saveAudioProgress(userId: number, bookId: number, dto: UpsertAudioProgressDto, user: RequestUser) {
+  async saveAudioProgress(userId: number, bookId: number, dto: UpsertAudioProgressDto, user: RequestUser, updatedAt?: Date) {
     const libraryId = await this.bookRepo.findLibraryIdByBookId(bookId);
     if (libraryId === null) throw new NotFoundException(`Book ${bookId} not found`);
     await this.libraryService.verifyUserAccess(userId, libraryId, this.isSuperuser(user));
@@ -2053,7 +2053,10 @@ export class BookService {
       throw new BadRequestException(`currentFileId ${dto.currentFileId} does not belong to book ${bookId}`);
     }
     const previous = await this.bookRepo.findAudioProgress(userId, bookId);
-    await this.bookRepo.upsertAudioProgress(userId, bookId, dto.currentFileId, dto.positionSeconds, dto.percentage);
+    const saved = updatedAt
+      ? await this.bookRepo.upsertAudioProgress(userId, bookId, dto.currentFileId, dto.positionSeconds, dto.percentage, updatedAt)
+      : await this.bookRepo.upsertAudioProgress(userId, bookId, dto.currentFileId, dto.positionSeconds, dto.percentage);
+    if (updatedAt && !saved) return;
     const strongRereadEvidence = previous != null && previous.percentage - dto.percentage >= 10;
     await this.autoUpdateReadStatusForProgress(
       userId,

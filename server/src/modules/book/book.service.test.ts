@@ -2555,6 +2555,27 @@ describe('BookService', () => {
       expect(userBookStatusService.autoUpdate).toHaveBeenCalledWith(user.id, 10, 33, 4, 90);
     });
 
+    it('skips read-status side effects when a timestamped progress upsert loses a conflict', async () => {
+      const { service, bookRepo, libraryService, userBookStatusService } = makeService();
+      const user = makeUser({ id: 21 });
+      const updatedAt = new Date('2025-01-01T00:00:00Z');
+      bookRepo.findLibraryIdByBookId.mockResolvedValue(1);
+      bookRepo.findFileById.mockResolvedValue({
+        id: 7,
+        absolutePath: '/books/audiobook-1.mp3',
+        format: 'mp3',
+        bookId: 10,
+        libraryId: 1,
+      });
+      bookRepo.upsertAudioProgress.mockResolvedValue(undefined);
+
+      await service.saveAudioProgress(user.id, 10, { percentage: 33, currentFileId: 7, positionSeconds: 120 }, user, updatedAt);
+
+      expect(bookRepo.upsertAudioProgress).toHaveBeenCalledWith(user.id, 10, 7, 120, 33, updatedAt);
+      expect(libraryService.findOne).not.toHaveBeenCalled();
+      expect(userBookStatusService.autoUpdate).not.toHaveBeenCalled();
+    });
+
     it('throws BadRequestException when current file belongs to a different book', async () => {
       const { service, bookRepo, libraryService } = makeService();
       const user = makeUser({ id: 21 });

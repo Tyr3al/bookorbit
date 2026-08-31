@@ -135,4 +135,44 @@ describe('AudiobookshelfProgressService.updateMediaProgress', () => {
       expect.anything(),
     );
   });
+
+  it('ignores an older ABS update and returns the persisted position', async () => {
+    const { service, bookService } = makeService();
+
+    const result = await service.updateMediaProgress(user(), 7, { currentTime: 110, lastUpdate: Date.parse('2023-01-01T00:00:00Z') });
+
+    expect(bookService.saveAudioProgress).not.toHaveBeenCalled();
+    expect(result.currentTime).toBe(10);
+    expect(result.lastUpdate).toBe(Date.parse('2024-01-01T00:00:00Z'));
+  });
+
+  it('persists a newer ABS update with its source timestamp', async () => {
+    const { service, bookService } = makeService();
+    const timestamp = Date.parse('2025-01-01T00:00:00Z');
+
+    await service.updateMediaProgress(user(), 7, { currentTime: 110, lastUpdate: timestamp });
+
+    expect(bookService.saveAudioProgress).toHaveBeenCalledWith(
+      1,
+      7,
+      expect.objectContaining({ currentFileId: 12, positionSeconds: 50 }),
+      expect.anything(),
+      new Date(timestamp),
+    );
+  });
+
+  it('accepts an equal ABS timestamp as an idempotent update', async () => {
+    const { service, bookService } = makeService();
+    const timestamp = Date.parse('2024-01-01T00:00:00Z');
+
+    await service.updateMediaProgress(user(), 7, { currentTime: 20, lastUpdate: timestamp });
+
+    expect(bookService.saveAudioProgress).toHaveBeenCalledWith(
+      1,
+      7,
+      expect.objectContaining({ positionSeconds: 20 }),
+      expect.anything(),
+      new Date(timestamp),
+    );
+  });
 });

@@ -577,11 +577,12 @@ describe('BookRepository', () => {
     const deleteBuilder = { where: deleteWhere };
     const updateWhere = vi.fn().mockResolvedValue(undefined);
     const updateBuilder = { set: vi.fn().mockReturnValue({ where: updateWhere }) };
+    const onConflictDoUpdate = vi.fn().mockReturnValue({
+      returning: vi.fn().mockResolvedValue([{ bookId: 10, percentage: 33 }]),
+    });
     const audioInsert = {
       values: vi.fn().mockReturnValue({
-        onConflictDoUpdate: vi.fn().mockReturnValue({
-          returning: vi.fn().mockResolvedValue([{ bookId: 10, percentage: 33 }]),
-        }),
+        onConflictDoUpdate,
       }),
     };
     const audioProgressSelect = makeSelectChain('limit', [{ percentage: 22 }]);
@@ -607,6 +608,7 @@ describe('BookRepository', () => {
     expect(updateBuilder.set).toHaveBeenNthCalledWith(2, expect.objectContaining({ updatedAt: expect.any(Date) }));
     expect(updateWhere).toHaveBeenCalledTimes(2);
     expect(db.insert).toHaveBeenCalledTimes(1);
+    expect(onConflictDoUpdate).toHaveBeenCalledWith(expect.objectContaining({ setWhere: expect.anything() }));
   });
 
   it('replaces all community rating rows: deletes old then inserts new', async () => {

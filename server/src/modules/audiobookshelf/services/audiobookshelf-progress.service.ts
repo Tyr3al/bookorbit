@@ -64,10 +64,21 @@ export class AudiobookshelfProgressService {
     if (files.length === 0) throw new NotFoundException(`Book ${book.id} has no audio files`);
 
     const orderedFiles = [...files].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.id - b.id);
+    const existingRows = await this.repository.findProgressByUserIdAndBookIds(user.id, [book.id]);
+    const existing = existingRows[0];
+    const incomingUpdatedAt = resolveIncomingUpdatedAt(input);
+    if (existing && incomingUpdatedAt !== null && existing.updatedAt.getTime() > incomingUpdatedAt.getTime()) {
+      return this.toMediaProgress(existing, orderedFiles);
+    }
     const totalDuration = orderedFiles.reduce((sum, file) => sum + (file.durationSeconds ?? 0), 0);
 
     const { currentFileId, positionSeconds, percentage } = this.resolvePosition(orderedFiles, totalDuration, input);
-    await this.bookService.saveAudioProgress(user.id, book.id, { percentage, currentFileId, positionSeconds }, user);
+    const progress = { percentage, currentFileId, positionSeconds };
+    if (incomingUpdatedAt !== null) {
+      await this.bookService.saveAudioProgress(user.id, book.id, progress, user, incomingUpdatedAt);
+    } else {
+      await this.bookService.saveAudioProgress(user.id, book.id, progress, user);
+    }
 
     const rows = await this.repository.findProgressByUserIdAndBookIds(user.id, [book.id]);
     return this.toMediaProgress(rows[0], orderedFiles);
@@ -198,4 +209,11 @@ export class AudiobookshelfProgressService {
 
 function roundPercentage(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+function resolveIncomingUpdatedAt(input: UpdateProgressInput): Date | null {
+  const timestamp = input.lastUpdate ?? input.startedAt;
+  if (timestamp == null || !Number.isFinite(timestamp) || timestamp < 0) return null;
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime()) ? null : date;
 }
