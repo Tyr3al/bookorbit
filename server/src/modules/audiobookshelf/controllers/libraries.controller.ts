@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
 
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
 import type { RequestUser } from '../../../common/types/request-user';
@@ -125,17 +125,11 @@ export class LibrariesController {
   }
 
   @Get(':id/search')
-  search(
-    @CurrentUser() user: RequestUser,
-    @Param('id') idParam: string,
-    @Query('q') q?: string,
-    @Query('limit') limit?: string,
-    @Query('page') page?: string,
-  ) {
-    return this.librariesService.searchLibrary(user, parseAbsId(idParam), q, {
-      limit: parseOptionalInt(limit),
-      page: parseOptionalInt(page),
-    });
+  search(@CurrentUser() user: RequestUser, @Param('id') idParam: string, @Query('q') q?: string, @Query('limit') limit?: string) {
+    if (typeof q !== 'string' || q.trim().length === 0) {
+      throw new BadRequestException('Invalid request. Query param "q" must be a string');
+    }
+    return this.librariesService.searchLibrary(user, parseAbsId(idParam), q.trim(), parseOptionalInt(limit) ?? 12);
   }
 
   @Get(':id/collections')

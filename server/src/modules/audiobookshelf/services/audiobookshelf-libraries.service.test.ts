@@ -36,8 +36,14 @@ function createService() {
       missingCount: 0,
     }),
     findItemsInProgressForAudiobookshelfUser: vi.fn().mockResolvedValue([]),
+    findAudioBookSearchIds: vi.fn().mockResolvedValue([]),
+    findSeriesByLibrariesPage: vi.fn().mockResolvedValue({ rows: [], total: 0 }),
+    findAuthorsWithCountsByLibrariesPage: vi.fn().mockResolvedValue({ rows: [], total: 0 }),
+    findSeriesMembershipBookIdsByLibraries: vi.fn().mockResolvedValue([]),
+    findGenresWithCountsByLibraries: vi.fn().mockResolvedValue([]),
+    findTagsWithCountsByLibraries: vi.fn().mockResolvedValue([]),
   };
-  const itemsService = { getMinifiedItemsByIds: vi.fn().mockResolvedValue([]) };
+  const itemsService = { getMinifiedItemsByIds: vi.fn().mockResolvedValue([]), getItemsByIds: vi.fn().mockResolvedValue([]) };
   return { service: new AudiobookshelfLibrariesService(repository as never, itemsService as never), repository, itemsService };
 }
 
@@ -164,6 +170,69 @@ describe('AudiobookshelfLibrariesService library details', () => {
     expect(repository.findFoldersByLibraryIds).toHaveBeenCalledWith([3]);
     expect(result).toMatchObject({ issues: 0, numUserPlaylists: 0, filterdata: { bookCount: 0 } });
     expect(result).toHaveProperty('library.name', 'Audiobooks');
+  });
+});
+
+describe('AudiobookshelfLibrariesService search', () => {
+  it('returns the six upstream keys, wraps books as libraryItem, and clamps the limit into every category query', async () => {
+    const { service, repository, itemsService } = createService();
+    repository.findAudioBookSearchIds.mockResolvedValue([1]);
+    itemsService.getItemsByIds.mockResolvedValue([{ id: toAbsUuid(1) }]);
+    repository.findAuthorsWithCountsByLibrariesPage.mockResolvedValue({ rows: [{ id: 2, name: 'Author', numBooks: 1 }], total: 1 });
+    repository.findNarratorsWithCountsByLibraries.mockResolvedValue([{ id: 3, name: 'Narrator', numBooks: 1 }]);
+    repository.findGenresWithCountsByLibraries.mockResolvedValue([{ name: 'Sci-Fi', numItems: 1 }]);
+    repository.findTagsWithCountsByLibraries.mockResolvedValue([{ name: 'favorite', numItems: 1 }]);
+
+    const result = await service.searchLibrary(user, 3, 'dune', 5000);
+
+    expect(result).toEqual({
+      book: [{ libraryItem: { id: toAbsUuid(1) } }],
+      narrators: [{ name: 'Narrator', numBooks: 1 }],
+      tags: [{ name: 'favorite', numItems: 1 }],
+      genres: [{ name: 'Sci-Fi', numItems: 1 }],
+      series: [],
+      authors: [expect.objectContaining({ name: 'Author', numBooks: 1 })],
+    });
+    expect(result).not.toHaveProperty('author');
+    expect(result).not.toHaveProperty('podcast');
+    expect(result).not.toHaveProperty('episode');
+
+    expect(repository.findAudioBookSearchIds).toHaveBeenCalledWith(3, 'dune', 100, user.contentFilters);
+  });
+
+  it('drops a matched series that has no accessible books', async () => {
+    const { service, repository, itemsService } = createService();
+    repository.findSeriesByLibrariesPage.mockResolvedValue({ rows: [{ id: 10, name: 'Empty Series' }], total: 1 });
+    repository.findSeriesMembershipBookIdsByLibraries.mockResolvedValue([]);
+    itemsService.getMinifiedItemsByIds.mockResolvedValue([]);
+
+    const result = await service.searchLibrary(user, 3, 'dune');
+
+    expect(result.series).toEqual([]);
+  });
+
+  it('keeps a matched series that has at least one accessible book', async () => {
+    const { service, repository, itemsService } = createService();
+    repository.findSeriesByLibrariesPage.mockResolvedValue({ rows: [{ id: 10, name: 'Dune Saga' }], total: 1 });
+    repository.findSeriesMembershipBookIdsByLibraries.mockResolvedValue([{ seriesId: 10, bookId: 1 }]);
+    itemsService.getMinifiedItemsByIds.mockResolvedValue([{ id: toAbsUuid(1) }]);
+
+    const result = await service.searchLibrary(user, 3, 'dune');
+
+    expect(result.series).toEqual([{ series: expect.objectContaining({ name: 'Dune Saga' }), books: [{ id: toAbsUuid(1) }] }]);
+  });
+
+  it('clamps the requested limit and passes it into every repository call', async () => {
+    const { service, repository } = createService();
+
+    await service.searchLibrary(user, 3, 'dune', 5000);
+
+    expect(repository.findAudioBookSearchIds).toHaveBeenCalledWith(3, 'dune', 100, user.contentFilters);
+    expect(repository.findSeriesByLibrariesPage).toHaveBeenCalledWith([3], user.contentFilters, 100, 0, 'name', false, 'dune');
+    expect(repository.findAuthorsWithCountsByLibrariesPage).toHaveBeenCalledWith([3], user.contentFilters, 100, 0, 'name', false, 'dune');
+    expect(repository.findNarratorsWithCountsByLibraries).toHaveBeenCalledWith([3], user.contentFilters, 'dune', 100);
+    expect(repository.findGenresWithCountsByLibraries).toHaveBeenCalledWith([3], user.contentFilters, 'dune', 100);
+    expect(repository.findTagsWithCountsByLibraries).toHaveBeenCalledWith([3], user.contentFilters, 'dune', 100);
   });
 });
 

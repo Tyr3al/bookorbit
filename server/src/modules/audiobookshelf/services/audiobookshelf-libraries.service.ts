@@ -1,11 +1,21 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import type { ContentFilterRules } from '@bookorbit/types';
 
 import { AudiobookshelfRepository, type AbsItemPageQuery, type AbsItemSort } from '../audiobookshelf.repository';
 import { ABS_DEFAULT_ITEM_LIMIT, ABS_MAX_ITEM_LIMIT, ABS_PROVIDER, ABS_METADATA_PRECEDENCE } from '../audiobookshelf.constants';
-import type { AbsLibrary, AbsLibraryFilterData, AbsLibraryItemMinified, AbsPaginatedItems, AbsPersonalizedShelf } from '../audiobookshelf.types';
+import type {
+  AbsAuthor,
+  AbsLibrary,
+  AbsLibraryFilterData,
+  AbsLibraryItem,
+  AbsLibraryItemMinified,
+  AbsPaginatedItems,
+  AbsPersonalizedShelf,
+  AbsSeries,
+} from '../audiobookshelf.types';
 import { AudiobookshelfItemsService } from './audiobookshelf-items.service';
 import type { RequestUser } from '../../../common/types/request-user';
-import { toAbsSeriesUuid, toAbsUuid } from '../../../common/utils/abs-id.utils';
+import { fromAbsUuid, toAbsSeriesUuid, toAbsUuid } from '../../../common/utils/abs-id.utils';
 
 /** Minimal user shape the library-scoped ABS queries need. */
 export type AbsLibraryUser = Pick<RequestUser, 'id' | 'isSuperuser'>;
@@ -27,6 +37,18 @@ export interface AbsLibraryDetailWithFilterData {
   filterdata: AbsLibraryFilterData;
   issues: number;
   numUserPlaylists: number;
+}
+
+/** GET /api/libraries/:id/search response shape, matching real ABS's
+ * `libraryItemsBookFilters.search()`. `authors` is plural (not `author`), and there is no
+ * `podcast`/`episode` key for a book library. */
+export interface AbsLibrarySearchResult {
+  book: { libraryItem: AbsLibraryItem }[];
+  narrators: { name: string; numBooks: number }[];
+  tags: { name: string; numItems: number }[];
+  genres: { name: string; numItems: number }[];
+  series: { series: AbsSeries; books: AbsLibraryItemMinified[] }[];
+  authors: AbsAuthor[];
 }
 
 @Injectable()
@@ -150,15 +172,106 @@ export class AudiobookshelfLibrariesService {
     return shelves;
   }
 
-  /** ABS /api/libraries/:id/search - book results only; other entity keys are empty for now. */
-  async searchLibrary(
-    user: RequestUser,
+  /** GET /api/libraries/:id/search - mirrors real ABS's `libraryItemsBookFilters.search()`:
+   * books (expanded, `{ libraryItem }` wrapped), narrators/tags/genres with counts, series with
+   * their accessible books (series with none are dropped), and authors with book counts. Every
+   * category is matched and LIMITed independently in SQL - none of this loads a library's full
+   * book/author/series set into memory. */
+  async searchLibrary(user: RequestUser, libraryId: number, q: string, requestedLimit?: number): Promise<AbsLibrarySearchResult> {
+    await this.requireExposedLibrary(user, libraryId);
+    const limit = clampLimit(requestedLimit);
+    const contentFilters = user.isSuperuser ? undefined : user.contentFilters;
+    const absLibraryId = toAbsUuid(libraryId);
+
+    const [bookIds, seriesPage, authorsPage, narratorRows, genreRows, tagRows] = await Promise.all([
+      this.repository.findAudioBookSearchIds(libraryId, q, limit, contentFilters),
+      this.repository.findSeriesByLibrariesPage([libraryId], contentFilters, limit, 0, 'name', false, q),
+      this.repository.findAuthorsWithCountsByLibrariesPage([libraryId], contentFilters, limit, 0, 'name', false, q),
+      this.repository.findNarratorsWithCountsByLibraries([libraryId], contentFilters, q, limit),
+      this.repository.findGenresWithCountsByLibraries([libraryId], contentFilters, q, limit),
+      this.repository.findTagsWithCountsByLibraries([libraryId], contentFilters, q, limit),
+    ]);
+
+    const [bookItems, seriesBooksBySeriesId] = await Promise.all([
+      this.itemsService.getItemsByIds(bookIds),
+      this.resolveSeriesBooks(
+        seriesPage.rows.map((row) => row.id),
+        libraryId,
+        contentFilters,
+      ),
+    ]);
+
+    const series = seriesPage.rows
+      .map((row) => ({ series: this.toSearchSeries(row, absLibraryId), books: seriesBooksBySeriesId.get(row.id) ?? [] }))
+      .filter((entry) => entry.books.length > 0);
+
+    return {
+      book: bookItems.map((libraryItem) => ({ libraryItem })),
+      narrators: narratorRows.map((row) => ({ name: row.name, numBooks: row.numBooks })),
+      tags: tagRows.map((row) => ({ name: row.name, numItems: row.numItems })),
+      genres: genreRows.map((row) => ({ name: row.name, numItems: row.numItems })),
+      series,
+      authors: authorsPage.rows.map((row) => this.toSearchAuthor(row, absLibraryId)),
+    };
+  }
+
+  /** Accessible book ids per matched series, keyed by series id. Reuses the same
+   * membership+minified-item lookup {@link AudiobookshelfSeriesService.listLibrarySeries} uses,
+   * bounded because the series set itself is already limit-bounded. */
+  private async resolveSeriesBooks(
+    seriesIds: number[],
     libraryId: number,
-    q?: string,
-    input?: AbsItemsPageInput,
-  ): Promise<{ book: AbsLibraryItemMinified[]; author: unknown[]; series: unknown[]; podcast: unknown[]; episode: unknown[] }> {
-    const page = await this.getItemsPage(user, libraryId, { ...input, search: q });
-    return { book: page.results, author: [], series: [], podcast: [], episode: [] };
+    contentFilters?: ContentFilterRules,
+  ): Promise<Map<number, AbsLibraryItemMinified[]>> {
+    if (seriesIds.length === 0) return new Map();
+    const memberships = await this.repository.findSeriesMembershipBookIdsByLibraries(seriesIds, [libraryId], contentFilters);
+    const bookIdsBySeriesId = new Map<number, number[]>();
+    for (const membership of memberships) {
+      const list = bookIdsBySeriesId.get(membership.seriesId);
+      if (list) list.push(membership.bookId);
+      else bookIdsBySeriesId.set(membership.seriesId, [membership.bookId]);
+    }
+    const allBookIds = [...bookIdsBySeriesId.values()].flat();
+    const itemsByBookId = new Map((await this.itemsService.getMinifiedItemsByIds(allBookIds)).map((item) => [fromAbsUuid(item.id), item] as const));
+
+    const result = new Map<number, AbsLibraryItemMinified[]>();
+    for (const [seriesId, bookIds] of bookIdsBySeriesId) {
+      result.set(
+        seriesId,
+        bookIds.map((bookId) => itemsByBookId.get(bookId)).filter((item): item is AbsLibraryItemMinified => item != null),
+      );
+    }
+    return result;
+  }
+
+  private toSearchSeries(series: { id: number; name: string; createdAt?: Date; updatedAt?: Date }, libraryId: string): AbsSeries {
+    return {
+      id: toAbsSeriesUuid(series.id),
+      name: series.name,
+      nameIgnorePrefix: series.name,
+      description: null,
+      addedAt: series.createdAt?.getTime() ?? 0,
+      updatedAt: series.updatedAt?.getTime() ?? 0,
+      libraryId,
+    };
+  }
+
+  private toSearchAuthor(
+    author: { id: number; name: string; description: string | null; sortName: string | null; hasPhoto?: boolean; numBooks: number },
+    libraryId: string,
+  ): AbsAuthor {
+    return {
+      id: toAbsUuid(author.id),
+      asin: null,
+      name: author.name,
+      description: author.description,
+      imagePath: author.hasPhoto ? `/authors/${author.id}/photo.jpg` : null,
+      addedAt: 0,
+      updatedAt: 0,
+      libraryId,
+      numBooks: author.numBooks,
+      lastFirst: author.sortName ?? author.name,
+    };
   }
 
   /** GET /api/libraries/:id/filterdata - a library's capability summary. Some ABS clients

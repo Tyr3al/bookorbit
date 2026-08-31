@@ -6,6 +6,7 @@ function createQuery<T>(result: T) {
   const query = {
     from: vi.fn(),
     innerJoin: vi.fn(),
+    leftJoin: vi.fn(),
     where: vi.fn(),
     groupBy: vi.fn(),
     orderBy: vi.fn(),
@@ -13,7 +14,7 @@ function createQuery<T>(result: T) {
     offset: vi.fn(),
     then: (resolve: (value: T) => unknown, reject: (reason: unknown) => unknown) => Promise.resolve(result).then(resolve, reject),
   };
-  for (const method of ['from', 'innerJoin', 'where', 'groupBy', 'orderBy', 'limit', 'offset'] as const) {
+  for (const method of ['from', 'innerJoin', 'leftJoin', 'where', 'groupBy', 'orderBy', 'limit', 'offset'] as const) {
     query[method].mockReturnValue(query);
   }
   return query;
@@ -73,5 +74,56 @@ describe('AudiobookshelfRepository', () => {
 
     await expect(repository.findAuthorBookIdsByLibraries(3, [])).resolves.toEqual([]);
     expect(db.select).not.toHaveBeenCalled();
+  });
+
+  it('bounds findAudioBookSearchIds with a SQL limit and returns only matching ids', async () => {
+    const rows = [{ id: 9 }];
+    const query = createQuery(rows);
+    const db = { select: vi.fn().mockReturnValue(query) };
+    const repository = new AudiobookshelfRepository(db as never);
+
+    await expect(repository.findAudioBookSearchIds(3, 'dune', 12)).resolves.toEqual([9]);
+    expect(query.limit).toHaveBeenCalledWith(12);
+    expect(query.offset).not.toHaveBeenCalled();
+    expect(query.leftJoin).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds findGenresWithCountsByLibraries and findTagsWithCountsByLibraries with a SQL limit', async () => {
+    const genreQuery = createQuery([{ name: 'Fantasy', numItems: 3 }]);
+    const tagQuery = createQuery([{ name: 'favorites', numItems: 2 }]);
+    const db = { select: vi.fn().mockReturnValueOnce(genreQuery).mockReturnValueOnce(tagQuery) };
+    const repository = new AudiobookshelfRepository(db as never);
+
+    await expect(repository.findGenresWithCountsByLibraries([3], undefined, 'fan', 5)).resolves.toEqual([{ name: 'Fantasy', numItems: 3 }]);
+    await expect(repository.findTagsWithCountsByLibraries([3], undefined, 'fav', 5)).resolves.toEqual([{ name: 'favorites', numItems: 2 }]);
+    expect(genreQuery.limit).toHaveBeenCalledWith(5);
+    expect(tagQuery.limit).toHaveBeenCalledWith(5);
+  });
+
+  it('applies a SQL limit to findNarratorsWithCountsByLibraries only when one is requested', async () => {
+    const searchQuery = createQuery([{ id: 1, name: 'Jane', numBooks: 2 }]);
+    const listQuery = createQuery([{ id: 1, name: 'Jane', numBooks: 2 }]);
+    const db = { select: vi.fn().mockReturnValueOnce(searchQuery).mockReturnValueOnce(listQuery) };
+    const repository = new AudiobookshelfRepository(db as never);
+
+    await repository.findNarratorsWithCountsByLibraries([3], undefined, 'jan', 7);
+    expect(searchQuery.limit).toHaveBeenCalledWith(7);
+
+    await repository.findNarratorsWithCountsByLibraries([3], undefined);
+    expect(listQuery.limit).not.toHaveBeenCalled();
+  });
+
+  it('filters findSeriesByLibrariesPage and findAuthorsWithCountsByLibrariesPage by an optional name', async () => {
+    const seriesPageQuery = createQuery([{ id: 1, name: 'Dune Saga' }]);
+    const seriesCountQuery = createQuery([{ total: 1 }]);
+    const db = { select: vi.fn().mockReturnValueOnce(seriesPageQuery).mockReturnValueOnce(seriesCountQuery) };
+    const repository = new AudiobookshelfRepository(db as never);
+
+    await expect(repository.findSeriesByLibrariesPage([3], undefined, 12, 0, 'name', false, 'dune')).resolves.toEqual({
+      rows: [{ id: 1, name: 'Dune Saga' }],
+      total: 1,
+    });
+    expect(seriesPageQuery.limit).toHaveBeenCalledWith(12);
+    expect(seriesPageQuery.offset).toHaveBeenCalledWith(0);
   });
 });

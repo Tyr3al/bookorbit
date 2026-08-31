@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, asc, count, countDistinct, desc, eq, exists, getTableColumns, gt, inArray, lt, not, or, sql, type SQL } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import type { PgColumn } from 'drizzle-orm/pg-core';
 import type { ContentFilterRules } from '@bookorbit/types';
 
 import { buildContentFilterClauses } from '../../common/utils/content-filter-sql.utils';
@@ -162,6 +163,23 @@ export class AudiobookshelfRepository {
       .orderBy(...orderBy)
       .limit(query.limit)
       .offset(query.offset);
+    return rows.map((row) => row.id);
+  }
+
+  /** Audio book ids in one library matching a search query (title/subtitle/isbn/asin), bounded
+   * by limit. Used by GET /api/libraries/:id/search - unlike {@link findAudioBookIds} this never
+   * paginates past `limit`. */
+  async findAudioBookSearchIds(libraryId: number, search: string, limit: number, contentFilters?: ContentFilterRules): Promise<number[]> {
+    const filterClauses = contentFilters ? buildContentFilterClauses(contentFilters, this.db) : [];
+    const rows = await this.db
+      .select({ id: schema.books.id })
+      .from(schema.books)
+      .leftJoin(schema.bookMetadata, eq(schema.bookMetadata.bookId, schema.books.id))
+      .where(
+        and(eq(schema.books.libraryId, libraryId), BOOK_VISIBLE_WHERE, this.hasAudioFile(), ...filterClauses, this.buildBookSearchClause(search)),
+      )
+      .orderBy(...this.buildItemOrder('title', false))
+      .limit(limit);
     return rows.map((row) => row.id);
   }
 
@@ -532,6 +550,7 @@ export class AudiobookshelfRepository {
     offset: number,
     sort: AbsAuthorSort = 'name',
     sortDesc = false,
+    nameFilter?: string,
   ): Promise<{ rows: (schema.Author & { numBooks: number })[]; total: number }> {
     if (libraryIds.length === 0) return { rows: [], total: 0 };
     const filterClauses = contentFilters ? buildContentFilterClauses(contentFilters, this.db) : [];
@@ -541,6 +560,7 @@ export class AudiobookshelfRepository {
       eq(schema.bookFiles.role, 'content'),
       AUDIO_FORMAT_WHERE,
       ...filterClauses,
+      nameFilter ? this.buildLikeClause(schema.authors.name, nameFilter) : undefined,
     );
     const orderColumn =
       sort === 'numBooks'
@@ -579,13 +599,21 @@ export class AudiobookshelfRepository {
    * Narrators that have audio books in the given libraries, with the count of exposed books.
    * Counts books (not files), so a multi-file audiobook counts once.
    */
+  /**
+   * @param nameFilter Optional case-insensitive substring match on the narrator name (used by
+   * GET /api/libraries/:id/search).
+   * @param limit Optional bound applied in SQL. Omitted by the unbounded filterdata/narrators-list
+   * call sites, which need every narrator; always pass it from a search-style caller.
+   */
   async findNarratorsWithCountsByLibraries(
     libraryIds: number[],
     contentFilters?: ContentFilterRules,
+    nameFilter?: string,
+    limit?: number,
   ): Promise<(schema.Narrator & { numBooks: number })[]> {
     if (libraryIds.length === 0) return Promise.resolve([]);
     const filterClauses = contentFilters ? buildContentFilterClauses(contentFilters, this.db) : [];
-    return this.db
+    const query = this.db
       .select({
         ...getTableColumns(schema.narrators),
         numBooks: countDistinct(schema.bookNarrators.bookId),
@@ -601,10 +629,82 @@ export class AudiobookshelfRepository {
           eq(schema.bookFiles.role, 'content'),
           AUDIO_FORMAT_WHERE,
           ...filterClauses,
+          nameFilter ? this.buildLikeClause(schema.narrators.name, nameFilter) : undefined,
         ),
       )
       .groupBy(schema.narrators.id)
       .orderBy(asc(schema.narrators.name));
+    return limit ? query.limit(limit) : query;
+  }
+
+  /** Genres with the count of matching accessible audio books, bounded by limit. Used by
+   * GET /api/libraries/:id/search - BookOrbit stores genres relationally (book_genres), not as
+   * a JSON column like upstream, so this counts distinct books per genre rather than reading an
+   * embedded array. */
+  async findGenresWithCountsByLibraries(
+    libraryIds: number[],
+    contentFilters: ContentFilterRules | undefined,
+    nameFilter: string,
+    limit: number,
+  ): Promise<{ name: string; numItems: number }[]> {
+    if (libraryIds.length === 0) return [];
+    const filterClauses = contentFilters ? buildContentFilterClauses(contentFilters, this.db) : [];
+    return this.db
+      .select({
+        name: schema.genres.name,
+        numItems: countDistinct(schema.bookGenres.bookId),
+      })
+      .from(schema.bookGenres)
+      .innerJoin(schema.genres, eq(schema.genres.id, schema.bookGenres.genreId))
+      .innerJoin(schema.books, eq(schema.books.id, schema.bookGenres.bookId))
+      .innerJoin(schema.bookFiles, eq(schema.bookFiles.bookId, schema.books.id))
+      .where(
+        and(
+          inArray(schema.books.libraryId, libraryIds),
+          BOOK_VISIBLE_WHERE,
+          eq(schema.bookFiles.role, 'content'),
+          AUDIO_FORMAT_WHERE,
+          ...filterClauses,
+          this.buildLikeClause(schema.genres.name, nameFilter),
+        ),
+      )
+      .groupBy(schema.genres.id)
+      .orderBy(asc(schema.genres.name))
+      .limit(limit);
+  }
+
+  /** Tags with the count of matching accessible audio books, bounded by limit. Used by
+   * GET /api/libraries/:id/search. */
+  async findTagsWithCountsByLibraries(
+    libraryIds: number[],
+    contentFilters: ContentFilterRules | undefined,
+    nameFilter: string,
+    limit: number,
+  ): Promise<{ name: string; numItems: number }[]> {
+    if (libraryIds.length === 0) return [];
+    const filterClauses = contentFilters ? buildContentFilterClauses(contentFilters, this.db) : [];
+    return this.db
+      .select({
+        name: schema.tags.name,
+        numItems: countDistinct(schema.bookTags.bookId),
+      })
+      .from(schema.bookTags)
+      .innerJoin(schema.tags, eq(schema.tags.id, schema.bookTags.tagId))
+      .innerJoin(schema.books, eq(schema.books.id, schema.bookTags.bookId))
+      .innerJoin(schema.bookFiles, eq(schema.bookFiles.bookId, schema.books.id))
+      .where(
+        and(
+          inArray(schema.books.libraryId, libraryIds),
+          BOOK_VISIBLE_WHERE,
+          eq(schema.bookFiles.role, 'content'),
+          AUDIO_FORMAT_WHERE,
+          ...filterClauses,
+          this.buildLikeClause(schema.tags.name, nameFilter),
+        ),
+      )
+      .groupBy(schema.tags.id)
+      .orderBy(asc(schema.tags.name))
+      .limit(limit);
   }
 
   /** Distinct genres/languages/publishers/published-years and the missing-book count across
@@ -719,6 +819,7 @@ export class AudiobookshelfRepository {
     offset: number,
     sort: AbsSeriesSort = 'name',
     sortDesc = false,
+    nameFilter?: string,
   ) {
     if (libraryIds.length === 0) return { rows: [], total: 0 };
 
@@ -729,6 +830,7 @@ export class AudiobookshelfRepository {
       eq(schema.bookFiles.role, 'content'),
       AUDIO_FORMAT_WHERE,
       ...filterClauses,
+      nameFilter ? this.buildLikeClause(schema.bookSeries.name, nameFilter) : undefined,
     );
     const numBooks = countDistinct(schema.bookSeriesMemberships.bookId);
     const lastBookUpdated = sql<Date | null>`max(${schema.books.updatedAt})`;
@@ -1053,9 +1155,29 @@ export class AudiobookshelfRepository {
     }
   }
 
-  private buildTitleSearch(search: string): SQL {
+  /** Case-insensitive substring match against a single text column. */
+  private buildLikeClause(column: PgColumn, search: string): SQL {
     const pattern = `%${search.trim().toLowerCase()}%`;
-    return sql`lower(coalesce(${schema.bookMetadata.title}, '')) like ${pattern}`;
+    return sql`lower(coalesce(${column}, '')) like ${pattern}`;
+  }
+
+  private buildTitleSearch(search: string): SQL {
+    return this.buildLikeClause(schema.bookMetadata.title, search);
+  }
+
+  /** Book predicate for GET /api/libraries/:id/search - matches title, subtitle, isbn10/isbn13
+   * and the ASIN-shaped provider ids (amazonId, audibleId; BookOrbit has no dedicated `asin`
+   * column). Kept separate from {@link buildTitleSearch}, which the item list/count paths use
+   * for title-only search, so their existing behavior is unchanged. */
+  private buildBookSearchClause(search: string): SQL | undefined {
+    return or(
+      this.buildLikeClause(schema.bookMetadata.title, search),
+      this.buildLikeClause(schema.bookMetadata.subtitle, search),
+      this.buildLikeClause(schema.bookMetadata.isbn10, search),
+      this.buildLikeClause(schema.bookMetadata.isbn13, search),
+      this.buildLikeClause(schema.bookMetadata.amazonId, search),
+      this.buildLikeClause(schema.bookMetadata.audibleId, search),
+    );
   }
 
   private buildItemOrder(sort: AbsItemSort, descending = false): SQL[] {
