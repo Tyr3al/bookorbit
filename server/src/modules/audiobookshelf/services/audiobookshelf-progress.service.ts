@@ -75,9 +75,17 @@ export class AudiobookshelfProgressService {
     const { currentFileId, positionSeconds, percentage } = this.resolvePosition(orderedFiles, totalDuration, input);
     const progress = { percentage, currentFileId, positionSeconds };
     if (incomingUpdatedAt !== null) {
-      await this.bookService.saveAudioProgress(user.id, book.id, progress, user, incomingUpdatedAt);
+      if (input.isFinished === undefined) {
+        await this.bookService.saveAudioProgress(user.id, book.id, progress, user, incomingUpdatedAt);
+      } else {
+        await this.bookService.saveAudioProgress(user.id, book.id, progress, user, incomingUpdatedAt, input.isFinished);
+      }
     } else {
-      await this.bookService.saveAudioProgress(user.id, book.id, progress, user);
+      if (input.isFinished === undefined) {
+        await this.bookService.saveAudioProgress(user.id, book.id, progress, user);
+      } else {
+        await this.bookService.saveAudioProgress(user.id, book.id, progress, user, undefined, input.isFinished);
+      }
     }
 
     const rows = await this.repository.findProgressByUserIdAndBookIds(user.id, [book.id]);
@@ -118,6 +126,7 @@ export class AudiobookshelfProgressService {
         duration: typeof session.duration === 'number' ? session.duration : undefined,
         startedAt: typeof session.startedAt === 'number' ? session.startedAt : undefined,
         lastUpdate: typeof session.updatedAt === 'number' ? session.updatedAt : undefined,
+        isFinished: typeof session.isFinished === 'boolean' ? session.isFinished : undefined,
       };
       try {
         await this.updateMediaProgress(user, bookId, input);

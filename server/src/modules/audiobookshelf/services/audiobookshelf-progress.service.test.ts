@@ -175,4 +175,34 @@ describe('AudiobookshelfProgressService.updateMediaProgress', () => {
       new Date(timestamp),
     );
   });
+
+  it('passes explicit finish state through to the shared progress writer', async () => {
+    const { service, bookService } = makeService();
+
+    await service.updateMediaProgress(user(), 7, { currentTime: 20, isFinished: false });
+
+    expect(bookService.saveAudioProgress).toHaveBeenCalledWith(
+      1,
+      7,
+      expect.objectContaining({ positionSeconds: 20 }),
+      expect.anything(),
+      undefined,
+      false,
+    );
+  });
+
+  it('preserves explicit finish state for locally synced sessions', async () => {
+    const { service, bookService } = makeService();
+
+    await service.syncLocalSessions(user(), [{ libraryItemId: toAbsUuid(7), currentTime: 120, isFinished: true }]);
+
+    expect(bookService.saveAudioProgress).toHaveBeenCalledWith(
+      1,
+      7,
+      expect.objectContaining({ percentage: 100 }),
+      expect.anything(),
+      undefined,
+      true,
+    );
+  });
 });

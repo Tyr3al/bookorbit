@@ -2576,6 +2576,23 @@ describe('BookService', () => {
       expect(userBookStatusService.autoUpdate).not.toHaveBeenCalled();
     });
 
+    it.each([
+      { isFinished: true, expectedStatus: 'read' as const },
+      { isFinished: false, expectedStatus: 'reading' as const },
+    ])('applies explicit ABS finish state $isFinished after saving progress', async ({ isFinished, expectedStatus }) => {
+      const { service, bookRepo, libraryService, userBookStatusService } = makeService();
+      const user = makeUser({ id: 21 });
+
+      bookRepo.findLibraryIdByBookId.mockResolvedValue(1);
+      bookRepo.findFileById.mockResolvedValue({ id: 7, absolutePath: '/books/audiobook-1.mp3', format: 'mp3', bookId: 10, libraryId: 1 });
+      libraryService.verifyUserAccess.mockResolvedValue(undefined);
+
+      await service.saveAudioProgress(user.id, 10, { percentage: 40, currentFileId: 7, positionSeconds: 90 }, user, undefined, isFinished);
+
+      expect(userBookStatusService.setManual).toHaveBeenCalledWith(user.id, 10, expectedStatus);
+      expect(userBookStatusService.autoUpdate).not.toHaveBeenCalled();
+    });
+
     it('throws BadRequestException when current file belongs to a different book', async () => {
       const { service, bookRepo, libraryService } = makeService();
       const user = makeUser({ id: 21 });

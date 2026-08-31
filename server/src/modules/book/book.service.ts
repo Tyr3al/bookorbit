@@ -2044,7 +2044,7 @@ export class BookService {
     return this.bookRepo.findAudioProgress(userId, bookId);
   }
 
-  async saveAudioProgress(userId: number, bookId: number, dto: UpsertAudioProgressDto, user: RequestUser, updatedAt?: Date) {
+  async saveAudioProgress(userId: number, bookId: number, dto: UpsertAudioProgressDto, user: RequestUser, updatedAt?: Date, isFinished?: boolean) {
     const libraryId = await this.bookRepo.findLibraryIdByBookId(bookId);
     if (libraryId === null) throw new NotFoundException(`Book ${bookId} not found`);
     await this.libraryService.verifyUserAccess(userId, libraryId, this.isSuperuser(user));
@@ -2057,6 +2057,10 @@ export class BookService {
       ? await this.bookRepo.upsertAudioProgress(userId, bookId, dto.currentFileId, dto.positionSeconds, dto.percentage, updatedAt)
       : await this.bookRepo.upsertAudioProgress(userId, bookId, dto.currentFileId, dto.positionSeconds, dto.percentage);
     if (updatedAt && !saved) return;
+    if (isFinished !== undefined) {
+      await this.userBookStatusService.setManual(userId, bookId, isFinished ? 'read' : 'reading');
+      return;
+    }
     const strongRereadEvidence = previous != null && previous.percentage - dto.percentage >= 10;
     await this.autoUpdateReadStatusForProgress(
       userId,
