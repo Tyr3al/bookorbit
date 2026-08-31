@@ -24,11 +24,15 @@ export class AudiobookshelfCollectionsService {
   /** GET /api/libraries/:id/collections - the user's collections scoped to a library. */
   async listLibraryCollections(user: RequestUser, libraryId: number, limit = 5, page = 0): Promise<AbsPaginatedCollections> {
     await this.librariesService.requireExposedLibrary(user, libraryId);
-    const { collections } = await this.listCollections(user);
+    const contentFilters = user.isSuperuser ? undefined : user.contentFilters;
     const offset = page * limit;
+    const [collections, total] = await Promise.all([
+      this.repository.findCollectionsByUserIdAndLibrary(user.id, libraryId, contentFilters, limit, offset),
+      this.repository.countCollectionsByUserIdAndLibrary(user.id, libraryId, contentFilters),
+    ]);
     return {
-      results: collections.slice(offset, offset + limit),
-      total: collections.length,
+      results: await this.hydrate(user, collections, [libraryId]),
+      total,
       limit,
       page,
       sortDesc: false,
@@ -48,28 +52,31 @@ export class AudiobookshelfCollectionsService {
   private async hydrate(
     user: RequestUser,
     collections: { id: number; name: string; description: string | null; createdAt: Date; updatedAt: Date }[],
+    libraryIds?: number[],
   ): Promise<AbsCollection[]> {
     if (collections.length === 0) return [];
 
     const collectionIds = collections.map((collection) => collection.id);
-    const links = await this.repository.findCollectionBookIdsByCollectionIds(collectionIds);
-
     const contentFilters = user.isSuperuser ? undefined : user.contentFilters;
-    const libraryIds = await this.librariesService.getExposedLibraryIds(user);
-    const exposedBookIds = new Set(await this.repository.findAudioBookIdsByLibraries(libraryIds, contentFilters));
+    const exposedLibraryIds = libraryIds ?? (await this.librariesService.getExposedLibraryIds(user));
+    const links = libraryIds
+      ? await this.repository.findCollectionBookIdsByCollectionIdsAndLibraries(collectionIds, exposedLibraryIds, contentFilters)
+      : await this.repository.findCollectionBookIdsByCollectionIds(collectionIds);
 
-    const bookIds = links.filter((link) => exposedBookIds.has(link.bookId)).map((link) => link.bookId);
+    const exposedBookIds = libraryIds ? undefined : new Set(await this.repository.findAudioBookIdsByLibraries(exposedLibraryIds, contentFilters));
+
+    const bookIds = links.filter((link) => exposedBookIds?.has(link.bookId) ?? true).map((link) => link.bookId);
     const itemsById = new Map((await this.itemsService.getItemsByIds(bookIds)).map((item) => [fromAbsUuid(item.id), item]));
 
     const byCollectionId = new Map<number, typeof links>();
     for (const link of links) {
-      if (!exposedBookIds.has(link.bookId)) continue;
+      if (exposedBookIds && !exposedBookIds.has(link.bookId)) continue;
       const list = byCollectionId.get(link.collectionId);
       if (list) list.push(link);
       else byCollectionId.set(link.collectionId, [link]);
     }
 
-    const defaultLibraryId = libraryIds[0] !== undefined ? toAbsUuid(libraryIds[0]) : '';
+    const defaultLibraryId = exposedLibraryIds[0] !== undefined ? toAbsUuid(exposedLibraryIds[0]) : '';
 
     return collections.map((collection) => {
       const books = (byCollectionId.get(collection.id) ?? [])

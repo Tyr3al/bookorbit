@@ -444,6 +444,71 @@ export class AudiobookshelfRepository {
       .orderBy(asc(schema.collections.displayOrder), asc(schema.collections.name));
   }
 
+  async findCollectionsByUserIdAndLibrary(
+    userId: number,
+    libraryId: number,
+    contentFilters: ContentFilterRules | undefined,
+    limit: number,
+    offset: number,
+  ): Promise<schema.Collection[]> {
+    const filterClauses = contentFilters ? buildContentFilterClauses(contentFilters, this.db) : [];
+    return this.db
+      .select({ collection: schema.collections })
+      .from(schema.collections)
+      .where(
+        and(
+          eq(schema.collections.userId, userId),
+          exists(
+            this.db
+              .select({ id: schema.collectionBooks.collectionId })
+              .from(schema.collectionBooks)
+              .innerJoin(schema.books, eq(schema.books.id, schema.collectionBooks.bookId))
+              .where(
+                and(
+                  eq(schema.collectionBooks.collectionId, schema.collections.id),
+                  eq(schema.books.libraryId, libraryId),
+                  BOOK_VISIBLE_WHERE,
+                  this.hasAudioFile(),
+                  ...filterClauses,
+                ),
+              ),
+          ),
+        ),
+      )
+      .orderBy(asc(schema.collections.displayOrder), asc(schema.collections.name))
+      .limit(limit)
+      .offset(offset)
+      .then((rows) => rows.map((row) => row.collection));
+  }
+
+  async countCollectionsByUserIdAndLibrary(userId: number, libraryId: number, contentFilters?: ContentFilterRules): Promise<number> {
+    const filterClauses = contentFilters ? buildContentFilterClauses(contentFilters, this.db) : [];
+    const [row] = await this.db
+      .select({ count: count() })
+      .from(schema.collections)
+      .where(
+        and(
+          eq(schema.collections.userId, userId),
+          exists(
+            this.db
+              .select({ id: schema.collectionBooks.collectionId })
+              .from(schema.collectionBooks)
+              .innerJoin(schema.books, eq(schema.books.id, schema.collectionBooks.bookId))
+              .where(
+                and(
+                  eq(schema.collectionBooks.collectionId, schema.collections.id),
+                  eq(schema.books.libraryId, libraryId),
+                  BOOK_VISIBLE_WHERE,
+                  this.hasAudioFile(),
+                  ...filterClauses,
+                ),
+              ),
+          ),
+        ),
+      );
+    return Number(row?.count ?? 0);
+  }
+
   findCollectionById(id: number): Promise<schema.Collection | undefined> {
     return this.db
       .select()
@@ -459,6 +524,29 @@ export class AudiobookshelfRepository {
       .select({ collectionId: schema.collectionBooks.collectionId, bookId: schema.collectionBooks.bookId })
       .from(schema.collectionBooks)
       .where(inArray(schema.collectionBooks.collectionId, collectionIds))
+      .orderBy(asc(schema.collectionBooks.collectionId), asc(schema.collectionBooks.position));
+  }
+
+  findCollectionBookIdsByCollectionIdsAndLibraries(
+    collectionIds: number[],
+    libraryIds: number[],
+    contentFilters?: ContentFilterRules,
+  ): Promise<{ collectionId: number; bookId: number }[]> {
+    if (collectionIds.length === 0 || libraryIds.length === 0) return Promise.resolve([]);
+    const filterClauses = contentFilters ? buildContentFilterClauses(contentFilters, this.db) : [];
+    return this.db
+      .select({ collectionId: schema.collectionBooks.collectionId, bookId: schema.collectionBooks.bookId })
+      .from(schema.collectionBooks)
+      .innerJoin(schema.books, eq(schema.books.id, schema.collectionBooks.bookId))
+      .where(
+        and(
+          inArray(schema.collectionBooks.collectionId, collectionIds),
+          inArray(schema.books.libraryId, libraryIds),
+          BOOK_VISIBLE_WHERE,
+          this.hasAudioFile(),
+          ...filterClauses,
+        ),
+      )
       .orderBy(asc(schema.collectionBooks.collectionId), asc(schema.collectionBooks.position));
   }
 
