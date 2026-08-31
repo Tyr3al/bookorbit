@@ -403,6 +403,31 @@ export class AudiobookshelfRepository {
       .then((rows) => rows[0]);
   }
 
+  async findAccessibleSeriesBook(
+    seriesId: number,
+    libraryIds: number[],
+    contentFilters?: ContentFilterRules,
+  ): Promise<{ bookId: number; libraryId: number } | undefined> {
+    if (libraryIds.length === 0) return undefined;
+    const filterClauses = contentFilters ? buildContentFilterClauses(contentFilters, this.db) : [];
+    const [row] = await this.db
+      .select({ bookId: schema.books.id, libraryId: schema.books.libraryId })
+      .from(schema.bookSeriesMemberships)
+      .innerJoin(schema.books, eq(schema.books.id, schema.bookSeriesMemberships.bookId))
+      .where(
+        and(
+          eq(schema.bookSeriesMemberships.seriesId, seriesId),
+          inArray(schema.books.libraryId, libraryIds),
+          BOOK_VISIBLE_WHERE,
+          this.hasAudioFile(),
+          ...filterClauses,
+        ),
+      )
+      .orderBy(asc(schema.books.id))
+      .limit(1);
+    return row;
+  }
+
   findSeriesMembershipBookIds(seriesIds: number[]): Promise<{ seriesId: number; bookId: number }[]> {
     if (seriesIds.length === 0) return Promise.resolve([]);
     return this.db

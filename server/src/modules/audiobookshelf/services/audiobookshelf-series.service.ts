@@ -62,25 +62,20 @@ export class AudiobookshelfSeriesService {
    * library-scoped, so on the bare (non-library-scoped) route it's derived from one of the
    * series' own books, falling back to the user's first exposed library. */
   async getSeries(user: RequestUser, seriesId: number, libraryId?: number): Promise<AbsSeries> {
+    const contentFilters = user.isSuperuser ? undefined : user.contentFilters;
+    if (libraryId !== undefined) {
+      await this.librariesService.requireExposedLibrary(user, libraryId);
+    }
+    const exposedLibraryIds = libraryId !== undefined ? [libraryId] : await this.librariesService.getExposedLibraryIds(user);
+    const accessibleBook = await this.repository.findAccessibleSeriesBook(seriesId, exposedLibraryIds, contentFilters);
+    if (!accessibleBook) throw new NotFoundException(`Series ${seriesId} not found`);
+
     const series = await this.repository.findSeriesById(seriesId);
     if (!series) throw new NotFoundException(`Series ${seriesId} not found`);
 
-    if (libraryId !== undefined) {
-      await this.librariesService.requireExposedLibrary(user, libraryId);
-      return this.toSeries(series, toAbsUuid(libraryId));
-    }
+    if (libraryId !== undefined) return this.toSeries(series, toAbsUuid(libraryId));
 
-    return this.toSeries(series, await this.resolveSeriesLibraryId(user, seriesId));
-  }
-
-  private async resolveSeriesLibraryId(user: RequestUser, seriesId: number): Promise<string | undefined> {
-    const memberships = await this.repository.findSeriesMembershipBookIds([seriesId]);
-    if (memberships.length > 0) {
-      const [book] = await this.repository.findBooksByIds([memberships[0].bookId]);
-      if (book) return toAbsUuid(book.libraryId);
-    }
-    const libraryIds = await this.librariesService.getExposedLibraryIds(user);
-    return libraryIds[0] !== undefined ? toAbsUuid(libraryIds[0]) : undefined;
+    return this.toSeries(series, toAbsUuid(accessibleBook.libraryId));
   }
 
   private toSeries(series: { id: number; name: string; createdAt?: Date; updatedAt?: Date }, libraryId?: string): AbsSeries {
