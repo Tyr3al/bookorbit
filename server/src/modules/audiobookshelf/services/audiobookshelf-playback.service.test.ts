@@ -180,4 +180,37 @@ describe('AudiobookshelfPlaybackService', () => {
     sourceItem.media.tracks = [];
     await expect(service.play(user(), 42, {})).rejects.toBeInstanceOf(NotFoundException);
   });
+
+  it('syncs owned session fields through the shared progress service', async () => {
+    const itemsService = { getItem: vi.fn() };
+    const progressService = { updateMediaProgress: vi.fn().mockResolvedValue(undefined) };
+    const service = new AudiobookshelfPlaybackService(itemsService as never, progressService as never);
+    const currentUser = user();
+
+    await service.sync(currentUser, toAbsCompositeUuid(7, 42), {
+      currentTime: 123.5,
+      duration: 3600,
+      lastUpdate: 200,
+      updatedAt: 100,
+      isFinished: false,
+      ignored: true,
+    });
+
+    expect(progressService.updateMediaProgress).toHaveBeenCalledWith(currentUser, 42, {
+      currentTime: 123.5,
+      duration: 3600,
+      progress: undefined,
+      startedAt: undefined,
+      lastUpdate: 200,
+      isFinished: false,
+    });
+  });
+
+  it.each(['not-a-session', toAbsCompositeUuid(8, 42)])('rejects invalid or foreign session %s', async (sessionId) => {
+    const progressService = { updateMediaProgress: vi.fn() };
+    const service = new AudiobookshelfPlaybackService({} as never, progressService as never);
+
+    await expect(service.sync(user(), sessionId, {})).rejects.toBeInstanceOf(NotFoundException);
+    expect(progressService.updateMediaProgress).not.toHaveBeenCalled();
+  });
 });

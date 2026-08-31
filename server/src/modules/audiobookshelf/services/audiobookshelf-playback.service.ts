@@ -1,12 +1,12 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 
 import { sanitizeLogValue } from '../../../common/utils/log-sanitize.utils';
-import { toAbsCompositeUuid, toAbsUuid } from '../../../common/utils/abs-id.utils';
+import { fromAbsCompositeUuid, toAbsCompositeUuid, toAbsUuid } from '../../../common/utils/abs-id.utils';
 import type { RequestUser } from '../../../common/types/request-user';
 import { ABS_SERVER_VERSION } from '../audiobookshelf.constants';
 import type { AbsFileMetadata, AbsLibraryItem, AbsPlaybackAudioTrack, AbsPlaybackSessionExpanded } from '../audiobookshelf.types';
 import { AudiobookshelfItemsService } from './audiobookshelf-items.service';
-import { AudiobookshelfProgressService } from './audiobookshelf-progress.service';
+import { AudiobookshelfProgressService, type UpdateProgressInput } from './audiobookshelf-progress.service';
 
 /** Builds the expanded direct-play session returned by ABS's play endpoint. */
 @Injectable()
@@ -42,6 +42,12 @@ export class AudiobookshelfPlaybackService {
       );
       throw error;
     }
+  }
+
+  async sync(user: RequestUser, sessionId: string, request: unknown): Promise<void> {
+    const session = fromAbsCompositeUuid(sessionId);
+    if (!session || session.a !== user.id) throw new NotFoundException('Session not found');
+    await this.progressService.updateMediaProgress(user, session.b, toProgressInput(request));
   }
 
   private buildSession(
@@ -149,6 +155,23 @@ function sanitizeDeviceInfo(request: unknown): Record<string, unknown> | null {
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function toProgressInput(value: unknown): UpdateProgressInput {
+  const source = asRecord(value);
+  if (!source) return {};
+  return {
+    currentTime: numericField(source.currentTime),
+    duration: numericField(source.duration),
+    progress: numericField(source.progress),
+    startedAt: numericField(source.startedAt),
+    lastUpdate: numericField(source.lastUpdate) ?? numericField(source.updatedAt),
+    isFinished: typeof source.isFinished === 'boolean' ? source.isFinished : undefined,
+  };
+}
+
+function numericField(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 function clampPlaybackTime(currentTime: number, duration: number | null): number {
