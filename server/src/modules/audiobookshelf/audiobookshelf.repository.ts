@@ -332,6 +332,69 @@ export class AudiobookshelfRepository {
   }
 
   /** Progress-backed audio items for ABS's continue-listening endpoint. */
+  async countItemsInProgressForAudiobookshelfUser(
+    user: {
+      id: number;
+      isSuperuser: boolean;
+      contentFilters?: ContentFilterRules;
+    },
+    libraryId: number,
+  ): Promise<number> {
+    const filterClauses = !user.isSuperuser && user.contentFilters ? buildContentFilterClauses(user.contentFilters, this.db) : [];
+    const accessClause = user.isSuperuser
+      ? undefined
+      : exists(
+          this.db
+            .select({ one: sql`1` })
+            .from(schema.userLibraryAccess)
+            .where(and(eq(schema.userLibraryAccess.userId, user.id), eq(schema.userLibraryAccess.libraryId, schema.books.libraryId))),
+        );
+    const hasReadStatus = exists(
+      this.db
+        .select({ one: sql`1` })
+        .from(schema.userBookStatus)
+        .where(
+          and(
+            eq(schema.userBookStatus.userId, user.id),
+            eq(schema.userBookStatus.bookId, schema.books.id),
+            inArray(schema.userBookStatus.status, ['read', 'skimmed']),
+          ),
+        ),
+    );
+    const hasExplicitReadingStatus = exists(
+      this.db
+        .select({ one: sql`1` })
+        .from(schema.userBookStatus)
+        .where(
+          and(
+            eq(schema.userBookStatus.userId, user.id),
+            eq(schema.userBookStatus.bookId, schema.books.id),
+            eq(schema.userBookStatus.status, 'reading'),
+          ),
+        ),
+    );
+    const rows = await this.db
+      .select({ count: count() })
+      .from(schema.audiobookProgress)
+      .innerJoin(schema.books, eq(schema.books.id, schema.audiobookProgress.bookId))
+      .innerJoin(schema.libraries, eq(schema.libraries.id, schema.books.libraryId))
+      .where(
+        and(
+          eq(schema.audiobookProgress.userId, user.id),
+          eq(schema.books.libraryId, libraryId),
+          eq(schema.libraries.enableAudiobookshelfApi, true),
+          BOOK_VISIBLE_WHERE,
+          this.hasAudioFile(),
+          accessClause,
+          ...filterClauses,
+          or(gt(schema.audiobookProgress.percentage, 0), gt(schema.audiobookProgress.positionSeconds, 0)),
+          not(hasReadStatus),
+          or(lt(schema.audiobookProgress.percentage, ABS_FINISHED_PROGRESS * 100), hasExplicitReadingStatus),
+        ),
+      );
+    return rows[0]?.count ?? 0;
+  }
+
   async findItemsInProgressForAudiobookshelfUser(
     user: {
       id: number;
@@ -339,6 +402,7 @@ export class AudiobookshelfRepository {
       contentFilters?: ContentFilterRules;
     },
     limit: number,
+    libraryId?: number,
   ): Promise<{ bookId: number; progressLastUpdate: Date }[]> {
     const filterClauses = !user.isSuperuser && user.contentFilters ? buildContentFilterClauses(user.contentFilters, this.db) : [];
     const accessClause = user.isSuperuser
@@ -382,6 +446,7 @@ export class AudiobookshelfRepository {
       .where(
         and(
           eq(schema.audiobookProgress.userId, user.id),
+          libraryId === undefined ? undefined : eq(schema.books.libraryId, libraryId),
           eq(schema.libraries.enableAudiobookshelfApi, true),
           BOOK_VISIBLE_WHERE,
           this.hasAudioFile(),

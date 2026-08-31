@@ -355,6 +355,15 @@ export interface AbsPaginatedItems {
   offset: number;
 }
 
+export interface AbsPersonalizedShelf {
+  id: string;
+  label: string;
+  labelStringKey: 'LabelContinueListening' | 'LabelRecentlyAdded';
+  type: 'book';
+  entities: (AbsLibraryItemMinified & { progressLastUpdate?: number })[];
+  total: number;
+}
+
 export interface AbsPaginatedAuthors {
   results: AbsAuthor[];
   total: number;

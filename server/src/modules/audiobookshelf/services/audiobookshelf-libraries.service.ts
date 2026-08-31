@@ -2,7 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 
 import { AudiobookshelfRepository, type AbsItemPageQuery, type AbsItemSort } from '../audiobookshelf.repository';
 import { ABS_DEFAULT_ITEM_LIMIT, ABS_MAX_ITEM_LIMIT, ABS_PROVIDER, ABS_METADATA_PRECEDENCE } from '../audiobookshelf.constants';
-import type { AbsLibrary, AbsLibraryFilterData, AbsLibraryItemMinified, AbsPaginatedItems } from '../audiobookshelf.types';
+import type { AbsLibrary, AbsLibraryFilterData, AbsLibraryItemMinified, AbsPaginatedItems, AbsPersonalizedShelf } from '../audiobookshelf.types';
 import { AudiobookshelfItemsService } from './audiobookshelf-items.service';
 import type { RequestUser } from '../../../common/types/request-user';
 import { toAbsSeriesUuid, toAbsUuid } from '../../../common/utils/abs-id.utils';
@@ -101,6 +101,53 @@ export class AudiobookshelfLibrariesService {
       include: normalizeInclude(input.include),
       offset: page * limit,
     };
+  }
+
+  /** GET /api/libraries/:id/personalized. Keep shelf queries bounded and library-scoped. */
+  async getPersonalized(user: RequestUser, libraryId: number, requestedLimit?: number): Promise<AbsPersonalizedShelf[]> {
+    await this.requireExposedLibrary(user, libraryId);
+
+    const limit = clampLimit(requestedLimit);
+    const contentFilters = user.isSuperuser ? undefined : user.contentFilters;
+    const [progressRows, progressTotal, recentBookIds, recentTotal] = await Promise.all([
+      this.repository.findItemsInProgressForAudiobookshelfUser(user, limit, libraryId),
+      this.repository.countItemsInProgressForAudiobookshelfUser(user, libraryId),
+      this.repository.findAudioBookIds(libraryId, { limit, offset: 0, sort: 'addedAt', desc: true }, contentFilters),
+      this.repository.countAudioBooks(libraryId, undefined, contentFilters),
+    ]);
+    const [progressItems, recentItems] = await Promise.all([
+      this.itemsService.getMinifiedItemsByIds(progressRows.map((row) => row.bookId)),
+      this.itemsService.getMinifiedItemsByIds(recentBookIds),
+    ]);
+
+    const progressItemsById = new Map(progressItems.map((item) => [item.id, item]));
+    const continueListening = progressRows.flatMap((row) => {
+      const item = progressItemsById.get(toAbsUuid(row.bookId));
+      return item ? [{ ...item, progressLastUpdate: row.progressLastUpdate.getTime() }] : [];
+    });
+
+    const shelves: AbsPersonalizedShelf[] = [];
+    if (continueListening.length > 0) {
+      shelves.push({
+        id: 'continue-listening',
+        label: 'Continue Listening',
+        labelStringKey: 'LabelContinueListening',
+        type: 'book',
+        entities: continueListening,
+        total: progressTotal,
+      });
+    }
+    if (recentItems.length > 0) {
+      shelves.push({
+        id: 'recently-added',
+        label: 'Recently Added',
+        labelStringKey: 'LabelRecentlyAdded',
+        type: 'book',
+        entities: recentItems,
+        total: recentTotal,
+      });
+    }
+    return shelves;
   }
 
   /** ABS /api/libraries/:id/search - book results only; other entity keys are empty for now. */

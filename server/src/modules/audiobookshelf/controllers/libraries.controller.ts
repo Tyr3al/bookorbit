@@ -58,6 +58,11 @@ export class LibrariesController {
     });
   }
 
+  @Get(':id/personalized')
+  personalized(@CurrentUser() user: RequestUser, @Param('id') idParam: string, @Query('limit') limit?: string) {
+    return this.librariesService.getPersonalized(user, parseAbsId(idParam), parseOptionalInt(limit));
+  }
+
   @Get(':id/authors')
   authors(@CurrentUser() user: RequestUser, @Param('id') idParam: string, @Query('limit') limit?: string, @Query('page') page?: string) {
     return this.authorsService.listLibraryAuthors(user, parseAbsId(idParam), parseOptionalInt(limit), parseOptionalInt(page));
