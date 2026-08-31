@@ -24,6 +24,17 @@ function createService() {
     countAudioBooks: vi.fn().mockResolvedValue(2),
     countItemsInProgressForAudiobookshelfUser: vi.fn().mockResolvedValue(0),
     findAudioBookIds: vi.fn().mockResolvedValue([1, 2]),
+    findAudioBookIdsByLibraries: vi.fn().mockResolvedValue([1, 2]),
+    findAuthorsWithCountsByLibraries: vi.fn().mockResolvedValue([]),
+    findSeriesByLibraries: vi.fn().mockResolvedValue([]),
+    findNarratorsWithCountsByLibraries: vi.fn().mockResolvedValue([]),
+    findLibraryFilterAggregates: vi.fn().mockResolvedValue({
+      genres: [],
+      languages: [],
+      publishers: [],
+      publishedYears: [],
+      missingCount: 0,
+    }),
     findItemsInProgressForAudiobookshelfUser: vi.fn().mockResolvedValue([]),
   };
   const itemsService = { getMinifiedItemsByIds: vi.fn().mockResolvedValue([]) };
@@ -153,5 +164,17 @@ describe('AudiobookshelfLibrariesService library details', () => {
     expect(repository.findFoldersByLibraryIds).toHaveBeenCalledWith([3]);
     expect(result).toMatchObject({ issues: 0, numUserPlaylists: 0, filterdata: { bookCount: 0 } });
     expect(result).toHaveProperty('library.name', 'Audiobooks');
+  });
+});
+
+describe('AudiobookshelfLibrariesService filter data', () => {
+  it('uses the persisted library update timestamp for stable payloads', async () => {
+    const { service } = createService();
+
+    const first = await service.getFilterData(user, 3);
+    const second = await service.getFilterData(user, 3);
+
+    expect(first.loadedAt).toBe(library.updatedAt.getTime());
+    expect(second).toEqual(first);
   });
 });
