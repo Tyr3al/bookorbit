@@ -16,9 +16,18 @@ import {
   registerConditionalHsts,
   isStaticAssetPath,
   shouldServeSpaFallback,
+  isAbsApiPath,
 } from './bootstrap.utils';
 
 describe('SPA fallback routing', () => {
+  it.each(['/abs/api/unknown', '/abs/api', '/abs/api/unknown?x=1', '/abs/api/unknown#fragment'])('recognizes %s as an ABS API path', (url) => {
+    expect(isAbsApiPath(url, '/abs')).toBe(true);
+  });
+
+  it.each(['/abs', '/abs/', '/abs/reader', '/abs/apix'])('does not classify %s as an ABS API path', (url) => {
+    expect(isAbsApiPath(url, '/abs')).toBe(false);
+  });
+
   it.each([
     '/assets/index-BMAlyH9T.js',
     '/assets/index-D5CelejF.css',

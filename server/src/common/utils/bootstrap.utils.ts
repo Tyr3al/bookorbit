@@ -107,6 +107,12 @@ export function shouldServeSpaFallback(url: string): boolean {
   return !isStaticAssetPath(url);
 }
 
+export function isAbsApiPath(url: string, basePathPrefix: string): boolean {
+  const pathname = url.split('?')[0].split('#')[0];
+  const apiPrefix = `${basePathPrefix}/api`;
+  return pathname === apiPrefix || pathname.startsWith(`${apiPrefix}/`);
+}
+
 export function shouldInjectEmptyJsonBody(method: string, headers: IncomingHttpHeaders): boolean {
   const contentType = getHeaderValue(headers['content-type'])?.toLowerCase();
   if (!BODY_METHODS.has(method.toUpperCase()) || !contentType?.startsWith('application/json')) {

@@ -27,6 +27,7 @@ import {
   registerSocketErrorGuard,
   shouldInjectEmptyJsonBody,
   shouldServeSpaFallback,
+  isAbsApiPath,
 } from './common/utils/bootstrap.utils';
 
 const MAX_COVER_BYTES = 20 * 1024 * 1024;
@@ -147,7 +148,7 @@ async function bootstrap() {
   const adapterAny = adapter as any;
   adapterAny.setNotFoundHandler = (nestHandler: (req: unknown, res: unknown) => void) => {
     fastify.setNotFoundHandler(async (request, reply) => {
-      if (request.url.startsWith('/api')) {
+      if (request.url.startsWith('/api') || isAbsApiPath(request.url, ABS_BASE_PATH)) {
         return nestHandler(request, reply);
       }
       if (!shouldServeSpaFallback(request.url)) {
