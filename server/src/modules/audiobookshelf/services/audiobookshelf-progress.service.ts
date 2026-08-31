@@ -26,9 +26,14 @@ export class AudiobookshelfProgressService {
     private readonly itemsService: AudiobookshelfItemsService,
   ) {}
 
-  /** All mediaProgress rows for a user (optionally restricted to given book ids). */
-  async getMediaProgressForUser(userId: number, bookIds?: number[]): Promise<AbsMediaProgress[]> {
-    const rows = bookIds ? await this.repository.findProgressByUserIdAndBookIds(userId, bookIds) : await this.repository.findProgressByUserId(userId);
+  /** Progress rows for books visible through the user's exposed ABS libraries. */
+  async getMediaProgressForUser(
+    user: Pick<RequestUser, 'id' | 'isSuperuser'> & Partial<Pick<RequestUser, 'contentFilters'>>,
+    bookIds?: number[],
+  ): Promise<AbsMediaProgress[]> {
+    const rows = bookIds
+      ? await this.repository.findProgressByUserIdAndBookIds(user.id, bookIds)
+      : await this.repository.findProgressForAudiobookshelfUser(user);
     if (rows.length === 0) return [];
 
     const progressBookIds = [...new Set(rows.map((row) => row.bookId))];

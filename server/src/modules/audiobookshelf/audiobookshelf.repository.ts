@@ -229,6 +229,39 @@ export class AudiobookshelfRepository {
     return this.db.select().from(schema.audiobookProgress).where(eq(schema.audiobookProgress.userId, userId));
   }
 
+  /** Progress for audio books visible through the user's exposed ABS libraries. */
+  async findProgressForAudiobookshelfUser(user: {
+    id: number;
+    isSuperuser: boolean;
+    contentFilters?: ContentFilterRules;
+  }): Promise<schema.AudiobookProgress[]> {
+    const filterClauses = !user.isSuperuser && user.contentFilters ? buildContentFilterClauses(user.contentFilters, this.db) : [];
+    const accessClause = user.isSuperuser
+      ? undefined
+      : exists(
+          this.db
+            .select({ one: sql`1` })
+            .from(schema.userLibraryAccess)
+            .where(and(eq(schema.userLibraryAccess.userId, user.id), eq(schema.userLibraryAccess.libraryId, schema.books.libraryId))),
+        );
+    return this.db
+      .select({ progress: schema.audiobookProgress })
+      .from(schema.audiobookProgress)
+      .innerJoin(schema.books, eq(schema.books.id, schema.audiobookProgress.bookId))
+      .innerJoin(schema.libraries, eq(schema.libraries.id, schema.books.libraryId))
+      .where(
+        and(
+          eq(schema.audiobookProgress.userId, user.id),
+          eq(schema.libraries.enableAudiobookshelfApi, true),
+          BOOK_VISIBLE_WHERE,
+          this.hasAudioFile(),
+          accessClause,
+          ...filterClauses,
+        ),
+      )
+      .then((rows) => rows.map((row) => row.progress));
+  }
+
   findProgressByUserIdAndBookIds(userId: number, bookIds: number[]): Promise<schema.AudiobookProgress[]> {
     if (bookIds.length === 0) return Promise.resolve([]);
     return this.db

@@ -15,6 +15,7 @@ import { ABS_SERVER_VERSION } from '../audiobookshelf.constants';
 type AbsUserSource = Pick<RequestUser, 'id' | 'username' | 'email' | 'isSuperuser' | 'active'> & {
   settings: unknown;
   permissions: readonly string[];
+  contentFilters?: RequestUser['contentFilters'];
 };
 
 @Injectable()
@@ -45,6 +46,7 @@ export class AudiobookshelfAuthService {
       active: user.active,
       settings: user.settings,
       permissions: user.permissions,
+      contentFilters: user.contentFilters,
     };
     return this.buildLoginResponse(userSource, accessToken, nextRefreshToken);
   }
@@ -67,7 +69,7 @@ export class AudiobookshelfAuthService {
     source?: string,
     legacyToken?: string,
   ): Promise<AbsLoginResponse> {
-    const mediaProgress = await this.progressService.getMediaProgressForUser(user.id);
+    const mediaProgress = await this.progressService.getMediaProgressForUser(user);
     const { libraries } = await this.librariesService.findLibraries(user);
     const isSuperuser = user.isSuperuser;
     const permissions = this.buildPermissions(user);

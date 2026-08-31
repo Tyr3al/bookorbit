@@ -37,6 +37,7 @@ describe('AudiobookshelfAuthService', () => {
     const result = await service.refresh('presented-refresh', {} as never);
 
     expect(userService.findByIdWithPermissions).toHaveBeenCalledWith(7);
+    expect(progressService.getMediaProgressForUser).toHaveBeenCalledWith(expect.objectContaining({ id: 7, contentFilters: {} }));
     expect(result.user.permissions).toEqual({
       download: true,
       update: false,

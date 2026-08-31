@@ -51,6 +51,7 @@ function user(): RequestUser {
 function makeService(overrides: { files?: BookFile[] } = {}) {
   const files = overrides.files ?? [audioFile(), audioFile({ id: 12, absolutePath: '/books/Book/track-2.mp3', sortOrder: 1, durationSeconds: 60 })];
   const repository = {
+    findProgressForAudiobookshelfUser: vi.fn().mockResolvedValue([]),
     findProgressByUserIdAndBookIds: vi
       .fn()
       .mockResolvedValue([
@@ -64,6 +65,15 @@ function makeService(overrides: { files?: BookFile[] } = {}) {
   const service = new AudiobookshelfProgressService(repository, bookService, itemsService);
   return { service, repository, bookService, itemsService };
 }
+
+describe('AudiobookshelfProgressService.getMediaProgressForUser', () => {
+  it('queries progress through the ABS visibility scope', async () => {
+    const { service, repository } = makeService();
+    await service.getMediaProgressForUser(user());
+
+    expect(repository.findProgressForAudiobookshelfUser).toHaveBeenCalledWith(user());
+  });
+});
 
 describe('AudiobookshelfProgressService.toMediaProgress', () => {
   it('computes the absolute position across files and the progress fraction', () => {
