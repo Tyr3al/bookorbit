@@ -41,6 +41,11 @@ export class MeController {
     return this.progressService.batchUpdateMediaProgress(user, items);
   }
 
+  @Get('progress')
+  async getAllProgress(@CurrentUser() user: RequestUser) {
+    return { mediaProgress: await this.progressService.getMediaProgressForUser(user) };
+  }
+
   @Get('progress/:libraryItemId/:episodeId?')
   getProgress(@CurrentUser() user: RequestUser, @Param('libraryItemId') libraryItemId: string) {
     return this.progressService.getMediaProgress(user, parseAbsId(libraryItemId));
