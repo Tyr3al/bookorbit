@@ -95,6 +95,11 @@ export class AppSettingsService {
     return parseBooleanSetting(row?.value, false);
   }
 
+  async isAudiobookshelfEnabled(): Promise<boolean> {
+    const row = await this.repo.findByKey(APP_SETTING_KEYS.AUDIOBOOKSHELF_ENABLED);
+    return parseBooleanSetting(row?.value, false);
+  }
+
   async setBookDockPaused(paused: boolean): Promise<void> {
     await this.repo.upsert(APP_SETTING_KEYS.BOOK_DOCK_PAUSED, String(paused));
   }

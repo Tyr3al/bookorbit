@@ -368,6 +368,12 @@ export const routes: RouteRecordRaw[] = [
             meta: { title: () => t('titles.opds') },
           },
           {
+            path: 'audiobookshelf',
+            name: 'settings-audiobookshelf',
+            component: () => import('@/features/settings/AudiobookshelfSettings.vue'),
+            meta: { title: () => t('titles.audiobookshelf') },
+          },
+          {
             path: 'email',
             name: 'settings-email',
             component: () => import('@/features/email/components/EmailSettings.vue'),

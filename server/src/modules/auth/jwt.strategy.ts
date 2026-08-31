@@ -12,7 +12,12 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     private readonly authService: AuthService,
   ) {
     super({
-      jwtFromRequest: ExtractJwt.fromExtractors([ExtractJwt.fromAuthHeaderAsBearerToken(), (req: any) => req?.cookies?.access_token ?? null]),
+      jwtFromRequest: ExtractJwt.fromExtractors([
+        ExtractJwt.fromAuthHeaderAsBearerToken(),
+        (req: any) => req?.cookies?.access_token ?? null,
+        // ABS clients (Prologue) pass the token as a query parameter on downloads and streams.
+        ExtractJwt.fromUrlQueryParameter('token'),
+      ]),
       secretOrKey: config.get<string>('auth.jwtSecret')!,
       algorithms: ['HS256'],
     });

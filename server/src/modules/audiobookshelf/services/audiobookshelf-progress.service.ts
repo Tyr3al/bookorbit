@@ -1,0 +1,167 @@
+import { Injectable, NotFoundException } from '@nestjs/common';
+
+import type { BookFile } from '../../../db/schema';
+import { BookService } from '../../book/book.service';
+import { AudiobookshelfRepository } from '../audiobookshelf.repository';
+import { ABS_FINISHED_PROGRESS } from '../audiobookshelf.constants';
+import type { AbsMediaProgress } from '../audiobookshelf.types';
+import type { RequestUser } from '../../../common/types/request-user';
+import { AudiobookshelfItemsService } from './audiobookshelf-items.service';
+import { toAbsUuid, toAbsCompositeUuid, fromAbsUuid } from '../../../common/utils/abs-id.utils';
+
+export interface UpdateProgressInput {
+  currentTime?: number;
+  duration?: number;
+  progress?: number;
+  isFinished?: boolean;
+  startedAt?: number;
+  lastUpdate?: number;
+}
+
+@Injectable()
+export class AudiobookshelfProgressService {
+  constructor(
+    private readonly repository: AudiobookshelfRepository,
+    private readonly bookService: BookService,
+    private readonly itemsService: AudiobookshelfItemsService,
+  ) {}
+
+  /** All mediaProgress rows for a user (optionally restricted to given book ids). */
+  async getMediaProgressForUser(userId: number, bookIds?: number[]): Promise<AbsMediaProgress[]> {
+    const rows = bookIds ? await this.repository.findProgressByUserIdAndBookIds(userId, bookIds) : await this.repository.findProgressByUserId(userId);
+    if (rows.length === 0) return [];
+
+    const progressBookIds = [...new Set(rows.map((row) => row.bookId))];
+    const files = await this.repository.findAudioFilesByBookIds(progressBookIds);
+    const filesByBookId = new Map<number, BookFile[]>();
+    for (const file of files) {
+      const list = filesByBookId.get(file.bookId);
+      if (list) list.push(file);
+      else filesByBookId.set(file.bookId, [file]);
+    }
+
+    return rows.map((row) => this.toMediaProgress(row, filesByBookId.get(row.bookId) ?? []));
+  }
+
+  /** Read a single item's progress (ABS GET /api/me/progress/:libraryItemId). */
+  async getMediaProgress(user: RequestUser, libraryItemId: number): Promise<AbsMediaProgress | null> {
+    const book = await this.requireExposedBook(user, libraryItemId);
+    const rows = await this.repository.findProgressByUserIdAndBookIds(user.id, [book.id]);
+    if (rows.length === 0) return null;
+    const files = await this.repository.findAudioFilesByBookId(book.id);
+    return this.toMediaProgress(rows[0], files);
+  }
+
+  /** ABS PATCH /api/me/progress/:libraryItemId - maps the payload onto audiobook_progress. */
+  async updateMediaProgress(user: RequestUser, libraryItemId: number, input: UpdateProgressInput): Promise<AbsMediaProgress> {
+    const book = await this.requireExposedBook(user, libraryItemId);
+    const files = await this.repository.findAudioFilesByBookId(book.id);
+    if (files.length === 0) throw new NotFoundException(`Book ${book.id} has no audio files`);
+
+    const orderedFiles = [...files].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.id - b.id);
+    const totalDuration = orderedFiles.reduce((sum, file) => sum + (file.durationSeconds ?? 0), 0);
+
+    const { currentFileId, positionSeconds, percentage } = this.resolvePosition(orderedFiles, totalDuration, input);
+    await this.bookService.saveAudioProgress(user.id, book.id, { percentage, currentFileId, positionSeconds }, user);
+
+    const rows = await this.repository.findProgressByUserIdAndBookIds(user.id, [book.id]);
+    return this.toMediaProgress(rows[0], orderedFiles);
+  }
+
+  /** ABS PATCH /api/me/progress/batch/update - applies each entry, skipping ones that fail
+   * (unknown/inaccessible item) rather than rejecting the whole batch, matching real ABS. */
+  async batchUpdateMediaProgress(user: RequestUser, items: (UpdateProgressInput & { libraryItemId?: string })[]): Promise<void> {
+    for (const item of items) {
+      if (!item.libraryItemId) continue;
+      const bookId = fromAbsUuid(item.libraryItemId);
+      if (bookId === null) continue;
+      try {
+        await this.updateMediaProgress(user, bookId, item);
+      } catch {
+        // Real ABS logs and continues on a per-item failure rather than aborting the batch.
+      }
+    }
+  }
+
+  toMediaProgress(
+    row: { userId: number; bookId: number; percentage: number; currentFileId: number; positionSeconds: number; updatedAt: Date },
+    files: BookFile[],
+  ): AbsMediaProgress {
+    const orderedFiles = [...files].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.id - b.id);
+    const duration = orderedFiles.reduce((sum, file) => sum + (file.durationSeconds ?? 0), 0) || null;
+    const currentTime = this.absolutePosition(orderedFiles, row.currentFileId, row.positionSeconds);
+    const progress = row.percentage / 100;
+    const updatedAt = row.updatedAt.getTime();
+
+    return {
+      id: toAbsCompositeUuid(row.userId, row.bookId),
+      userId: toAbsUuid(row.userId),
+      libraryItemId: toAbsUuid(row.bookId),
+      episodeId: null,
+      mediaItemId: toAbsUuid(row.bookId),
+      mediaItemType: 'book',
+      duration,
+      progress,
+      currentTime,
+      isFinished: progress >= ABS_FINISHED_PROGRESS,
+      hideFromContinueListening: false,
+      startedAt: updatedAt,
+      lastUpdate: updatedAt,
+      createdAt: updatedAt,
+      updatedAt,
+      finishedAt: null,
+      ebookLocation: null,
+      ebookProgress: null,
+    };
+  }
+
+  private async requireExposedBook(user: RequestUser, bookId: number): Promise<{ id: number }> {
+    const book = await this.itemsService.requireExposedBook(user, bookId);
+    return { id: book.id };
+  }
+
+  /** Maps an ABS position (seconds into the whole book) to a file id + file-local seconds. */
+  private resolvePosition(
+    orderedFiles: BookFile[],
+    totalDuration: number,
+    input: UpdateProgressInput,
+  ): { currentFileId: number; positionSeconds: number; percentage: number } {
+    let currentTime: number;
+    if (input.currentTime != null && Number.isFinite(input.currentTime)) {
+      currentTime = input.currentTime;
+    } else if (input.progress != null && Number.isFinite(input.progress)) {
+      currentTime = totalDuration > 0 ? input.progress * totalDuration : 0;
+    } else {
+      currentTime = 0;
+    }
+    currentTime = Math.max(0, totalDuration > 0 ? Math.min(currentTime, totalDuration) : currentTime);
+
+    let cursor = 0;
+    let file = orderedFiles[0];
+    for (const candidate of orderedFiles) {
+      const fileDuration = candidate.durationSeconds ?? 0;
+      if (currentTime < cursor + fileDuration || candidate === orderedFiles[orderedFiles.length - 1]) {
+        file = candidate;
+        break;
+      }
+      cursor += fileDuration;
+    }
+
+    const positionSeconds = Math.max(0, currentTime - cursor);
+    const percentage = totalDuration > 0 ? Math.min(100, (currentTime / totalDuration) * 100) : (input.progress ?? 0) * 100;
+    return { currentFileId: file.id, positionSeconds, percentage: roundPercentage(percentage) };
+  }
+
+  private absolutePosition(orderedFiles: BookFile[], currentFileId: number, positionSeconds: number): number {
+    let offset = 0;
+    for (const file of orderedFiles) {
+      if (file.id === currentFileId) return offset + positionSeconds;
+      offset += file.durationSeconds ?? 0;
+    }
+    return offset + positionSeconds;
+  }
+}
+
+function roundPercentage(value: number): number {
+  return Math.round(value * 100) / 100;
+}

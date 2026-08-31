@@ -91,6 +91,7 @@ describe('config', () => {
       jwtSecret: 'change-me-in-production',
       jwtExpiresIn: '15m',
       jwtRefreshExpiresIn: '7d',
+      jwtAbsExpiresIn: '30d',
       setupBootstrapToken: '',
       refreshRotationGraceMs: 30_000,
     });

@@ -21,6 +21,7 @@ export const authConfig = registerAs('auth', () => ({
   jwtSecret: process.env.JWT_SECRET ?? 'change-me-in-production',
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? '15m',
   jwtRefreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN ?? '7d',
+  jwtAbsExpiresIn: process.env.JWT_ABS_EXPIRES_IN ?? '30d',
   setupBootstrapToken: process.env.SETUP_BOOTSTRAP_TOKEN ?? '',
   refreshRotationGraceMs: parsePositiveInteger(process.env.AUTH_REFRESH_ROTATION_GRACE_MS, 30_000),
 }));

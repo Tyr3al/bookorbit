@@ -26,7 +26,7 @@ export type MetadataNoopMock = {
   extractAudioChaptersAndNarrators: ReturnType<typeof vi.fn>;
 };
 
-const ADMIN_SETUP_DTO = {
+export const ADMIN_SETUP_DTO = {
   username: 'scanner-e2e-admin',
   name: 'Scanner E2E Admin',
   email: 'scanner-e2e-admin@example.com',
@@ -115,7 +115,9 @@ export async function createE2EContext(): Promise<E2EContext> {
     .compile();
 
   const app = moduleFixture.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
-  app.setGlobalPrefix('api/v1');
+  app.setGlobalPrefix('api/v1', {
+    exclude: ['api/kobo/:deviceToken/(.*)', 'api/v3/(.*)', 'api/UserStorage/(.*)', 'login', 'api/(.*)'],
+  });
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

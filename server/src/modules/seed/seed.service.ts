@@ -27,6 +27,7 @@ const DEFAULT_SYSTEM_EMAIL_TEMPLATE_BODY =
 const DEFAULT_APP_SETTINGS: Array<typeof schema.appSettings.$inferInsert> = [
   { key: APP_SETTING_KEYS.ALLOW_REGISTRATION, value: 'false' },
   { key: APP_SETTING_KEYS.OPDS_ENABLED, value: 'true' },
+  { key: APP_SETTING_KEYS.AUDIOBOOKSHELF_ENABLED, value: 'false' },
   { key: APP_SETTING_KEYS.BOOK_DOCK_AUTO_FETCH_METADATA, value: 'true' },
   { key: APP_SETTING_KEYS.BOOK_DOCK_AUTO_FINALIZE_ENABLED, value: 'false' },
   { key: APP_SETTING_KEYS.BOOK_DOCK_AUTO_FINALIZE_THRESHOLD, value: '85' },

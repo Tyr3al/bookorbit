@@ -13,7 +13,8 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { compare, hash } from 'bcryptjs';
-import { createHash, randomBytes, timingSafeEqual } from 'crypto';
+import type { StringValue } from 'ms';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'crypto';
 import '@fastify/cookie';
 import { and, count, eq, gt, isNull, sql } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
@@ -27,6 +28,7 @@ import * as schema from '../../db/schema';
 import { AUDIT_EVENT, AuditEventsService } from '../audit/audit-events.service';
 import type { RequestUser } from '../../common/types/request-user';
 import { sanitizeLogValue } from '../../common/utils/log-sanitize.utils';
+import { toAbsUuid } from '../../common/utils/abs-id.utils';
 import { resolveUserAvatarUrl } from '../../common/utils/user-avatar-url';
 import { SystemMailService } from '../email/system-mail.service';
 import { UserService } from '../user/user.service';
@@ -223,6 +225,70 @@ export class AuthService {
   }
 
   async login(dto: LoginDto, reply: FastifyReply, ip?: string) {
+    const fullUser = await this.authenticateCredentials(dto, ip);
+    const { accessToken, rawRefreshToken } = await this.issueTokenPair(fullUser.id, fullUser.tokenVersion);
+    this.setRefreshCookie(reply, rawRefreshToken);
+    this.setAccessCookie(reply, accessToken);
+
+    this.logger.log(`[auth.login] [end] userId=${fullUser.id} username=${fullUser.username} ip=${ip ?? 'unknown'} - login completed`);
+
+    this.auditEvents.emit(AUDIT_EVENT, {
+      userId: fullUser.id,
+      actorUsername: fullUser.username,
+      action: AuditAction.AuthLogin,
+      description: `User '${fullUser.username}' logged in`,
+      ip,
+    });
+
+    return { accessToken, user: this.buildUserResponse(fullUser) };
+  }
+
+  /**
+   * Login for the Audiobookshelf-compatible API. Same credential validation, lockout, and audit
+   * behavior as `login()`, but the token returned in the body is signed with the longer ABS expiry
+   * (`auth.jwtAbsExpiresIn`) because ABS clients keep the token and only re-authenticate on 401.
+   * Claims stay identical to the web token (`{ sub, ver }`), so the same JWT strategy, guards, and
+   * tokenVersion revocation apply to both.
+   */
+  async loginForAudiobookshelf(dto: LoginDto, reply: FastifyReply, ip?: string, returnTokens?: boolean) {
+    const fullUser = await this.authenticateCredentials(dto, ip);
+    const pair = this.createAbsTokenPair(fullUser.id, fullUser.tokenVersion, fullUser.username);
+    const authenticatedAt = new Date();
+    await this.db.transaction(async (tx) => {
+      await tx.insert(schema.refreshTokens).values({ userId: fullUser.id, tokenHash: pair.refreshTokenHash, expiresAt: pair.refreshExpiresAt });
+      await tx
+        .update(schema.users)
+        .set({ lastLoginAt: authenticatedAt, lastAuthenticatedAt: authenticatedAt, updatedAt: sql`${schema.users.updatedAt}` })
+        .where(eq(schema.users.id, fullUser.id));
+    });
+    // Real Audiobookshelf never sets cookies when the client sends x-return-tokens: true (it
+    // relies on the token pair in the body instead) - match that for ABS clients like Prologue.
+    if (!returnTokens) {
+      this.setRefreshCookie(reply, pair.rawRefreshToken);
+      this.setAccessCookie(reply, pair.accessToken);
+    }
+
+    this.logger.log(
+      `[auth.login] [end] userId=${fullUser.id} username=${fullUser.username} ip=${ip ?? 'unknown'} via=audiobookshelf - login completed`,
+    );
+
+    this.auditEvents.emit(AUDIT_EVENT, {
+      userId: fullUser.id,
+      actorUsername: fullUser.username,
+      action: AuditAction.AuthLogin,
+      description: `User '${fullUser.username}' logged in via Audiobookshelf API`,
+      ip,
+    });
+
+    return {
+      accessToken: pair.accessToken,
+      rawRefreshToken: pair.rawRefreshToken,
+      legacyToken: pair.legacyToken,
+      user: this.buildUserResponse(fullUser),
+    };
+  }
+
+  private async authenticateCredentials(dto: LoginDto, ip?: string) {
     const user = await this.userService.findByUsername(dto.username);
     const now = new Date();
 
@@ -277,21 +343,7 @@ export class AuthService {
     }
 
     const fullUser = await this.userService.findByIdWithPermissions(user.id);
-    const { accessToken, rawRefreshToken } = await this.issueTokenPair(user.id, user.tokenVersion);
-    this.setRefreshCookie(reply, rawRefreshToken);
-    this.setAccessCookie(reply, accessToken);
-
-    this.logger.log(`[auth.login] [end] userId=${user.id} username=${user.username} ip=${ip ?? 'unknown'} - login completed`);
-
-    this.auditEvents.emit(AUDIT_EVENT, {
-      userId: user.id,
-      actorUsername: user.username,
-      action: AuditAction.AuthLogin,
-      description: `User '${user.username}' logged in`,
-      ip,
-    });
-
-    return { accessToken, user: this.buildUserResponse(fullUser!) };
+    return fullUser!;
   }
 
   buildUserResponse(user: RequestUser) {
@@ -324,6 +376,30 @@ export class AuthService {
     const rawToken = req.cookies?.refresh_token;
     if (!rawToken) throw new UnauthorizedException();
 
+    const { accessToken } = await this.rotateRefreshSession(rawToken, reply);
+    return { accessToken };
+  }
+
+  /**
+   * Audiobookshelf-compatible refresh: validates and rotates the presented refresh token and
+   * returns a fresh ABS token pair, mirroring ABS `POST /auth/refresh` with the
+   * `x-refresh-token` header.
+   */
+  async refreshForAudiobookshelf(rawToken: string, reply: FastifyReply) {
+    if (!rawToken) throw new UnauthorizedException();
+    return this.rotateRefreshSession(rawToken, reply, (userId, tokenVersion, username) => this.createAbsTokenPair(userId, tokenVersion, username));
+  }
+
+  private async rotateRefreshSession(
+    rawToken: string,
+    reply: FastifyReply,
+    tokenFactory: (
+      userId: number,
+      tokenVersion: number,
+      username: string,
+    ) => { accessToken: string; rawRefreshToken: string; refreshExpiresAt: Date; refreshTokenHash: string } = (userId, tokenVersion) =>
+      this.createTokenPair(userId, tokenVersion),
+  ): Promise<{ accessToken: string; rawRefreshToken: string | null; userId: number; tokenVersion: number | null }> {
     const tokenHash = sha256(rawToken);
     const row = await this.db.query.refreshTokens.findFirst({
       where: eq(schema.refreshTokens.tokenHash, tokenHash),
@@ -336,7 +412,8 @@ export class AuthService {
 
     if (row.revokedAt) {
       if (await this.isRecentRefreshRotationReuse(row)) {
-        return this.issueAccessOnlyForRefreshReuse(row.userId, reply);
+        const accessOnly = await this.issueAccessOnlyForRefreshReuse(row.userId, reply);
+        return { accessToken: accessOnly.accessToken, rawRefreshToken: null, userId: row.userId, tokenVersion: null };
       }
 
       // Reuse of a revoked token outside a fresh rotation indicates possible theft.
@@ -367,7 +444,11 @@ export class AuthService {
     // Rotate: revoke old, issue new. Guard against the SPA race where two requests
     // present the same (still-valid) refresh: the loser's UPDATE matches zero rows
     // and we treat it as a benign reuse of an already-rotated token.
-    const { accessToken, rawRefreshToken, refreshExpiresAt, refreshTokenHash } = this.createTokenPair(row.userId, userForToken.tokenVersion);
+    const { accessToken, rawRefreshToken, refreshExpiresAt, refreshTokenHash } = tokenFactory(
+      row.userId,
+      userForToken.tokenVersion,
+      userForToken.username,
+    );
 
     const rotatedAt = new Date();
     try {
@@ -396,7 +477,8 @@ export class AuthService {
         });
         if (refreshedRow && (await this.isRecentRefreshRotationReuse(refreshedRow))) {
           this.logger.log(`[auth.refresh] [end] userId=${row.userId} reason="rotation-race-lost" - access-only refresh issued`);
-          return this.issueAccessOnlyForRefreshReuse(row.userId, reply);
+          const accessOnly = await this.issueAccessOnlyForRefreshReuse(row.userId, reply);
+          return { accessToken: accessOnly.accessToken, rawRefreshToken: null, userId: row.userId, tokenVersion: null };
         }
         // Concurrent non-rotation revoke = the user (logout) or an admin (disable/security)
         // just killed this specific session. Honor that intent: fail this refresh and clear
@@ -416,7 +498,7 @@ export class AuthService {
     this.setRefreshCookie(reply, rawRefreshToken);
     this.setAccessCookie(reply, accessToken);
 
-    return { accessToken };
+    return { accessToken, rawRefreshToken, userId: row.userId, tokenVersion: userForToken.tokenVersion };
   }
 
   async logout(req: FastifyRequest, reply: FastifyReply): Promise<{ logoutUrl?: string }> {
@@ -700,6 +782,42 @@ export class AuthService {
     const expiresAt = this.getRefreshTokenExpiryDate();
 
     return { accessToken, rawRefreshToken, refreshExpiresAt: expiresAt, refreshTokenHash: tokenHash };
+  }
+
+  /**
+   * Token pair for the Audiobookshelf-compatible API. ABS clients (Prologue) decode the JWTs
+   * and read userId/username/jti/type claims, and treat the refresh token as a JWT too, so both
+   * tokens carry the ABS claim set. The refresh token is stored hashed like the web token.
+   */
+  private createAbsTokenPair(userId: number, tokenVersion: number, username: string) {
+    const accessToken = this.jwtService.sign(
+      {
+        sub: userId,
+        ver: tokenVersion,
+        userId: toAbsUuid(userId),
+        username,
+        jti: randomUUID(),
+        type: 'access',
+      },
+      { expiresIn: this.config.getOrThrow<StringValue | number>('auth.jwtAbsExpiresIn') },
+    );
+    const rawRefreshToken = this.jwtService.sign(
+      {
+        userId: toAbsUuid(userId),
+        username,
+        jti: randomUUID(),
+        type: 'refresh',
+      },
+      { expiresIn: this.config.getOrThrow<StringValue | number>('auth.jwtRefreshExpiresIn') },
+    );
+    const tokenHash = sha256(rawRefreshToken);
+    const expiresAt = this.getRefreshTokenExpiryDate();
+    // Real Audiobookshelf's legacy `user.token` carries only {userId, username, iat}, no
+    // expiry - unlike `accessToken`. Mirror that minimal, non-expiring shape for ABS clients
+    // that read this field, while still keeping `sub`/`ver` so it validates as a bearer token.
+    const legacyToken = this.jwtService.sign({ sub: userId, ver: tokenVersion, userId: toAbsUuid(userId), username }, { expiresIn: '100y' });
+
+    return { accessToken, rawRefreshToken, legacyToken, refreshExpiresAt: expiresAt, refreshTokenHash: tokenHash };
   }
 
   private getRefreshRotationGraceMs(): number {

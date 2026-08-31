@@ -36,11 +36,11 @@ describe('JwtStrategy token extraction', () => {
     expect(extractor({ headers: {}, cookies: { access_token: 'cookie-token' } })).toBe('cookie-token');
   });
 
-  it('does not extract token from query parameters', () => {
+  it('extracts token from query parameters (ABS clients pass ?token= on streams/downloads)', () => {
     const { strategy } = makeStrategy();
     const extractor = (strategy as unknown as { _jwtFromRequest: (req: unknown) => string | null })._jwtFromRequest;
 
-    expect(extractor({ headers: {}, query: { token: 'query-token' } })).toBeNull();
+    expect(extractor({ headers: {}, url: '/api/items/1/download?token=query-token', query: { token: 'query-token' } })).toBe('query-token');
   });
 });
 

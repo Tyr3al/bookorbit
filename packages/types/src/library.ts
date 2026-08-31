@@ -83,6 +83,7 @@ export interface Library {
   fileWriteAudioEnabled: boolean;
   fileWriteAudioMaxFileSizeMb: number;
   fileRenameEnabled: boolean;
+  enableAudiobookshelfApi: boolean;
   folders: LibraryFolder[];
   bookCount?: number;
   createdAt: string;

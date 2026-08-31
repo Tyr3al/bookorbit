@@ -12,7 +12,7 @@ export const METADATA_LABELS: Record<string, string> = {
   opfFile: 'OPF files',
 }
 
-export type LibraryCreatorSectionId = 'details' | 'folders' | 'scanner' | 'metadata' | 'reading' | 'schedule' | 'fileWrite' | 'access'
+export type LibraryCreatorSectionId = 'details' | 'folders' | 'scanner' | 'metadata' | 'reading' | 'schedule' | 'fileWrite' | 'integration' | 'access'
 
 const FILE_SIZE_MIN_MB = 1
 const FILE_SIZE_MAX_MB = 10_000
@@ -48,6 +48,7 @@ function blankForm() {
     fileWriteAudioEnabled: true,
     fileWriteAudioMaxFileSizeMb: 500,
     fileRenameEnabled: false,
+    enableAudiobookshelfApi: false,
   }
 }
 
@@ -129,6 +130,7 @@ export function useLibraryCreator() {
     form.fileWriteAudioEnabled = library.fileWriteAudioEnabled
     form.fileWriteAudioMaxFileSizeMb = library.fileWriteAudioMaxFileSizeMb
     form.fileRenameEnabled = library.fileRenameEnabled
+    form.enableAudiobookshelfApi = library.enableAudiobookshelfApi
     mode.value = 'edit'
     editingLibraryId.value = library.id
     prescanResult.value = null

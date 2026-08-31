@@ -357,6 +357,15 @@ export const SETTINGS_NAV: readonly SettingsNavGroup[] = [
         isVisible: anyPermission('opds_access'),
       },
       {
+        id: 'audiobookshelf',
+        routeName: 'settings-audiobookshelf',
+        labelKey: 'settings.common.nav.audiobookshelf',
+        descriptionKey: 'settings.nav.descriptions.audiobookshelf',
+        icon: Headphones,
+        keywords: 'audiobookshelf abs prologue plappa audiobook api experimental',
+        isVisible: anyPermission(Permission.ManageAppSettings),
+      },
+      {
         id: 'email',
         routeName: 'settings-email',
         labelKey: 'settings.common.nav.email',

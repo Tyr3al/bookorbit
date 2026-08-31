@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR, RouterModule } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
@@ -76,6 +76,7 @@ import { SharedReadingInsightsModule } from './modules/shared-reading-insights/s
 import { BookDuplicatesModule } from './modules/book-duplicates/book-duplicates.module';
 import { MaintenanceModule } from './modules/maintenance/maintenance.module';
 import { BookMoveModule } from './modules/book-move/book-move.module';
+import { AudiobookshelfModule } from './modules/audiobookshelf/audiobookshelf.module';
 
 @Module({
   imports: [
@@ -159,6 +160,10 @@ import { BookMoveModule } from './modules/book-move/book-move.module';
     MaintenanceModule,
     BookMoveModule,
     BrowseCountsModule,
+    AudiobookshelfModule,
+    // Mounts every AudiobookshelfModule route under /abs, the same way an OPDS feed lives at its
+    // own subpath - see ABS_BASE_PATH.
+    RouterModule.register([{ path: 'abs', module: AudiobookshelfModule }]),
   ],
   providers: [
     { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },

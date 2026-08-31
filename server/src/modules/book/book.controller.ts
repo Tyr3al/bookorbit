@@ -23,6 +23,7 @@ import type { FastifyReply } from 'fastify';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { contentDispositionHeader } from '../../common/utils/content-disposition.utils';
+import { sendFileStream } from '../../common/utils/range-stream.utils';
 import { sanitizeLogValue } from '../../common/utils/log-sanitize.utils';
 import { Auditable } from '../../common/decorators/auditable.decorator';
 import { ForbidPermission } from '../../common/decorators/forbid-permission.decorator';
@@ -397,33 +398,12 @@ export class BookController {
   ) {
     const { path, size, format, originalFilename } = await this.bookService.getFileInfo(fileId, user);
     const mimeType = resolveBookMimeType(format);
-    const filename = originalFilename;
 
-    reply.header('Accept-Ranges', 'bytes');
-    reply.header('Content-Disposition', contentDispositionHeader('inline', filename, 'download'));
-    reply.type(mimeType);
-
-    if (rangeHeader) {
-      const match = /bytes=(\d+)-(\d*)/.exec(rangeHeader);
-      if (match) {
-        const start = parseInt(match[1], 10);
-        const end = match[2] ? parseInt(match[2], 10) : size - 1;
-        if (start >= size || end < start || end >= size) {
-          reply.status(416);
-          reply.header('Content-Range', `bytes */${size}`);
-          reply.send();
-          return;
-        }
-        reply.status(206);
-        reply.header('Content-Range', `bytes ${start}-${end}/${size}`);
-        reply.header('Content-Length', end - start + 1);
-        reply.send(createReadStream(path, { start, end }));
-        return;
-      }
-    }
-
-    reply.header('Content-Length', size);
-    reply.send(createReadStream(path));
+    sendFileStream(reply, path, size, rangeHeader, {
+      mimeType,
+      filename: originalFilename,
+      disposition: 'inline',
+    });
   }
 
   @Get('files/:fileId/download')

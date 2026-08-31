@@ -55,6 +55,7 @@ const envSchema = z.object({
     ),
   JWT_EXPIRES_IN: z.string().default('15m'),
   JWT_REFRESH_EXPIRES_IN: z.string().default('7d'),
+  JWT_ABS_EXPIRES_IN: z.string().default('30d'),
   SETUP_BOOTSTRAP_TOKEN: z.string().optional(),
   APP_DATA_PATH: z.string().default('/data'),
   BOOK_DOCK_PATH: z

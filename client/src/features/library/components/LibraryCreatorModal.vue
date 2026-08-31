@@ -10,6 +10,7 @@ import {
   Clock,
   FileEdit,
   FolderOpen,
+  Headphones,
   Info,
   Loader2,
   ScanLine,
@@ -25,6 +26,7 @@ import LibraryCreatorAccess from './LibraryCreatorAccess.vue'
 import LibraryCreatorDetails from './LibraryCreatorDetails.vue'
 import LibraryCreatorFileWrite from './LibraryCreatorFileWrite.vue'
 import LibraryCreatorFolders from './LibraryCreatorFolders.vue'
+import LibraryCreatorIntegration from './LibraryCreatorIntegration.vue'
 import LibraryCreatorMetadata from './LibraryCreatorMetadata.vue'
 import LibraryCreatorReading from './LibraryCreatorReading.vue'
 import LibraryCreatorScanner from './LibraryCreatorScanner.vue'
@@ -103,6 +105,13 @@ const ALL_SECTIONS: CreatorSection[] = [
     component: LibraryCreatorFileWrite,
   },
   {
+    id: 'integration',
+    label: 'Integration',
+    description: 'Expose this library to Audiobookshelf-compatible apps.',
+    icon: Headphones,
+    component: LibraryCreatorIntegration,
+  },
+  {
     id: 'access',
     label: 'Access',
     description: 'Choose who can view, edit, or manage this library.',
@@ -174,6 +183,7 @@ const sectionProps = computed(() => ({
     fileWriteAudioEnabled: form.fileWriteAudioEnabled,
     fileWriteAudioMaxFileSizeMb: form.fileWriteAudioMaxFileSizeMb,
   },
+  integration: { enableAudiobookshelfApi: form.enableAudiobookshelfApi },
   access: { libraryId: editingLibraryId.value },
 }))
 
@@ -289,6 +299,7 @@ const sectionListeners = {
   'update:fileWriteKindleMaxFileSizeMb': (value: number) => (form.fileWriteKindleMaxFileSizeMb = value),
   'update:fileWriteAudioEnabled': (value: boolean) => (form.fileWriteAudioEnabled = value),
   'update:fileWriteAudioMaxFileSizeMb': (value: number) => (form.fileWriteAudioMaxFileSizeMb = value),
+  'update:enableAudiobookshelfApi': (value: boolean) => (form.enableAudiobookshelfApi = value),
   'update:pickerOpen': handleNestedModalChange,
   prescan: creator.runPrescan,
 }

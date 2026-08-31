@@ -1371,6 +1371,7 @@
         "metadata": "Metadata",
         "email": "Email",
         "opds": "OPDS",
+        "audiobookshelf": "Audiobookshelf",
         "kobo": "Kobo",
         "koreader": "KOReader",
         "integrations": "Integrations",
@@ -2779,6 +2780,25 @@
         "labelCopied": "{label} copied",
         "copyLabelFailed": "Failed to copy {label}"
       },
+      "audiobookshelf": {
+        "title": "Audiobookshelf",
+        "subtitle": "Connect Audiobookshelf-compatible apps like Prologue or Plappa to your audiobooks.",
+        "experimental": "Experimental",
+        "copy": "Copy",
+        "loadFailed": "Failed to load",
+        "server": "Server",
+        "apiServer": "Audiobookshelf API",
+        "apiServerHint": "Allow Audiobookshelf-compatible apps to sign in and browse your audiobooks.",
+        "endpoint": "Endpoint",
+        "endpointHint": "Enter this address as the server URL in the app.",
+        "notes": "Notes",
+        "notesBody": "Turn on individual libraries under each library's settings to expose their audiobooks through this endpoint. This integration is experimental and its behavior may change.",
+        "serverEnabled": "Audiobookshelf API enabled",
+        "serverDisabled": "Audiobookshelf API disabled",
+        "updateSettingsFailed": "Failed to update Audiobookshelf settings",
+        "urlCopied": "Endpoint URL copied to clipboard",
+        "urlCopyFailed": "Failed to copy endpoint URL"
+      },
       "tabs": {
         "general": "General",
         "ebook": "eBook",
@@ -2832,6 +2852,7 @@
         "kobo": "Sync endpoint, store proxy, and shelf mapping.",
         "koreader": "Progress sync and document matching.",
         "opds": "Catalog feeds for third-party reading apps.",
+        "audiobookshelf": "Audiobookshelf-compatible API for third-party audiobook apps.",
         "email": "SMTP delivery and send-to-device addresses.",
         "hardcover": "Sync reading status and reviews with Hardcover.",
         "users": "Accounts, roles, permissions, and invitations.",
@@ -6635,7 +6656,8 @@
         "fileWrite": "File Write",
         "reading": "Reading",
         "schedule": "Schedule",
-        "access": "Access"
+        "access": "Access",
+        "integration": "Integration"
       },
       "actions": {
         "saving": "Saving…",
@@ -6833,6 +6855,12 @@
           "grant": "Failed to grant access",
           "updateLevel": "Failed to update access level",
           "revoke": "Failed to revoke access"
+        }
+      },
+      "integration": {
+        "audiobookshelf": {
+          "title": "Audiobookshelf API",
+          "hint": "Expose this library to Audiobookshelf-compatible apps (Prologue, Plappa). Only audiobooks appear."
         }
       }
     },
@@ -8633,6 +8661,7 @@
     "dashboard": "Dashboard",
     "libraries": "Libraries",
     "opds": "OPDS",
+    "audiobookshelf": "Audiobookshelf",
     "koboSync": "Kobo Sync",
     "koreaderSync": "KOReader Sync",
     "bookDock": "Book Dock",
