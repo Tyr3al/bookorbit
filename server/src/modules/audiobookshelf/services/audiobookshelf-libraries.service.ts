@@ -17,6 +17,9 @@ export interface AbsItemsPageInput {
   desc?: string;
   search?: string;
   filter?: string;
+  include?: string;
+  minified?: string;
+  collapseseries?: string;
 }
 
 @Injectable()
@@ -105,11 +108,13 @@ export class AudiobookshelfLibrariesService {
       total,
       limit,
       page,
-      sortDesc: false,
+      sortBy: input.sort,
+      sortDesc: query.desc ?? false,
+      filterBy: input.filter,
       mediaType: 'book',
-      minified: false,
-      collapseseries: false,
-      include: '',
+      minified: true,
+      collapseseries: input.collapseseries === '1' || input.collapseseries === 'true',
+      include: normalizeInclude(input.include),
       offset: page * limit,
     };
   }
@@ -186,11 +191,31 @@ function clampPage(value: number | undefined): number {
 function normalizeSort(value: string | undefined): AbsItemSort {
   switch (value) {
     case 'author':
+    case 'media.metadata.authorName':
+      return 'author';
     case 'addedAt':
     case 'updatedAt':
       return value;
+    case 'duration':
+    case 'media.duration':
+      return 'duration';
+    case 'size':
+    case 'media.size':
+      return 'size';
+    case 'publishedYear':
+    case 'media.metadata.publishedYear':
+      return 'publishedYear';
+    case 'media.metadata.title':
     case 'title':
     default:
       return 'title';
   }
+}
+
+function normalizeInclude(value: string | undefined): string {
+  return (value ?? '')
+    .split(',')
+    .map((part) => part.trim().toLowerCase())
+    .filter(Boolean)
+    .join(',');
 }

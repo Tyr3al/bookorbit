@@ -345,7 +345,9 @@ export interface AbsPaginatedItems {
   total: number;
   limit: number;
   page: number;
+  sortBy?: string;
   sortDesc: boolean;
+  filterBy?: string;
   mediaType: 'book';
   minified: boolean;
   collapseseries: boolean;

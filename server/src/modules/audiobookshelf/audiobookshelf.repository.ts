@@ -12,7 +12,7 @@ import { ABS_AUDIO_FORMATS } from './audiobookshelf.constants';
 
 type Db = NodePgDatabase<typeof schema>;
 
-export type AbsItemSort = 'title' | 'author' | 'addedAt' | 'updatedAt';
+export type AbsItemSort = 'title' | 'author' | 'addedAt' | 'updatedAt' | 'duration' | 'size' | 'publishedYear';
 
 export interface AbsItemPageQuery {
   limit: number;
@@ -663,9 +663,23 @@ export class AudiobookshelfRepository {
         return [authorOrder, titleOrder];
       }
       case 'addedAt':
-        return descending ? [asc(schema.books.addedAt), asc(schema.books.id)] : [desc(schema.books.addedAt), desc(schema.books.id)];
+        return descending ? [desc(schema.books.addedAt), desc(schema.books.id)] : [asc(schema.books.addedAt), asc(schema.books.id)];
       case 'updatedAt':
-        return descending ? [asc(schema.books.updatedAt), asc(schema.books.id)] : [desc(schema.books.updatedAt), desc(schema.books.id)];
+        return descending ? [desc(schema.books.updatedAt), desc(schema.books.id)] : [asc(schema.books.updatedAt), asc(schema.books.id)];
+      case 'duration': {
+        const durationOrder = descending
+          ? desc(sql`coalesce(${schema.bookMetadata.durationSeconds}, 0)`)
+          : asc(sql`coalesce(${schema.bookMetadata.durationSeconds}, 0)`);
+        return [durationOrder, asc(schema.books.id)];
+      }
+      case 'size': {
+        const sizeExpression = sql`coalesce((select sum(${schema.bookFiles.sizeBytes}) from ${schema.bookFiles} where ${schema.bookFiles.bookId} = ${schema.books.id} and ${schema.bookFiles.role} = 'content'), 0)`;
+        return descending ? [desc(sizeExpression), desc(schema.books.id)] : [asc(sizeExpression), asc(schema.books.id)];
+      }
+      case 'publishedYear': {
+        const yearExpression = sql`coalesce(${schema.bookMetadata.publishedYear}, 0)`;
+        return descending ? [desc(yearExpression), desc(schema.books.id)] : [asc(yearExpression), asc(schema.books.id)];
+      }
       case 'title':
       default:
         return [titleOrder, asc(schema.books.id)];

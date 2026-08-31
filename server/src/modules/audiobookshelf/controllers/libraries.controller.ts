@@ -36,6 +36,9 @@ export class LibrariesController {
     @Query('desc') desc?: string,
     @Query('search') search?: string,
     @Query('filter') filter?: string,
+    @Query('include') include?: string,
+    @Query('minified') minified?: string,
+    @Query('collapseseries') collapseseries?: string,
   ) {
     return this.librariesService.getItemsPage(user, parseAbsId(idParam), {
       limit: parseOptionalInt(limit),
@@ -44,6 +47,9 @@ export class LibrariesController {
       desc,
       search,
       filter,
+      include,
+      minified,
+      collapseseries,
     });
   }
 
