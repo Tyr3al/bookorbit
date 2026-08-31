@@ -47,7 +47,7 @@ export class LibrariesController {
 
   @Get(':id/authors')
   authors(@CurrentUser() user: RequestUser, @Param('id') idParam: string, @Query('limit') limit?: string, @Query('page') page?: string) {
-    return this.authorsService.listLibraryAuthors(user, parseAbsId(idParam), parseOptionalInt(limit) ?? 50, parseOptionalInt(page) ?? 0);
+    return this.authorsService.listLibraryAuthors(user, parseAbsId(idParam), parseOptionalInt(limit), parseOptionalInt(page));
   }
 
   @Get(':id/series')

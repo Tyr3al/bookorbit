@@ -22,47 +22,77 @@ export class AudiobookshelfAuthorsService {
     return this.authorsService.getImagePath(user, authorId);
   }
 
-  /** GET /api/libraries/:id/authors - authors of audio books in one library, with book counts. */
-  async listLibraryAuthors(user: RequestUser, libraryId: number, limit = 50, page = 0): Promise<AbsPaginatedAuthors> {
+  /** GET /api/libraries/:id/authors - authors of audio books in one library, with book counts.
+   * Real ABS's response shape depends on whether the request carries pagination params: with
+   * `limit` (and optionally `page`) it returns the paginated envelope below; without `limit` -
+   * e.g. a plain listing request with just `sort`/`desc` - it returns a bare `{ authors: [] }`
+   * with no pagination metadata at all. Some ABS clients (confirmed with "Still") never send
+   * `limit`/`page` and fail to decode the paginated shape, since it has no `authors` key. */
+  async listLibraryAuthors(
+    user: RequestUser,
+    libraryId: number,
+    limit?: number,
+    page?: number,
+  ): Promise<{ authors: AbsAuthor[] } | AbsPaginatedAuthors> {
     await this.librariesService.requireExposedLibrary(user, libraryId);
     const contentFilters = user.isSuperuser ? undefined : user.contentFilters;
     const rows = await this.repository.findAuthorsWithCountsByLibraries([libraryId], contentFilters);
-    const offset = page * limit;
-    const pageRows = rows.slice(offset, offset + limit);
+    const authors = rows.map((row) => this.toAuthor(row, toAbsUuid(libraryId), row.numBooks));
+
+    if (limit === undefined) {
+      return { authors };
+    }
+
+    const effectivePage = page ?? 0;
+    const offset = effectivePage * limit;
     return {
-      results: pageRows.map((row) => this.toAuthor(row, toAbsUuid(libraryId), row.numBooks)),
-      total: rows.length,
+      results: authors.slice(offset, offset + limit),
+      total: authors.length,
       limit,
-      page,
+      page: effectivePage,
       sortDesc: false,
       minified: false,
     };
   }
 
-  /** GET /api/authors/:id - optionally with include=items,series. */
+  /** GET /api/authors/:id - optionally with include=items,series. Real ABS always includes
+   * libraryId here, even without include= - BookOrbit's authors aren't library-scoped, so it's
+   * derived from the author's own (exposed) books, falling back to the user's first exposed
+   * library when the author has none. */
   async getAuthor(user: RequestUser, authorId: number, include?: string): Promise<AbsAuthorExpanded | AbsAuthor> {
     const [author] = await this.repository.findAuthorsByIds([authorId]);
     if (!author) throw new NotFoundException(`Author ${authorId} not found`);
-
-    const wantsItems = include?.split(',').includes('items') ?? false;
-    const wantsSeries = include?.split(',').includes('series') ?? false;
-    if (!wantsItems && !wantsSeries) {
-      return this.toAuthor(author);
-    }
 
     const contentFilters = user.isSuperuser ? undefined : user.contentFilters;
     const libraryIds = await this.librariesService.getExposedLibraryIds(user);
     const exposedBookIds = new Set(await this.repository.findAudioBookIdsByLibraries(libraryIds, contentFilters));
     const links = await this.repository.findAuthorIdsByBookIds([...exposedBookIds]);
     const bookIds = links.filter((link) => link.authorId === authorId && exposedBookIds.has(link.bookId)).map((link) => link.bookId);
+
+    const wantsItems = include?.split(',').includes('items') ?? false;
+    const wantsSeries = include?.split(',').includes('series') ?? false;
+    if (!wantsItems && !wantsSeries) {
+      const libraryId = await this.resolveAuthorLibraryId(bookIds, libraryIds);
+      return this.toAuthor(author, libraryId);
+    }
+
     const items = await this.itemsService.getMinifiedItemsByIds(bookIds);
+    const libraryId = items[0]?.libraryId ?? (await this.resolveAuthorLibraryId(bookIds, libraryIds));
 
     const result: AbsAuthorExpanded = {
-      ...this.toAuthor(author),
+      ...this.toAuthor(author, libraryId),
       libraryItems: items,
       series: wantsSeries ? await this.groupItemsBySeries(items, bookIds) : [],
     };
     return result;
+  }
+
+  private async resolveAuthorLibraryId(bookIds: number[], exposedLibraryIds: number[]): Promise<string | undefined> {
+    if (bookIds.length > 0) {
+      const [book] = await this.repository.findBooksByIds([bookIds[0]]);
+      if (book) return toAbsUuid(book.libraryId);
+    }
+    return exposedLibraryIds[0] !== undefined ? toAbsUuid(exposedLibraryIds[0]) : undefined;
   }
 
   private toAuthor(
@@ -70,6 +100,9 @@ export class AudiobookshelfAuthorsService {
     libraryId?: string,
     numBooks?: number,
   ): AbsAuthor {
+    // Real ABS only includes lastFirst (and numBooks) on the library-scoped list shape, not on
+    // the single-author detail fetch - keyed off numBooks since both are set together there.
+    const isListContext = numBooks !== undefined;
     return {
       id: toAbsUuid(author.id),
       asin: null,
@@ -80,7 +113,7 @@ export class AudiobookshelfAuthorsService {
       updatedAt: 0,
       ...(libraryId !== undefined ? { libraryId } : {}),
       ...(numBooks !== undefined ? { numBooks } : {}),
-      lastFirst: author.sortName ?? author.name,
+      ...(isListContext ? { lastFirst: author.sortName ?? author.name } : {}),
     };
   }
 

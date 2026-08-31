@@ -34,7 +34,10 @@ export class AudiobookshelfSeriesService {
     };
   }
 
-  /** GET /api/series/:id and GET /api/libraries/:id/series/:seriesId - series with its audio items. */
+  /** GET /api/series/:id and GET /api/libraries/:id/series/:seriesId - series with its audio
+   * items. Real ABS always includes libraryId here, even on the bare (non-library-scoped) route -
+   * BookOrbit's series aren't library-scoped, so it's derived from the series' own (exposed)
+   * items when the route didn't pass one explicitly. */
   async getSeries(user: RequestUser, seriesId: number, libraryId?: number): Promise<AbsSeriesExpanded> {
     const series = await this.repository.findSeriesById(seriesId);
     if (!series) throw new NotFoundException(`Series ${seriesId} not found`);
@@ -52,8 +55,11 @@ export class AudiobookshelfSeriesService {
       .map((membership) => membership.bookId);
     const items = await this.itemsService.getMinifiedItemsByIds(bookIds);
 
+    const resolvedLibraryId =
+      libraryId !== undefined ? toAbsUuid(libraryId) : (items[0]?.libraryId ?? (libraryIds[0] !== undefined ? toAbsUuid(libraryIds[0]) : undefined));
+
     return {
-      ...this.toSeries(series, libraryId !== undefined ? toAbsUuid(libraryId) : undefined),
+      ...this.toSeries(series, resolvedLibraryId),
       items,
     };
   }
