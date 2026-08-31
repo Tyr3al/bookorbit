@@ -3,8 +3,8 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import type { BookFile } from '../../../db/schema';
 import { BookService } from '../../book/book.service';
 import { AudiobookshelfRepository } from '../audiobookshelf.repository';
-import { ABS_FINISHED_PROGRESS } from '../audiobookshelf.constants';
-import type { AbsMediaProgress } from '../audiobookshelf.types';
+import { ABS_DEFAULT_IN_PROGRESS_LIMIT, ABS_FINISHED_PROGRESS, ABS_MAX_IN_PROGRESS_LIMIT } from '../audiobookshelf.constants';
+import type { AbsLibraryItemMinified, AbsMediaProgress } from '../audiobookshelf.types';
 import type { RequestUser } from '../../../common/types/request-user';
 import { AudiobookshelfItemsService } from './audiobookshelf-items.service';
 import { toAbsUuid, toAbsCompositeUuid, fromAbsCompositeUuid, fromAbsUuid } from '../../../common/utils/abs-id.utils';
@@ -46,6 +46,25 @@ export class AudiobookshelfProgressService {
     }
 
     return rows.map((row) => this.toMediaProgress(row, filesByBookId.get(row.bookId) ?? []));
+  }
+
+  /** ABS GET /api/me/items-in-progress. Keep filtering, ordering, and limiting in SQL. */
+  async getItemsInProgress(
+    user: Pick<RequestUser, 'id' | 'isSuperuser'> & Partial<Pick<RequestUser, 'contentFilters'>>,
+    requestedLimit?: number,
+  ): Promise<{ libraryItems: (AbsLibraryItemMinified & { progressLastUpdate: number })[] }> {
+    const limit = clampInProgressLimit(requestedLimit);
+    const progressRows = await this.repository.findItemsInProgressForAudiobookshelfUser(user, limit);
+    if (progressRows.length === 0) return { libraryItems: [] };
+
+    const items = await this.itemsService.getMinifiedItemsByIds(progressRows.map((row) => row.bookId));
+    const itemsById = new Map(items.map((item) => [item.id, item]));
+    return {
+      libraryItems: progressRows.flatMap((row) => {
+        const item = itemsById.get(toAbsUuid(row.bookId));
+        return item ? [{ ...item, progressLastUpdate: row.progressLastUpdate.getTime() }] : [];
+      }),
+    };
   }
 
   /** Read a single item's progress (ABS GET /api/me/progress/:libraryItemId). */
@@ -220,6 +239,11 @@ export class AudiobookshelfProgressService {
     }
     return offset + positionSeconds;
   }
+}
+
+function clampInProgressLimit(value: number | undefined): number {
+  if (value == null || !Number.isFinite(value) || value < 1) return ABS_DEFAULT_IN_PROGRESS_LIMIT;
+  return Math.min(Math.floor(value), ABS_MAX_IN_PROGRESS_LIMIT);
 }
 
 function roundPercentage(value: number): number {

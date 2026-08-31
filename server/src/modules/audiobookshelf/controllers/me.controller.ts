@@ -46,6 +46,11 @@ export class MeController {
     return { mediaProgress: await this.progressService.getMediaProgressForUser(user) };
   }
 
+  @Get('items-in-progress')
+  getItemsInProgress(@CurrentUser() user: RequestUser, @Query('limit') limit?: string) {
+    return this.progressService.getItemsInProgress(user, parseOptionalInt(limit));
+  }
+
   @Get('progress/:libraryItemId/:episodeId?')
   getProgress(@CurrentUser() user: RequestUser, @Param('libraryItemId') libraryItemId: string) {
     return this.progressService.getMediaProgress(user, parseAbsId(libraryItemId));
@@ -64,4 +69,10 @@ export class MeController {
     await this.progressService.deleteMediaProgress(user, id);
     return 'OK';
   }
+}
+
+function parseOptionalInt(value: string | undefined): number | undefined {
+  if (value === undefined || value === '') return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }

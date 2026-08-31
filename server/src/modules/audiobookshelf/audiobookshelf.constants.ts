@@ -25,6 +25,8 @@ export function resolveAbsAudioMimeType(format: string | null): string | null {
 
 export const ABS_DEFAULT_ITEM_LIMIT = 10;
 export const ABS_MAX_ITEM_LIMIT = 100;
+export const ABS_DEFAULT_IN_PROGRESS_LIMIT = 25;
+export const ABS_MAX_IN_PROGRESS_LIMIT = 100;
 
 // Matches the default library setting markAsFinishedPercentComplete = 98.
 export const ABS_FINISHED_PROGRESS = 0.98;

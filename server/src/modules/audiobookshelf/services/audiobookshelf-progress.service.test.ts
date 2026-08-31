@@ -53,6 +53,7 @@ function makeService(overrides: { files?: BookFile[] } = {}) {
   const files = overrides.files ?? [audioFile(), audioFile({ id: 12, absolutePath: '/books/Book/track-2.mp3', sortOrder: 1, durationSeconds: 60 })];
   const repository = {
     findProgressForAudiobookshelfUser: vi.fn().mockResolvedValue([]),
+    findItemsInProgressForAudiobookshelfUser: vi.fn().mockResolvedValue([{ bookId: 7, progressLastUpdate: new Date('2024-01-02T00:00:00Z') }]),
     findProgressByUserIdAndBookIds: vi
       .fn()
       .mockResolvedValue([
@@ -61,7 +62,10 @@ function makeService(overrides: { files?: BookFile[] } = {}) {
     findAudioFilesByBookId: vi.fn().mockResolvedValue(files),
     deleteProgressByUserIdAndBookId: vi.fn().mockResolvedValue(true),
   } as unknown as AudiobookshelfRepository;
-  const itemsService = { requireExposedBook: vi.fn().mockResolvedValue({ id: 7 }) } as unknown as AudiobookshelfItemsService;
+  const itemsService = {
+    requireExposedBook: vi.fn().mockResolvedValue({ id: 7 }),
+    getMinifiedItemsByIds: vi.fn().mockResolvedValue([{ id: toAbsUuid(7) }]),
+  } as unknown as AudiobookshelfItemsService;
   const bookService = { saveAudioProgress: vi.fn().mockResolvedValue(undefined) } as unknown as BookService;
 
   const service = new AudiobookshelfProgressService(repository, bookService, itemsService);
@@ -74,6 +78,26 @@ describe('AudiobookshelfProgressService.getMediaProgressForUser', () => {
     await service.getMediaProgressForUser(user());
 
     expect(repository.findProgressForAudiobookshelfUser).toHaveBeenCalledWith(user());
+  });
+});
+
+describe('AudiobookshelfProgressService.getItemsInProgress', () => {
+  it('returns SQL-ordered progress items with their last update timestamp', async () => {
+    const { service, repository, itemsService } = makeService();
+
+    await expect(service.getItemsInProgress(user())).resolves.toEqual({
+      libraryItems: [{ id: toAbsUuid(7), progressLastUpdate: Date.parse('2024-01-02T00:00:00Z') }],
+    });
+    expect(repository.findItemsInProgressForAudiobookshelfUser).toHaveBeenCalledWith(user(), 25);
+    expect(itemsService.getMinifiedItemsByIds).toHaveBeenCalledWith([7]);
+  });
+
+  it('bounds the requested limit before querying', async () => {
+    const { service, repository } = makeService();
+
+    await service.getItemsInProgress(user(), 1000);
+
+    expect(repository.findItemsInProgressForAudiobookshelfUser).toHaveBeenCalledWith(user(), 100);
   });
 });
 

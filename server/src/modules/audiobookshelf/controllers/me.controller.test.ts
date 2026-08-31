@@ -31,6 +31,15 @@ describe('MeController', () => {
     expect(progressService.getMediaProgressForUser).toHaveBeenCalledWith(user());
   });
 
+  it('returns library items for GET /api/me/items-in-progress', async () => {
+    const result = { libraryItems: [{ id: 'book-1', progressLastUpdate: 123 }] };
+    const progressService = { getItemsInProgress: vi.fn().mockResolvedValue(result) };
+    const controller = new MeController({} as never, progressService as never);
+
+    await expect(controller.getItemsInProgress(user(), '40')).resolves.toEqual(result);
+    expect(progressService.getItemsInProgress).toHaveBeenCalledWith(user(), 40);
+  });
+
   it('returns the ABS plain success body after deleting progress', async () => {
     const progressService = { deleteMediaProgress: vi.fn().mockResolvedValue(undefined) };
     const controller = new MeController({} as never, progressService as never);
