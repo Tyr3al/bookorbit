@@ -6,6 +6,7 @@ import { AudiobookshelfLibrariesService } from '../services/audiobookshelf-libra
 import { AudiobookshelfAuthorsService } from '../services/audiobookshelf-authors.service';
 import { AudiobookshelfSeriesService } from '../services/audiobookshelf-series.service';
 import { AudiobookshelfCollectionsService } from '../services/audiobookshelf-collections.service';
+import { AudiobookshelfNarratorsService } from '../services/audiobookshelf-narrators.service';
 import { parseAbsId } from '../pipes/abs-id.pipe';
 import { AudiobookshelfEnabledGuard } from '../audiobookshelf-enabled.guard';
 
@@ -17,6 +18,7 @@ export class LibrariesController {
     private readonly authorsService: AudiobookshelfAuthorsService,
     private readonly seriesService: AudiobookshelfSeriesService,
     private readonly collectionsService: AudiobookshelfCollectionsService,
+    private readonly narratorsService: AudiobookshelfNarratorsService,
   ) {}
 
   @Get()
@@ -91,6 +93,11 @@ export class LibrariesController {
   @Get(':id/collections')
   collections(@CurrentUser() user: RequestUser, @Param('id') idParam: string, @Query('limit') limit?: string, @Query('page') page?: string) {
     return this.collectionsService.listLibraryCollections(user, parseAbsId(idParam), parseOptionalInt(limit) ?? 5, parseOptionalInt(page) ?? 0);
+  }
+
+  @Get(':id/narrators')
+  narrators(@CurrentUser() user: RequestUser, @Param('id') idParam: string) {
+    return this.narratorsService.listLibraryNarrators(user, parseAbsId(idParam));
   }
 }
 

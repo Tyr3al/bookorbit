@@ -269,6 +269,38 @@ export class AudiobookshelfRepository {
       .orderBy(asc(schema.authors.name));
   }
 
+  /**
+   * Narrators that have audio books in the given libraries, with the count of exposed books.
+   * Counts books (not files), so a multi-file audiobook counts once.
+   */
+  async findNarratorsWithCountsByLibraries(
+    libraryIds: number[],
+    contentFilters?: ContentFilterRules,
+  ): Promise<(schema.Narrator & { numBooks: number })[]> {
+    if (libraryIds.length === 0) return Promise.resolve([]);
+    const filterClauses = contentFilters ? buildContentFilterClauses(contentFilters, this.db) : [];
+    return this.db
+      .select({
+        ...getTableColumns(schema.narrators),
+        numBooks: countDistinct(schema.bookNarrators.bookId),
+      })
+      .from(schema.bookNarrators)
+      .innerJoin(schema.narrators, eq(schema.narrators.id, schema.bookNarrators.narratorId))
+      .innerJoin(schema.books, eq(schema.books.id, schema.bookNarrators.bookId))
+      .innerJoin(schema.bookFiles, eq(schema.bookFiles.bookId, schema.books.id))
+      .where(
+        and(
+          inArray(schema.books.libraryId, libraryIds),
+          BOOK_VISIBLE_WHERE,
+          eq(schema.bookFiles.role, 'content'),
+          AUDIO_FORMAT_WHERE,
+          ...filterClauses,
+        ),
+      )
+      .groupBy(schema.narrators.id)
+      .orderBy(asc(schema.narrators.name));
+  }
+
   /** Authors of one specific book. */
   findAuthorIdsByBookIds(bookIds: number[]): Promise<{ bookId: number; authorId: number }[]> {
     if (bookIds.length === 0) return Promise.resolve([]);

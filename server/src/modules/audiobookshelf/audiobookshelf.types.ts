@@ -356,6 +356,18 @@ export interface AbsPaginatedAuthors {
   minified: boolean;
 }
 
+// Narrators aren't real entities in ABS - id is the base64-encoded, URI-encoded name, present
+// only so a client can drop it straight into filter=narrators.<id>.
+export interface AbsNarrator {
+  id: string;
+  name: string;
+  numBooks: number;
+}
+
+export interface AbsLibraryNarrators {
+  narrators: AbsNarrator[];
+}
+
 export interface AbsPaginatedSeries {
   results: AbsSeries[];
   total: number;
