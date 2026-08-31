@@ -170,12 +170,12 @@ export class AudiobookshelfLibrariesService {
     await this.requireExposedLibrary(user, libraryId);
     const contentFilters = user.isSuperuser ? undefined : user.contentFilters;
 
-    const [library, authorRows, seriesRows, narratorRows, bookIds, aggregates] = await Promise.all([
+    const [library, authorRows, seriesRows, narratorRows, bookCount, aggregates] = await Promise.all([
       this.repository.findLibraryById(libraryId),
       this.repository.findAuthorsWithCountsByLibraries([libraryId], contentFilters),
       this.repository.findSeriesByLibraries([libraryId], contentFilters),
       this.repository.findNarratorsWithCountsByLibraries([libraryId], contentFilters),
-      this.repository.findAudioBookIdsByLibraries([libraryId], contentFilters),
+      this.repository.countAudioBooksByLibraries([libraryId], contentFilters),
       this.repository.findLibraryFilterAggregates([libraryId], contentFilters),
     ]);
     if (!library) throw new NotFoundException(`Library ${libraryId} not found`);
@@ -189,7 +189,7 @@ export class AudiobookshelfLibrariesService {
       languages: aggregates.languages,
       publishers: aggregates.publishers,
       publishedDecades: [...new Set(aggregates.publishedYears.map((year) => String(Math.floor(year / 10) * 10)))].sort(),
-      bookCount: bookIds.length,
+      bookCount,
       authorCount: authorRows.length,
       seriesCount: seriesRows.length,
       podcastCount: 0,

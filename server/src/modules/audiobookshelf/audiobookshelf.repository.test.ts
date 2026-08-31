@@ -38,4 +38,40 @@ describe('AudiobookshelfRepository', () => {
     expect(pageQuery.offset).toHaveBeenCalledWith(50);
     expect(countQuery.limit).not.toHaveBeenCalled();
   });
+
+  it('counts audio books across libraries in SQL without returning ids', async () => {
+    const countQuery = createQuery([{ count: 42 }]);
+    const db = { select: vi.fn().mockReturnValue(countQuery) };
+    const repository = new AudiobookshelfRepository(db as never);
+
+    await expect(repository.countAudioBooksByLibraries([10, 11])).resolves.toBe(42);
+    expect(db.select).toHaveBeenCalledWith({ count: expect.anything() });
+    expect(countQuery.limit).not.toHaveBeenCalled();
+  });
+
+  it('returns 0 for countAudioBooksByLibraries with no libraries, without querying', async () => {
+    const db = { select: vi.fn() };
+    const repository = new AudiobookshelfRepository(db as never);
+
+    await expect(repository.countAudioBooksByLibraries([])).resolves.toBe(0);
+    expect(db.select).not.toHaveBeenCalled();
+  });
+
+  it('scopes findAuthorBookIdsByLibraries to one author and the given libraries', async () => {
+    const rows = [{ id: 5 }, { id: 8 }];
+    const query = createQuery(rows);
+    const db = { select: vi.fn().mockReturnValue(query) };
+    const repository = new AudiobookshelfRepository(db as never);
+
+    await expect(repository.findAuthorBookIdsByLibraries(3, [10])).resolves.toEqual([5, 8]);
+    expect(query.orderBy).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns [] for findAuthorBookIdsByLibraries with no libraries, without querying', async () => {
+    const db = { select: vi.fn() };
+    const repository = new AudiobookshelfRepository(db as never);
+
+    await expect(repository.findAuthorBookIdsByLibraries(3, [])).resolves.toEqual([]);
+    expect(db.select).not.toHaveBeenCalled();
+  });
 });

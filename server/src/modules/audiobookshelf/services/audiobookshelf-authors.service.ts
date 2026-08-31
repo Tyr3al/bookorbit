@@ -27,7 +27,9 @@ export class AudiobookshelfAuthorsService {
    * `limit` (and optionally `page`) it returns the paginated envelope below; without `limit` -
    * e.g. a plain listing request with just `sort`/`desc` - it returns a bare `{ authors: [] }`
    * with no pagination metadata at all. Some ABS clients (confirmed with "Still") never send
-   * `limit`/`page` and fail to decode the paginated shape, since it has no `authors` key. */
+   * `limit`/`page` and fail to decode the paginated shape, since it has no `authors` key.
+   * The unpaginated branch loads every author for the library and is unbounded by design to match
+   * that contract - it must not be used from internal call sites. */
   async listLibraryAuthors(
     user: RequestUser,
     libraryId: number,
@@ -73,9 +75,7 @@ export class AudiobookshelfAuthorsService {
     if (libraryId !== undefined) await this.librariesService.requireExposedLibrary(user, libraryId);
     const contentFilters = user.isSuperuser ? undefined : user.contentFilters;
     const libraryIds = libraryId === undefined ? await this.librariesService.getExposedLibraryIds(user) : [libraryId];
-    const exposedBookIds = new Set(await this.repository.findAudioBookIdsByLibraries(libraryIds, contentFilters));
-    const links = await this.repository.findAuthorIdsByBookIds([...exposedBookIds]);
-    const bookIds = links.filter((link) => link.authorId === authorId && exposedBookIds.has(link.bookId)).map((link) => link.bookId);
+    const bookIds = await this.repository.findAuthorBookIdsByLibraries(authorId, libraryIds, contentFilters);
     if (bookIds.length === 0) throw new NotFoundException(`Author ${authorId} not found`);
 
     const wantsItems = include?.split(',').includes('items') ?? false;

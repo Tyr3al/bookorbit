@@ -195,6 +195,18 @@ export class AudiobookshelfRepository {
     return rows.map((row) => row.id);
   }
 
+  /** Count of audio books across a set of libraries, same predicate as {@link findAudioBookIdsByLibraries}
+   * but without materializing every id (used for the library filterdata bookCount). */
+  async countAudioBooksByLibraries(libraryIds: number[], contentFilters?: ContentFilterRules): Promise<number> {
+    if (libraryIds.length === 0) return 0;
+    const filterClauses = contentFilters ? buildContentFilterClauses(contentFilters, this.db) : [];
+    const rows = await this.db
+      .select({ count: count() })
+      .from(schema.books)
+      .where(and(inArray(schema.books.libraryId, libraryIds), BOOK_VISIBLE_WHERE, this.hasAudioFile(), ...filterClauses));
+    return rows[0]?.count ?? 0;
+  }
+
   findBooksByIds(bookIds: number[]): Promise<schema.Book[]> {
     if (bookIds.length === 0) return Promise.resolve([]);
     return this.db.select().from(schema.books).where(inArray(schema.books.id, bookIds));
@@ -639,13 +651,25 @@ export class AudiobookshelfRepository {
     };
   }
 
-  /** Authors of one specific book. */
-  findAuthorIdsByBookIds(bookIds: number[]): Promise<{ bookId: number; authorId: number }[]> {
-    if (bookIds.length === 0) return Promise.resolve([]);
-    return this.db
-      .select({ bookId: schema.bookAuthors.bookId, authorId: schema.bookAuthors.authorId })
+  /** Exposed audio-book ids for one author, scoped to the given libraries. */
+  async findAuthorBookIdsByLibraries(authorId: number, libraryIds: number[], contentFilters?: ContentFilterRules): Promise<number[]> {
+    if (libraryIds.length === 0) return [];
+    const filterClauses = contentFilters ? buildContentFilterClauses(contentFilters, this.db) : [];
+    const rows = await this.db
+      .select({ id: schema.bookAuthors.bookId })
       .from(schema.bookAuthors)
-      .where(inArray(schema.bookAuthors.bookId, bookIds));
+      .innerJoin(schema.books, eq(schema.books.id, schema.bookAuthors.bookId))
+      .where(
+        and(
+          eq(schema.bookAuthors.authorId, authorId),
+          inArray(schema.books.libraryId, libraryIds),
+          BOOK_VISIBLE_WHERE,
+          this.hasAudioFile(),
+          ...filterClauses,
+        ),
+      )
+      .orderBy(asc(schema.bookAuthors.bookId));
+    return rows.map((row) => row.id);
   }
 
   findAuthorsByIds(authorIds: number[]): Promise<schema.Author[]> {

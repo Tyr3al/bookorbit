@@ -24,7 +24,7 @@ function createService() {
     countAudioBooks: vi.fn().mockResolvedValue(2),
     countItemsInProgressForAudiobookshelfUser: vi.fn().mockResolvedValue(0),
     findAudioBookIds: vi.fn().mockResolvedValue([1, 2]),
-    findAudioBookIdsByLibraries: vi.fn().mockResolvedValue([1, 2]),
+    countAudioBooksByLibraries: vi.fn().mockResolvedValue(2),
     findAuthorsWithCountsByLibraries: vi.fn().mockResolvedValue([]),
     findSeriesByLibraries: vi.fn().mockResolvedValue([]),
     findNarratorsWithCountsByLibraries: vi.fn().mockResolvedValue([]),
@@ -176,5 +176,15 @@ describe('AudiobookshelfLibrariesService filter data', () => {
 
     expect(first.loadedAt).toBe(library.updatedAt.getTime());
     expect(second).toEqual(first);
+  });
+
+  it('takes bookCount from the SQL count aggregate rather than materializing book ids', async () => {
+    const { service, repository } = createService();
+    repository.countAudioBooksByLibraries.mockResolvedValue(12345);
+
+    const result = await service.getFilterData(user, 3);
+
+    expect(repository.countAudioBooksByLibraries).toHaveBeenCalledWith([3], user.contentFilters);
+    expect(result.bookCount).toBe(12345);
   });
 });

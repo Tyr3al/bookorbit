@@ -13,8 +13,7 @@ function createService() {
     findAuthorsWithCountsByLibraries: vi.fn().mockResolvedValue([]),
     findAuthorsWithCountsByLibrariesPage: vi.fn().mockResolvedValue({ rows: [], total: 0 }),
     findAuthorsByIds: vi.fn().mockResolvedValue([author]),
-    findAudioBookIdsByLibraries: vi.fn().mockResolvedValue([11]),
-    findAuthorIdsByBookIds: vi.fn().mockResolvedValue([{ bookId: 11, authorId: 3 }]),
+    findAuthorBookIdsByLibraries: vi.fn().mockResolvedValue([11]),
     findBooksByIds: vi.fn().mockResolvedValue([{ id: 11, libraryId: 10 }]),
   };
   const itemsService = { getMinifiedItemsByIds: vi.fn().mockResolvedValue([]) };
@@ -33,9 +32,20 @@ function createService() {
 describe('AudiobookshelfAuthorsService', () => {
   it('does not expose an author that has no accessible audio books', async () => {
     const { service, repository } = createService();
-    repository.findAudioBookIdsByLibraries.mockResolvedValue([]);
+    repository.findAuthorBookIdsByLibraries.mockResolvedValue([]);
 
     await expect(service.getAuthor(user, 3)).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('returns only the requested author books from the SQL-scoped query', async () => {
+    const { service, repository } = createService();
+    repository.findAuthorBookIdsByLibraries.mockResolvedValue([11, 12]);
+    repository.findBooksByIds.mockResolvedValue([{ id: 11, libraryId: 10 }]);
+
+    const result = await service.getAuthor(user, 3);
+
+    expect(repository.findAuthorBookIdsByLibraries).toHaveBeenCalledWith(3, [10], user.contentFilters);
+    expect(result).toMatchObject({ id: '00000000-0000-4000-8000-000000000003', libraryId: '00000000-0000-4000-8000-00000000000a' });
   });
 
   it('uses the SQL-bounded author page and preserves pagination metadata', async () => {
@@ -84,13 +94,13 @@ describe('AudiobookshelfAuthorsService', () => {
     const result = await service.getAuthor(user, 3, undefined, 10);
 
     expect(librariesService.requireExposedLibrary).toHaveBeenCalledWith(user, 10);
-    expect(repository.findAudioBookIdsByLibraries).toHaveBeenCalledWith([10], user.contentFilters);
+    expect(repository.findAuthorBookIdsByLibraries).toHaveBeenCalledWith(3, [10], user.contentFilters);
     expect(result).toMatchObject({ id: '00000000-0000-4000-8000-000000000003', libraryId: '00000000-0000-4000-8000-00000000000a' });
   });
 
   it('does not return an author from another library on the nested route', async () => {
     const { service, repository } = createService();
-    repository.findAudioBookIdsByLibraries.mockResolvedValue([]);
+    repository.findAuthorBookIdsByLibraries.mockResolvedValue([]);
 
     await expect(service.getAuthor(user, 3, undefined, 99)).rejects.toBeInstanceOf(NotFoundException);
   });
