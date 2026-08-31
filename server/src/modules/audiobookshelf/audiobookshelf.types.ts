@@ -369,8 +369,11 @@ export interface AbsPaginatedAuthors {
   total: number;
   limit: number;
   page: number;
+  sortBy: string;
   sortDesc: boolean;
+  filterBy?: string;
   minified: boolean;
+  include: string;
 }
 
 // Narrators aren't real entities in ABS - id is the base64-encoded, URI-encoded name, present

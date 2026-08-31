@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 
-import { AudiobookshelfRepository } from '../audiobookshelf.repository';
+import { AudiobookshelfRepository, type AbsAuthorSort } from '../audiobookshelf.repository';
 import { AudiobookshelfItemsService } from './audiobookshelf-items.service';
 import { AudiobookshelfLibrariesService } from './audiobookshelf-libraries.service';
 import type { AbsAuthor, AbsAuthorExpanded, AbsLibraryItemMinified, AbsPaginatedAuthors } from '../audiobookshelf.types';
@@ -33,25 +33,35 @@ export class AudiobookshelfAuthorsService {
     libraryId: number,
     limit?: number,
     page?: number,
+    sort: AbsAuthorSort = 'name',
+    sortDesc = false,
+    filter?: string,
+    minified = false,
+    include?: string,
   ): Promise<{ authors: AbsAuthor[] } | AbsPaginatedAuthors> {
     await this.librariesService.requireExposedLibrary(user, libraryId);
     const contentFilters = user.isSuperuser ? undefined : user.contentFilters;
-    const rows = await this.repository.findAuthorsWithCountsByLibraries([libraryId], contentFilters);
-    const authors = rows.map((row) => this.toAuthor(row, toAbsUuid(libraryId), row.numBooks));
 
     if (limit === undefined) {
+      const rows = await this.repository.findAuthorsWithCountsByLibraries([libraryId], contentFilters);
+      const authors = rows.map((row) => this.toAuthor(row, toAbsUuid(libraryId), row.numBooks));
       return { authors };
     }
 
     const effectivePage = page ?? 0;
     const offset = effectivePage * limit;
+    const pageResult = await this.repository.findAuthorsWithCountsByLibrariesPage([libraryId], contentFilters, limit, offset, sort, sortDesc);
+    const authors = pageResult.rows.map((row) => this.toAuthor(row, toAbsUuid(libraryId), row.numBooks));
     return {
-      results: authors.slice(offset, offset + limit),
-      total: authors.length,
+      results: authors,
+      total: pageResult.total,
       limit,
       page: effectivePage,
-      sortDesc: false,
-      minified: false,
+      sortBy: sort,
+      sortDesc,
+      filterBy: filter,
+      minified,
+      include: normalizeInclude(include),
     };
   }
 
@@ -139,4 +149,12 @@ export class AudiobookshelfAuthorsService {
     }
     return [...seriesMap.values()];
   }
+}
+
+function normalizeInclude(value: string | undefined): string {
+  return (value ?? '')
+    .split(',')
+    .map((part) => part.trim().toLowerCase())
+    .filter(Boolean)
+    .join(',');
 }

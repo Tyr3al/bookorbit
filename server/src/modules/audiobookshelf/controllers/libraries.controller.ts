@@ -64,8 +64,29 @@ export class LibrariesController {
   }
 
   @Get(':id/authors')
-  authors(@CurrentUser() user: RequestUser, @Param('id') idParam: string, @Query('limit') limit?: string, @Query('page') page?: string) {
-    return this.authorsService.listLibraryAuthors(user, parseAbsId(idParam), parseOptionalInt(limit), parseOptionalInt(page));
+  authors(
+    @CurrentUser() user: RequestUser,
+    @Param('id') idParam: string,
+    @Query('limit') limit?: string,
+    @Query('page') page?: string,
+    @Query('sort') sort?: string,
+    @Query('desc') desc?: string,
+    @Query('filter') filter?: string,
+    @Query('minified') minified?: string,
+    @Query('include') include?: string,
+  ) {
+    const authorSort = sort === 'numBooks' || sort === 'lastFirst' ? sort : 'name';
+    return this.authorsService.listLibraryAuthors(
+      user,
+      parseAbsId(idParam),
+      parseOptionalInt(limit),
+      parseOptionalInt(page),
+      authorSort,
+      desc === '1' || desc === 'true',
+      filter,
+      minified === '1' || minified === 'true',
+      include,
+    );
   }
 
   @Get(':id/authors/:authorId')

@@ -10,6 +10,8 @@ const author = { id: 3, name: 'Author', description: null, sortName: null, hasPh
 
 function createService() {
   const repository = {
+    findAuthorsWithCountsByLibraries: vi.fn().mockResolvedValue([]),
+    findAuthorsWithCountsByLibrariesPage: vi.fn().mockResolvedValue({ rows: [], total: 0 }),
     findAuthorsByIds: vi.fn().mockResolvedValue([author]),
     findAudioBookIdsByLibraries: vi.fn().mockResolvedValue([11]),
     findAuthorIdsByBookIds: vi.fn().mockResolvedValue([{ bookId: 11, authorId: 3 }]),
@@ -34,6 +36,46 @@ describe('AudiobookshelfAuthorsService', () => {
     repository.findAudioBookIdsByLibraries.mockResolvedValue([]);
 
     await expect(service.getAuthor(user, 3)).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('uses the SQL-bounded author page and preserves pagination metadata', async () => {
+    const { service, repository } = createService();
+    repository.findAuthorsWithCountsByLibrariesPage.mockResolvedValue({ rows: [author], total: 9 });
+
+    await expect(service.listLibraryAuthors(user, 10, 2, 3, 'numBooks', true, 'issues', true, 'rssfeed')).resolves.toMatchObject({
+      results: [{ id: '00000000-0000-4000-8000-000000000003' }],
+      total: 9,
+      limit: 2,
+      page: 3,
+      sortBy: 'numBooks',
+      sortDesc: true,
+      filterBy: 'issues',
+      minified: true,
+      include: 'rssfeed',
+    });
+    expect(repository.findAuthorsWithCountsByLibrariesPage).toHaveBeenCalledWith([10], user.contentFilters, 2, 6, 'numBooks', true);
+    expect(repository.findAuthorsWithCountsByLibraries).not.toHaveBeenCalled();
+  });
+
+  it('keeps the bare response for an unpaginated author list', async () => {
+    const { service, repository } = createService();
+    repository.findAuthorsWithCountsByLibraries.mockResolvedValue([author]);
+
+    await expect(service.listLibraryAuthors(user, 10)).resolves.toEqual({
+      authors: [
+        {
+          id: '00000000-0000-4000-8000-000000000003',
+          asin: null,
+          name: 'Author',
+          description: null,
+          imagePath: null,
+          addedAt: 0,
+          updatedAt: 0,
+          libraryId: '00000000-0000-4000-8000-00000000000a',
+        },
+      ],
+    });
+    expect(repository.findAuthorsWithCountsByLibraries).toHaveBeenCalledWith([10], user.contentFilters);
   });
 
   it('requires the requested library and scopes nested author details to it', async () => {

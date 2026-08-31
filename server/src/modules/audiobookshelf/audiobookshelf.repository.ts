@@ -23,6 +23,8 @@ export interface AbsItemPageQuery {
   filter?: string;
 }
 
+export type AbsAuthorSort = 'name' | 'lastFirst' | 'numBooks';
+
 const AUDIO_FORMAT_WHERE = inArray(schema.bookFiles.format, ABS_AUDIO_FORMATS);
 const BOOK_VISIBLE_WHERE = sql`${schema.books.status} <> 'processing'`;
 
@@ -507,6 +509,56 @@ export class AudiobookshelfRepository {
       )
       .groupBy(schema.authors.id)
       .orderBy(asc(schema.authors.name));
+  }
+
+  async findAuthorsWithCountsByLibrariesPage(
+    libraryIds: number[],
+    contentFilters: ContentFilterRules | undefined,
+    limit: number,
+    offset: number,
+    sort: AbsAuthorSort = 'name',
+    sortDesc = false,
+  ): Promise<{ rows: (schema.Author & { numBooks: number })[]; total: number }> {
+    if (libraryIds.length === 0) return { rows: [], total: 0 };
+    const filterClauses = contentFilters ? buildContentFilterClauses(contentFilters, this.db) : [];
+    const whereClause = and(
+      inArray(schema.books.libraryId, libraryIds),
+      BOOK_VISIBLE_WHERE,
+      eq(schema.bookFiles.role, 'content'),
+      AUDIO_FORMAT_WHERE,
+      ...filterClauses,
+    );
+    const orderColumn =
+      sort === 'numBooks'
+        ? countDistinct(schema.bookAuthors.bookId)
+        : sort === 'lastFirst'
+          ? sql`coalesce(${schema.authors.sortName}, ${schema.authors.name})`
+          : schema.authors.name;
+    const orderExpression = sortDesc ? desc(orderColumn) : asc(orderColumn);
+    const [rows, countRows] = await Promise.all([
+      this.db
+        .select({
+          ...getTableColumns(schema.authors),
+          numBooks: countDistinct(schema.bookAuthors.bookId),
+        })
+        .from(schema.bookAuthors)
+        .innerJoin(schema.authors, eq(schema.authors.id, schema.bookAuthors.authorId))
+        .innerJoin(schema.books, eq(schema.books.id, schema.bookAuthors.bookId))
+        .innerJoin(schema.bookFiles, eq(schema.bookFiles.bookId, schema.books.id))
+        .where(whereClause)
+        .groupBy(schema.authors.id)
+        .orderBy(orderExpression, asc(schema.authors.id))
+        .limit(limit)
+        .offset(offset),
+      this.db
+        .select({ total: countDistinct(schema.bookAuthors.authorId) })
+        .from(schema.bookAuthors)
+        .innerJoin(schema.authors, eq(schema.authors.id, schema.bookAuthors.authorId))
+        .innerJoin(schema.books, eq(schema.books.id, schema.bookAuthors.bookId))
+        .innerJoin(schema.bookFiles, eq(schema.bookFiles.bookId, schema.books.id))
+        .where(whereClause),
+    ]);
+    return { rows, total: countRows[0]?.total ?? 0 };
   }
 
   /**
