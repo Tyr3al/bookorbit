@@ -1,4 +1,4 @@
-import { Controller, Get, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Req, UseGuards } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
 
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
@@ -13,6 +13,15 @@ export class AuthorizeController {
 
   @Get()
   authorize(@CurrentUser() user: RequestUser, @Req() req: FastifyRequest) {
+    return this.authorizeRequest(user, req);
+  }
+
+  @Post()
+  authorizePost(@CurrentUser() user: RequestUser, @Req() req: FastifyRequest) {
+    return this.authorizeRequest(user, req);
+  }
+
+  private authorizeRequest(user: RequestUser, req: FastifyRequest) {
     return this.authService.authorize(user, extractBearerToken(req));
   }
 }
