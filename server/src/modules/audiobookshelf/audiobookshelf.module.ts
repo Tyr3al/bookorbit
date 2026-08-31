@@ -17,6 +17,7 @@ import { ItemsController } from './controllers/items.controller';
 import { AuthorsController } from './controllers/authors.controller';
 import { SeriesController } from './controllers/series.controller';
 import { CollectionsController } from './controllers/collections.controller';
+import { SessionController } from './controllers/session.controller';
 import { LibraryItemMapperService } from './services/library-item-mapper.service';
 import { AudiobookshelfAuthService } from './services/audiobookshelf-auth.service';
 import { AudiobookshelfLibrariesService } from './services/audiobookshelf-libraries.service';
@@ -44,6 +45,7 @@ import { AbsRefreshRouteRegistrar } from './services/abs-refresh-route.registrar
     AuthorsController,
     SeriesController,
     CollectionsController,
+    SessionController,
   ],
   providers: [
     AudiobookshelfRepository,

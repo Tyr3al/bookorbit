@@ -83,6 +83,35 @@ export class AudiobookshelfProgressService {
     }
   }
 
+  /** ABS POST /api/session/local-all - Prologue uploads locally-recorded listening sessions
+   * here after offline playback. Sessions carry many fields BookOrbit has no use for (device
+   * info, chapters, media metadata, ...), so the body is read as untyped JSON rather than a
+   * whitelisted DTO - only the fields that map onto audiobook_progress are picked out. Real ABS
+   * always answers with an empty results array regardless of input (confirmed against a real
+   * server), so the response shape doesn't need to echo anything back. */
+  async syncLocalSessions(user: RequestUser, sessions: unknown[]): Promise<{ results: unknown[] }> {
+    for (const raw of sessions) {
+      if (typeof raw !== 'object' || raw === null) continue;
+      const session = raw as Record<string, unknown>;
+      if (typeof session.libraryItemId !== 'string') continue;
+      const bookId = fromAbsUuid(session.libraryItemId);
+      if (bookId === null) continue;
+
+      const input: UpdateProgressInput = {
+        currentTime: typeof session.currentTime === 'number' ? session.currentTime : undefined,
+        duration: typeof session.duration === 'number' ? session.duration : undefined,
+        startedAt: typeof session.startedAt === 'number' ? session.startedAt : undefined,
+        lastUpdate: typeof session.updatedAt === 'number' ? session.updatedAt : undefined,
+      };
+      try {
+        await this.updateMediaProgress(user, bookId, input);
+      } catch {
+        // Tolerate a single bad/inaccessible session rather than failing the whole upload.
+      }
+    }
+    return { results: [] };
+  }
+
   toMediaProgress(
     row: { userId: number; bookId: number; percentage: number; currentFileId: number; positionSeconds: number; updatedAt: Date },
     files: BookFile[],
