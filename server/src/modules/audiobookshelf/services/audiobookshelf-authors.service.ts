@@ -55,44 +55,43 @@ export class AudiobookshelfAuthorsService {
     };
   }
 
-  /** GET /api/authors/:id - optionally with include=items,series. Real ABS always includes
-   * libraryId here, even without include= - BookOrbit's authors aren't library-scoped, so it's
-   * derived from the author's own (exposed) books, falling back to the user's first exposed
-   * library when the author has none. */
-  async getAuthor(user: RequestUser, authorId: number, include?: string): Promise<AbsAuthorExpanded | AbsAuthor> {
+  /** GET /api/authors/:id and /api/libraries/:libraryId/authors/:id. */
+  async getAuthor(user: RequestUser, authorId: number, include?: string, libraryId?: number): Promise<AbsAuthorExpanded | AbsAuthor> {
     const [author] = await this.repository.findAuthorsByIds([authorId]);
     if (!author) throw new NotFoundException(`Author ${authorId} not found`);
 
+    if (libraryId !== undefined) await this.librariesService.requireExposedLibrary(user, libraryId);
     const contentFilters = user.isSuperuser ? undefined : user.contentFilters;
-    const libraryIds = await this.librariesService.getExposedLibraryIds(user);
+    const libraryIds = libraryId === undefined ? await this.librariesService.getExposedLibraryIds(user) : [libraryId];
     const exposedBookIds = new Set(await this.repository.findAudioBookIdsByLibraries(libraryIds, contentFilters));
     const links = await this.repository.findAuthorIdsByBookIds([...exposedBookIds]);
     const bookIds = links.filter((link) => link.authorId === authorId && exposedBookIds.has(link.bookId)).map((link) => link.bookId);
+    if (bookIds.length === 0) throw new NotFoundException(`Author ${authorId} not found`);
 
     const wantsItems = include?.split(',').includes('items') ?? false;
     const wantsSeries = include?.split(',').includes('series') ?? false;
+    const responseLibraryId = libraryId !== undefined ? toAbsUuid(libraryId) : await this.resolveAuthorLibraryId(bookIds);
     if (!wantsItems && !wantsSeries) {
-      const libraryId = await this.resolveAuthorLibraryId(bookIds, libraryIds);
-      return this.toAuthor(author, libraryId);
+      return this.toAuthor(author, responseLibraryId);
     }
 
     const items = await this.itemsService.getMinifiedItemsByIds(bookIds);
-    const libraryId = items[0]?.libraryId ?? (await this.resolveAuthorLibraryId(bookIds, libraryIds));
+    const expandedLibraryId = items[0]?.libraryId ?? responseLibraryId;
 
     const result: AbsAuthorExpanded = {
-      ...this.toAuthor(author, libraryId),
+      ...this.toAuthor(author, expandedLibraryId),
       libraryItems: items,
       series: wantsSeries ? await this.groupItemsBySeries(items, bookIds) : [],
     };
     return result;
   }
 
-  private async resolveAuthorLibraryId(bookIds: number[], exposedLibraryIds: number[]): Promise<string | undefined> {
+  private async resolveAuthorLibraryId(bookIds: number[]): Promise<string | undefined> {
     if (bookIds.length > 0) {
       const [book] = await this.repository.findBooksByIds([bookIds[0]]);
       if (book) return toAbsUuid(book.libraryId);
     }
-    return exposedLibraryIds[0] !== undefined ? toAbsUuid(exposedLibraryIds[0]) : undefined;
+    return undefined;
   }
 
   private toAuthor(
