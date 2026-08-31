@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { RequestUser } from '../../../common/types/request-user';
@@ -211,6 +211,63 @@ describe('AudiobookshelfPlaybackService', () => {
     const service = new AudiobookshelfPlaybackService({} as never, progressService as never);
 
     await expect(service.sync(user(), sessionId, {})).rejects.toBeInstanceOf(NotFoundException);
+    expect(progressService.updateMediaProgress).not.toHaveBeenCalled();
+  });
+
+  it('closes an owned session without resetting progress when the body is empty', async () => {
+    const itemsService = { requireExposedBook: vi.fn().mockResolvedValue({ id: 42 }) };
+    const progressService = { updateMediaProgress: vi.fn() };
+    const service = new AudiobookshelfPlaybackService(itemsService as never, progressService as never);
+
+    await expect(service.close(user(), toAbsCompositeUuid(7, 42), {})).resolves.toBeUndefined();
+
+    expect(itemsService.requireExposedBook).toHaveBeenCalledWith(user(), 42);
+    expect(progressService.updateMediaProgress).not.toHaveBeenCalled();
+  });
+
+  it('syncs a final position when closing an owned session', async () => {
+    const itemsService = { requireExposedBook: vi.fn() };
+    const progressService = { updateMediaProgress: vi.fn().mockResolvedValue(undefined) };
+    const service = new AudiobookshelfPlaybackService(itemsService as never, progressService as never);
+    const currentUser = user();
+
+    await service.close(currentUser, toAbsCompositeUuid(7, 42), { currentTime: 123.5, duration: 3600 });
+
+    expect(progressService.updateMediaProgress).toHaveBeenCalledWith(currentUser, 42, {
+      currentTime: 123.5,
+      duration: 3600,
+      progress: undefined,
+      startedAt: undefined,
+      lastUpdate: undefined,
+      isFinished: undefined,
+    });
+    expect(itemsService.requireExposedBook).not.toHaveBeenCalled();
+  });
+
+  it.each(['not-a-session', toAbsCompositeUuid(8, 42)])('rejects invalid or foreign close session %s', async (sessionId) => {
+    const itemsService = { requireExposedBook: vi.fn() };
+    const progressService = { updateMediaProgress: vi.fn() };
+    const service = new AudiobookshelfPlaybackService(itemsService as never, progressService as never);
+
+    await expect(service.close(user(), sessionId, {})).rejects.toBeInstanceOf(NotFoundException);
+    expect(itemsService.requireExposedBook).not.toHaveBeenCalled();
+    expect(progressService.updateMediaProgress).not.toHaveBeenCalled();
+  });
+
+  it('does not sync a close body that has no usable position', async () => {
+    const itemsService = { requireExposedBook: vi.fn().mockResolvedValue({ id: 42 }) };
+    const progressService = { updateMediaProgress: vi.fn() };
+    const service = new AudiobookshelfPlaybackService(itemsService as never, progressService as never);
+
+    await expect(service.close(user(), toAbsCompositeUuid(7, 42), { timeListened: 10 })).resolves.toBeUndefined();
+    expect(progressService.updateMediaProgress).not.toHaveBeenCalled();
+  });
+
+  it('rejects an empty sync body instead of resetting progress', async () => {
+    const progressService = { updateMediaProgress: vi.fn() };
+    const service = new AudiobookshelfPlaybackService({} as never, progressService as never);
+
+    await expect(service.sync(user(), toAbsCompositeUuid(7, 42), {})).rejects.toBeInstanceOf(BadRequestException);
     expect(progressService.updateMediaProgress).not.toHaveBeenCalled();
   });
 });

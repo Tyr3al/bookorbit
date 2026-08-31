@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 
 import { sanitizeLogValue } from '../../../common/utils/log-sanitize.utils';
 import { fromAbsCompositeUuid, toAbsCompositeUuid, toAbsUuid } from '../../../common/utils/abs-id.utils';
@@ -45,9 +45,26 @@ export class AudiobookshelfPlaybackService {
   }
 
   async sync(user: RequestUser, sessionId: string, request: unknown): Promise<void> {
+    const bookId = this.requireOwnedSession(user, sessionId);
+    const input = toProgressInput(request);
+    if (!hasProgressPosition(input)) throw new BadRequestException('Playback position is required');
+    await this.progressService.updateMediaProgress(user, bookId, input);
+  }
+
+  async close(user: RequestUser, sessionId: string, request: unknown): Promise<void> {
+    const bookId = this.requireOwnedSession(user, sessionId);
+    const input = toProgressInput(request);
+    if (hasProgressPosition(input)) {
+      await this.progressService.updateMediaProgress(user, bookId, input);
+      return;
+    }
+    await this.itemsService.requireExposedBook(user, bookId);
+  }
+
+  private requireOwnedSession(user: RequestUser, sessionId: string): number {
     const session = fromAbsCompositeUuid(sessionId);
     if (!session || session.a !== user.id) throw new NotFoundException('Session not found');
-    await this.progressService.updateMediaProgress(user, session.b, toProgressInput(request));
+    return session.b;
   }
 
   private buildSession(
@@ -172,6 +189,10 @@ function toProgressInput(value: unknown): UpdateProgressInput {
 
 function numericField(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function hasProgressPosition(input: UpdateProgressInput): boolean {
+  return input.currentTime !== undefined || input.progress !== undefined;
 }
 
 function clampPlaybackTime(currentTime: number, duration: number | null): number {

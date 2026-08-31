@@ -28,4 +28,12 @@ export class SessionController {
     await this.playbackService.sync(user, id, body);
     return 'OK';
   }
+
+  @Post(':id/close')
+  @HttpCode(HttpStatus.OK)
+  @Header('Content-Type', 'text/plain')
+  async closeSession(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() body: unknown): Promise<string> {
+    await this.playbackService.close(user, id, body);
+    return 'OK';
+  }
 }

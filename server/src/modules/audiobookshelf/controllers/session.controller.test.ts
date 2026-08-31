@@ -11,7 +11,10 @@ function user(id = 7): RequestUser {
 
 function makeController() {
   const progressService = {} as AudiobookshelfProgressService;
-  const playbackService = { sync: vi.fn().mockResolvedValue(undefined) } as unknown as AudiobookshelfPlaybackService;
+  const playbackService = {
+    sync: vi.fn().mockResolvedValue(undefined),
+    close: vi.fn().mockResolvedValue(undefined),
+  } as unknown as AudiobookshelfPlaybackService;
   return { controller: new SessionController(progressService, playbackService), playbackService };
 }
 
@@ -32,5 +35,17 @@ describe('SessionController.syncSession', () => {
     ).resolves.toBe('OK');
 
     expect(playbackService.sync).toHaveBeenCalledWith(currentUser, toAbsCompositeUuid(7, 42), expect.objectContaining({ currentTime: 123.5 }));
+  });
+});
+
+describe('SessionController.closeSession', () => {
+  it('closes a playback session and returns plain OK', async () => {
+    const { controller, playbackService } = makeController();
+    const currentUser = user();
+    const sessionId = toAbsCompositeUuid(7, 42);
+
+    await expect(controller.closeSession(currentUser, sessionId, { currentTime: 123.5 })).resolves.toBe('OK');
+
+    expect(playbackService.close).toHaveBeenCalledWith(currentUser, sessionId, { currentTime: 123.5 });
   });
 });
