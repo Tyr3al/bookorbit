@@ -1,8 +1,9 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 
-import { AudiobookshelfRepository } from '../audiobookshelf.repository';
+import { AudiobookshelfRepository, type AbsSeriesSort } from '../audiobookshelf.repository';
 import { AudiobookshelfItemsService } from './audiobookshelf-items.service';
 import { AudiobookshelfLibrariesService } from './audiobookshelf-libraries.service';
+import { ABS_MAX_ITEM_LIMIT } from '../audiobookshelf.constants';
 import type { AbsLibraryItemMinified, AbsPaginatedSeries, AbsSeries, AbsSeriesListItem } from '../audiobookshelf.types';
 import type { RequestUser } from '../../../common/types/request-user';
 import { toAbsSeriesUuid, toAbsUuid, fromAbsUuid } from '../../../common/utils/abs-id.utils';
@@ -18,18 +19,28 @@ export class AudiobookshelfSeriesService {
   /** GET /api/libraries/:id/series - series that have audio books in one library. Real ABS
    * embeds each series' minified books directly in this list (not on the single-series detail
    * fetch below), so every row here carries its own `books`. */
-  async listLibrarySeries(user: RequestUser, libraryId: number, limit = 5, page = 0, sortBy = 'name', desc = false): Promise<AbsPaginatedSeries> {
+  async listLibrarySeries(
+    user: RequestUser,
+    libraryId: number,
+    limit = 5,
+    page = 0,
+    sortBy: AbsSeriesSort = 'name',
+    desc = false,
+  ): Promise<AbsPaginatedSeries> {
     await this.librariesService.requireExposedLibrary(user, libraryId);
     const contentFilters = user.isSuperuser ? undefined : user.contentFilters;
-    const rows = await this.repository.findSeriesByLibraries([libraryId], contentFilters);
-    const offset = page * limit;
-    const pageRows = rows.slice(offset, offset + limit);
+    const effectiveLimit = clampLimit(limit);
+    const effectivePage = clampPage(page);
+    const offset = effectivePage * effectiveLimit;
+    const pageResult = await this.repository.findSeriesByLibrariesPage([libraryId], contentFilters, effectiveLimit, offset, sortBy, desc);
 
-    const exposedBookIds = new Set(await this.repository.findAudioBookIdsByLibraries([libraryId], contentFilters));
-    const memberships = await this.repository.findSeriesMembershipBookIds(pageRows.map((row) => row.id));
+    const memberships = await this.repository.findSeriesMembershipBookIdsByLibraries(
+      pageResult.rows.map((row) => row.id),
+      [libraryId],
+      contentFilters,
+    );
     const bookIdsBySeriesId = new Map<number, number[]>();
     for (const membership of memberships) {
-      if (!exposedBookIds.has(membership.bookId)) continue;
       const list = bookIdsBySeriesId.get(membership.seriesId);
       if (list) list.push(membership.bookId);
       else bookIdsBySeriesId.set(membership.seriesId, [membership.bookId]);
@@ -37,7 +48,7 @@ export class AudiobookshelfSeriesService {
     const allBookIds = [...bookIdsBySeriesId.values()].flat();
     const itemsByBookId = new Map((await this.itemsService.getMinifiedItemsByIds(allBookIds)).map((item) => [fromAbsUuid(item.id), item] as const));
 
-    const results: AbsSeriesListItem[] = pageRows.map((row) => ({
+    const results: AbsSeriesListItem[] = pageResult.rows.map((row) => ({
       ...this.toSeries(row, toAbsUuid(libraryId)),
       books: (bookIdsBySeriesId.get(row.id) ?? [])
         .map((bookId) => itemsByBookId.get(bookId))
@@ -46,9 +57,9 @@ export class AudiobookshelfSeriesService {
 
     return {
       results,
-      total: rows.length,
-      limit,
-      page,
+      total: pageResult.total,
+      limit: effectiveLimit,
+      page: effectivePage,
       sortBy,
       sortDesc: desc,
       minified: false,
@@ -92,4 +103,14 @@ export class AudiobookshelfSeriesService {
       ...(libraryId !== undefined ? { libraryId } : {}),
     };
   }
+}
+
+function clampLimit(value: number): number {
+  if (!Number.isFinite(value) || value < 1) return 5;
+  return Math.min(Math.floor(value), ABS_MAX_ITEM_LIMIT);
+}
+
+function clampPage(value: number): number {
+  if (!Number.isFinite(value) || value < 0) return 0;
+  return Math.floor(value);
 }

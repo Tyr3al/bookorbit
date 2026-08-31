@@ -9,6 +9,7 @@ import { AudiobookshelfCollectionsService } from '../services/audiobookshelf-col
 import { AudiobookshelfNarratorsService } from '../services/audiobookshelf-narrators.service';
 import { parseAbsId, parseAbsSeriesId } from '../pipes/abs-id.pipe';
 import { AudiobookshelfEnabledGuard } from '../audiobookshelf-enabled.guard';
+import type { AbsSeriesSort } from '../audiobookshelf.repository';
 
 @Controller('api/libraries')
 @UseGuards(AudiobookshelfEnabledGuard)
@@ -113,7 +114,7 @@ export class LibrariesController {
       parseAbsId(idParam),
       parseOptionalInt(limit) ?? 5,
       parseOptionalInt(page) ?? 0,
-      sort ?? 'name',
+      parseSeriesSort(sort),
       desc === '1' || desc === 'true',
     );
   }
@@ -157,4 +158,16 @@ function parseOptionalInt(value: string | undefined): number | undefined {
   if (value === undefined || value === '') return undefined;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function parseSeriesSort(value: string | undefined): AbsSeriesSort {
+  switch (value) {
+    case 'addedAt':
+    case 'updatedAt':
+    case 'numBooks':
+    case 'lastBookUpdated':
+      return value;
+    default:
+      return 'name';
+  }
 }

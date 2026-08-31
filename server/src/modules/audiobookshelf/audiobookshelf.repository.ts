@@ -25,6 +25,8 @@ export interface AbsItemPageQuery {
 
 export type AbsAuthorSort = 'name' | 'lastFirst' | 'numBooks';
 
+export type AbsSeriesSort = 'name' | 'addedAt' | 'updatedAt' | 'numBooks' | 'lastBookUpdated';
+
 const AUDIO_FORMAT_WHERE = inArray(schema.bookFiles.format, ABS_AUDIO_FORMATS);
 const BOOK_VISIBLE_WHERE = sql`${schema.books.status} <> 'processing'`;
 
@@ -686,6 +688,65 @@ export class AudiobookshelfRepository {
     return rows;
   }
 
+  async findSeriesByLibrariesPage(
+    libraryIds: number[],
+    contentFilters: ContentFilterRules | undefined,
+    limit: number,
+    offset: number,
+    sort: AbsSeriesSort = 'name',
+    sortDesc = false,
+  ) {
+    if (libraryIds.length === 0) return { rows: [], total: 0 };
+
+    const filterClauses = contentFilters ? buildContentFilterClauses(contentFilters, this.db) : [];
+    const whereClause = and(
+      inArray(schema.books.libraryId, libraryIds),
+      BOOK_VISIBLE_WHERE,
+      eq(schema.bookFiles.role, 'content'),
+      AUDIO_FORMAT_WHERE,
+      ...filterClauses,
+    );
+    const numBooks = countDistinct(schema.bookSeriesMemberships.bookId);
+    const lastBookUpdated = sql<Date | null>`max(${schema.books.updatedAt})`;
+    const orderColumn =
+      sort === 'addedAt'
+        ? schema.bookSeries.createdAt
+        : sort === 'updatedAt'
+          ? schema.bookSeries.updatedAt
+          : sort === 'numBooks'
+            ? numBooks
+            : sort === 'lastBookUpdated'
+              ? lastBookUpdated
+              : schema.bookSeries.name;
+    const orderExpression = sortDesc ? desc(orderColumn) : asc(orderColumn);
+    const [rows, countRows] = await Promise.all([
+      this.db
+        .select({
+          ...getTableColumns(schema.bookSeries),
+          numBooks,
+          lastBookUpdated,
+        })
+        .from(schema.bookSeries)
+        .innerJoin(schema.bookSeriesMemberships, eq(schema.bookSeriesMemberships.seriesId, schema.bookSeries.id))
+        .innerJoin(schema.books, eq(schema.books.id, schema.bookSeriesMemberships.bookId))
+        .innerJoin(schema.bookFiles, eq(schema.bookFiles.bookId, schema.books.id))
+        .where(whereClause)
+        .groupBy(schema.bookSeries.id)
+        .orderBy(orderExpression, asc(schema.bookSeries.id))
+        .limit(limit)
+        .offset(offset),
+      this.db
+        .select({ total: countDistinct(schema.bookSeries.id) })
+        .from(schema.bookSeries)
+        .innerJoin(schema.bookSeriesMemberships, eq(schema.bookSeriesMemberships.seriesId, schema.bookSeries.id))
+        .innerJoin(schema.books, eq(schema.books.id, schema.bookSeriesMemberships.bookId))
+        .innerJoin(schema.bookFiles, eq(schema.bookFiles.bookId, schema.books.id))
+        .where(whereClause),
+    ]);
+
+    return { rows, total: countRows[0]?.total ?? 0 };
+  }
+
   findSeriesById(seriesId: number): Promise<schema.BookSeries | undefined> {
     return this.db
       .select()
@@ -726,6 +787,36 @@ export class AudiobookshelfRepository {
       .select({ seriesId: schema.bookSeriesMemberships.seriesId, bookId: schema.bookSeriesMemberships.bookId })
       .from(schema.bookSeriesMemberships)
       .where(inArray(schema.bookSeriesMemberships.seriesId, seriesIds));
+  }
+
+  findSeriesMembershipBookIdsByLibraries(
+    seriesIds: number[],
+    libraryIds: number[],
+    contentFilters?: ContentFilterRules,
+  ): Promise<{ seriesId: number; bookId: number }[]> {
+    if (seriesIds.length === 0 || libraryIds.length === 0) return Promise.resolve([]);
+    const filterClauses = contentFilters ? buildContentFilterClauses(contentFilters, this.db) : [];
+    return this.db
+      .select({ seriesId: schema.bookSeriesMemberships.seriesId, bookId: schema.bookSeriesMemberships.bookId })
+      .from(schema.bookSeriesMemberships)
+      .innerJoin(schema.books, eq(schema.books.id, schema.bookSeriesMemberships.bookId))
+      .innerJoin(schema.bookFiles, eq(schema.bookFiles.bookId, schema.books.id))
+      .where(
+        and(
+          inArray(schema.bookSeriesMemberships.seriesId, seriesIds),
+          inArray(schema.books.libraryId, libraryIds),
+          BOOK_VISIBLE_WHERE,
+          eq(schema.bookFiles.role, 'content'),
+          AUDIO_FORMAT_WHERE,
+          ...filterClauses,
+        ),
+      )
+      .groupBy(schema.bookSeriesMemberships.seriesId, schema.bookSeriesMemberships.bookId)
+      .orderBy(
+        asc(schema.bookSeriesMemberships.seriesId),
+        asc(sql`min(${schema.bookSeriesMemberships.displayOrder})`),
+        asc(schema.bookSeriesMemberships.bookId),
+      );
   }
 
   findCollectionsByUserId(userId: number): Promise<schema.Collection[]> {

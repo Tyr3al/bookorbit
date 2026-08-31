@@ -9,13 +9,17 @@ function createService() {
   const repository = {
     findSeriesById: vi.fn(),
     findAccessibleSeriesBook: vi.fn(),
+    findSeriesByLibraries: vi.fn(),
+    findSeriesByLibrariesPage: vi.fn(),
+    findSeriesMembershipBookIdsByLibraries: vi.fn(),
   };
+  const itemsService = { getMinifiedItemsByIds: vi.fn().mockResolvedValue([]) };
   const librariesService = {
     getExposedLibraryIds: vi.fn(),
     requireExposedLibrary: vi.fn(),
   };
-  const service = new AudiobookshelfSeriesService(repository as never, {} as never, librariesService as never);
-  return { service, repository, librariesService };
+  const service = new AudiobookshelfSeriesService(repository as never, itemsService as never, librariesService as never);
+  return { service, repository, itemsService, librariesService };
 }
 
 describe('AudiobookshelfSeriesService', () => {
@@ -48,5 +52,28 @@ describe('AudiobookshelfSeriesService', () => {
 
     await expect(service.getSeries(user, 12)).resolves.toMatchObject({ libraryId: '00000000-0000-4000-8000-000000000004' });
     expect(repository.findAccessibleSeriesBook).toHaveBeenCalledWith(12, [3, 4], user.contentFilters);
+  });
+
+  it('pages and sorts series through the scoped repository query', async () => {
+    const { service, repository, itemsService, librariesService } = createService();
+    librariesService.requireExposedLibrary.mockResolvedValue(undefined);
+    repository.findSeriesByLibrariesPage.mockResolvedValue({
+      rows: [{ id: 12, name: 'Series', createdAt: new Date(1), updatedAt: new Date(2) }],
+      total: 101,
+    });
+    repository.findSeriesMembershipBookIdsByLibraries.mockResolvedValue([{ seriesId: 12, bookId: 42 }]);
+    itemsService.getMinifiedItemsByIds.mockResolvedValue([{ id: '00000000-0000-4000-8000-00000000002a' }]);
+
+    await expect(service.listLibrarySeries(user, 3, 200.9, -2, 'numBooks', true)).resolves.toMatchObject({
+      total: 101,
+      limit: 100,
+      page: 0,
+      sortBy: 'numBooks',
+      sortDesc: true,
+      results: [{ id: expect.any(String), books: [{ id: expect.any(String) }] }],
+    });
+    expect(repository.findSeriesByLibrariesPage).toHaveBeenCalledWith([3], user.contentFilters, 100, 0, 'numBooks', true);
+    expect(repository.findSeriesMembershipBookIdsByLibraries).toHaveBeenCalledWith([12], [3], user.contentFilters);
+    expect(repository.findSeriesByLibraries).not.toHaveBeenCalled();
   });
 });
