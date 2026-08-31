@@ -1,11 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
 
 import { LoginDto } from '../../auth/dto/login.dto';
 import { AuthService } from '../../auth/auth.service';
-import { AudiobookshelfRepository } from '../audiobookshelf.repository';
 import { AudiobookshelfProgressService } from './audiobookshelf-progress.service';
 import { AudiobookshelfLibrariesService } from './audiobookshelf-libraries.service';
+import { UserService } from '../../user/user.service';
 import type { AbsLoginResponse, AbsPermissions, AbsUser } from '../audiobookshelf.types';
 import type { RequestUser } from '../../../common/types/request-user';
 import { toAbsUuid } from '../../../common/utils/abs-id.utils';
@@ -21,7 +21,7 @@ type AbsUserSource = Pick<RequestUser, 'id' | 'username' | 'email' | 'isSuperuse
 export class AudiobookshelfAuthService {
   constructor(
     private readonly authService: AuthService,
-    private readonly repository: AudiobookshelfRepository,
+    private readonly userService: UserService,
     private readonly progressService: AudiobookshelfProgressService,
     private readonly librariesService: AudiobookshelfLibrariesService,
   ) {}
@@ -35,8 +35,8 @@ export class AudiobookshelfAuthService {
   /** POST /auth/refresh: rotate the refresh token and return a fresh token pair. */
   async refresh(rawRefreshToken: string | undefined, reply: FastifyReply): Promise<AbsLoginResponse> {
     const { accessToken, rawRefreshToken: nextRefreshToken, userId } = await this.authService.refreshForAudiobookshelf(rawRefreshToken ?? '', reply);
-    const user = await this.repository.findUserById(userId);
-    if (!user) throw new Error('User not found after refresh');
+    const user = await this.userService.findByIdWithPermissions(userId);
+    if (!user) throw new UnauthorizedException();
     const userSource: AbsUserSource = {
       id: user.id,
       username: user.username,
@@ -44,7 +44,7 @@ export class AudiobookshelfAuthService {
       isSuperuser: user.isSuperuser,
       active: user.active,
       settings: user.settings,
-      permissions: user.isSuperuser ? ['*'] : [],
+      permissions: user.permissions,
     };
     return this.buildLoginResponse(userSource, accessToken, nextRefreshToken);
   }

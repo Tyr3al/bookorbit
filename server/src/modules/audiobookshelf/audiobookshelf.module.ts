@@ -4,6 +4,7 @@ import { AuthModule } from '../auth/auth.module';
 import { BookModule } from '../book/book.module';
 import { AuthorsModule } from '../authors/authors.module';
 import { AppSettingsModule } from '../app-settings/app-settings.module';
+import { UserModule } from '../user/user.module';
 import { AudiobookshelfRepository } from './audiobookshelf.repository';
 import { AudiobookshelfEnabledGuard } from './audiobookshelf-enabled.guard';
 import { LoginController } from './controllers/login.controller';
@@ -32,7 +33,7 @@ import { AbsOAuthStateStore } from './services/abs-oauth-state.store';
 import { AbsRefreshRouteRegistrar } from './services/abs-refresh-route.registrar';
 
 @Module({
-  imports: [AuthModule, BookModule, AuthorsModule, AppSettingsModule],
+  imports: [AuthModule, UserModule, BookModule, AuthorsModule, AppSettingsModule],
   controllers: [
     LoginController,
     AbsOAuthController,
