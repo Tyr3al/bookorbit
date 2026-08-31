@@ -92,6 +92,42 @@ export class AudiobookshelfRepository {
       .then((rows) => rows[0]);
   }
 
+  /** Live audio bookmarks visible through the ABS compatibility API. */
+  async findBookmarksForAudiobookshelfUser(user: {
+    id: number;
+    isSuperuser: boolean;
+    contentFilters?: ContentFilterRules;
+  }): Promise<schema.BookmarkRow[]> {
+    const filterClauses = !user.isSuperuser && user.contentFilters ? buildContentFilterClauses(user.contentFilters, this.db) : [];
+    const accessClause = user.isSuperuser
+      ? undefined
+      : exists(
+          this.db
+            .select({ one: sql`1` })
+            .from(schema.userLibraryAccess)
+            .where(and(eq(schema.userLibraryAccess.userId, user.id), eq(schema.userLibraryAccess.libraryId, schema.books.libraryId))),
+        );
+    const rows = await this.db
+      .select({ bookmark: schema.bookmarks })
+      .from(schema.bookmarks)
+      .innerJoin(schema.books, eq(schema.books.id, schema.bookmarks.bookId))
+      .innerJoin(schema.libraries, eq(schema.libraries.id, schema.books.libraryId))
+      .where(
+        and(
+          eq(schema.bookmarks.userId, user.id),
+          sql`${schema.bookmarks.deletedAt} is null`,
+          sql`${schema.bookmarks.positionSeconds} is not null`,
+          eq(schema.libraries.enableAudiobookshelfApi, true),
+          BOOK_VISIBLE_WHERE,
+          this.hasAudioFile(),
+          accessClause,
+          ...filterClauses,
+        ),
+      )
+      .orderBy(asc(schema.bookmarks.createdAt), asc(schema.bookmarks.id));
+    return rows.map((row) => row.bookmark);
+  }
+
   findUserById(userId: number): Promise<(schema.User & { isSuperuser: boolean }) | undefined> {
     return this.db
       .select()

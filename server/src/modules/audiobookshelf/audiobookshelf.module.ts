@@ -4,6 +4,7 @@ import { AuthModule } from '../auth/auth.module';
 import { BookModule } from '../book/book.module';
 import { AuthorsModule } from '../authors/authors.module';
 import { AppSettingsModule } from '../app-settings/app-settings.module';
+import { BookmarkModule } from '../bookmark/bookmark.module';
 import { UserModule } from '../user/user.module';
 import { AudiobookshelfRepository } from './audiobookshelf.repository';
 import { AudiobookshelfEnabledGuard } from './audiobookshelf-enabled.guard';
@@ -24,6 +25,7 @@ import { AudiobookshelfAuthService } from './services/audiobookshelf-auth.servic
 import { AudiobookshelfLibrariesService } from './services/audiobookshelf-libraries.service';
 import { AudiobookshelfItemsService } from './services/audiobookshelf-items.service';
 import { AudiobookshelfProgressService } from './services/audiobookshelf-progress.service';
+import { AudiobookshelfBookmarksService } from './services/audiobookshelf-bookmarks.service';
 import { AudiobookshelfStreamService } from './services/audiobookshelf-stream.service';
 import { AudiobookshelfPlaybackService } from './services/audiobookshelf-playback.service';
 import { AudiobookshelfAuthorsService } from './services/audiobookshelf-authors.service';
@@ -34,7 +36,7 @@ import { AbsOAuthStateStore } from './services/abs-oauth-state.store';
 import { AbsRefreshRouteRegistrar } from './services/abs-refresh-route.registrar';
 
 @Module({
-  imports: [AuthModule, UserModule, BookModule, AuthorsModule, AppSettingsModule],
+  imports: [AuthModule, UserModule, BookModule, AuthorsModule, AppSettingsModule, BookmarkModule],
   controllers: [
     LoginController,
     AbsOAuthController,
@@ -56,6 +58,7 @@ import { AbsRefreshRouteRegistrar } from './services/abs-refresh-route.registrar
     AudiobookshelfLibrariesService,
     AudiobookshelfItemsService,
     AudiobookshelfProgressService,
+    AudiobookshelfBookmarksService,
     AudiobookshelfStreamService,
     AudiobookshelfPlaybackService,
     AudiobookshelfAuthorsService,

@@ -32,7 +32,14 @@ describe('AudiobookshelfAuthService', () => {
     };
     const progressService = { getMediaProgressForUser: vi.fn().mockResolvedValue([]) };
     const librariesService = { findLibraries: vi.fn().mockResolvedValue({ libraries: [] }) };
-    const service = new AudiobookshelfAuthService(authService as never, userService as never, progressService as never, librariesService as never);
+    const bookmarksService = { getBookmarks: vi.fn().mockResolvedValue({ bookmarks: [] }) };
+    const service = new AudiobookshelfAuthService(
+      authService as never,
+      userService as never,
+      progressService as never,
+      librariesService as never,
+      bookmarksService as never,
+    );
 
     const result = await service.refresh('presented-refresh', {} as never);
 
@@ -56,7 +63,7 @@ describe('AudiobookshelfAuthService', () => {
     const authService = {
       refreshForAudiobookshelf: vi.fn().mockResolvedValue({ accessToken: 'access', rawRefreshToken: 'refresh', userId: 7 }),
     };
-    const service = new AudiobookshelfAuthService(authService as never, userService as never, {} as never, {} as never);
+    const service = new AudiobookshelfAuthService(authService as never, userService as never, {} as never, {} as never, {} as never);
 
     await expect(service.refresh('presented-refresh', {} as never)).rejects.toBeInstanceOf(UnauthorizedException);
   });

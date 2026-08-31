@@ -5,6 +5,7 @@ import { LoginDto } from '../../auth/dto/login.dto';
 import { AuthService } from '../../auth/auth.service';
 import { AudiobookshelfProgressService } from './audiobookshelf-progress.service';
 import { AudiobookshelfLibrariesService } from './audiobookshelf-libraries.service';
+import { AudiobookshelfBookmarksService } from './audiobookshelf-bookmarks.service';
 import { UserService } from '../../user/user.service';
 import type { AbsLoginResponse, AbsPermissions, AbsUser } from '../audiobookshelf.types';
 import type { RequestUser } from '../../../common/types/request-user';
@@ -25,6 +26,7 @@ export class AudiobookshelfAuthService {
     private readonly userService: UserService,
     private readonly progressService: AudiobookshelfProgressService,
     private readonly librariesService: AudiobookshelfLibrariesService,
+    private readonly bookmarksService: AudiobookshelfBookmarksService,
   ) {}
 
   /** POST /login: password login returning an ABS-shaped user with the long-lived token. */
@@ -70,7 +72,7 @@ export class AudiobookshelfAuthService {
     legacyToken?: string,
   ): Promise<AbsLoginResponse> {
     const mediaProgress = await this.progressService.getMediaProgressForUser(user);
-    const { libraries } = await this.librariesService.findLibraries(user);
+    const [{ libraries }, { bookmarks }] = await Promise.all([this.librariesService.findLibraries(user), this.bookmarksService.getBookmarks(user)]);
     const isSuperuser = user.isSuperuser;
     const permissions = this.buildPermissions(user);
 
@@ -84,7 +86,7 @@ export class AudiobookshelfAuthService {
       refreshToken: refreshToken ?? null,
       mediaProgress,
       seriesHideFromContinueListening: [],
-      bookmarks: [],
+      bookmarks,
       permissions,
       isActive: user.active,
       isLocked: false,

@@ -28,6 +28,83 @@ export class BookmarkRepository {
       .orderBy(asc(bookmarks.createdAt), asc(bookmarks.id));
   }
 
+  async findLiveAudioByTime(userId: number, bookId: number, time: number): Promise<BookmarkRow | null> {
+    const [row] = await this.db
+      .select()
+      .from(bookmarks)
+      .where(
+        and(
+          eq(bookmarks.userId, userId),
+          eq(bookmarks.bookId, bookId),
+          eq(bookmarks.positionSeconds, time),
+          isNull(bookmarks.cfi),
+          isNull(bookmarks.deletedAt),
+        ),
+      )
+      .limit(1);
+    return row ?? null;
+  }
+
+  async createAudio(userId: number, bookId: number, time: number, title: string): Promise<BookmarkRow | null> {
+    const [row] = await this.db
+      .insert(bookmarks)
+      .values({ userId, bookId, positionSeconds: time, cfi: null, title, origin: 'web' })
+      .onConflictDoNothing()
+      .returning();
+    return row ?? null;
+  }
+
+  async restoreAudioAtTime(userId: number, bookId: number, time: number, title: string): Promise<BookmarkRow | null> {
+    const [row] = await this.db
+      .update(bookmarks)
+      .set({ title, origin: 'web', devicePos: null, pageno: null, deletedAt: null })
+      .where(
+        and(
+          eq(bookmarks.userId, userId),
+          eq(bookmarks.bookId, bookId),
+          eq(bookmarks.positionSeconds, time),
+          isNull(bookmarks.cfi),
+          isNotNull(bookmarks.deletedAt),
+        ),
+      )
+      .returning();
+    return row ?? null;
+  }
+
+  async updateAudioTitle(userId: number, bookId: number, time: number, title: string): Promise<BookmarkRow | null> {
+    const [row] = await this.db
+      .update(bookmarks)
+      .set({ title })
+      .where(
+        and(
+          eq(bookmarks.userId, userId),
+          eq(bookmarks.bookId, bookId),
+          eq(bookmarks.positionSeconds, time),
+          isNull(bookmarks.cfi),
+          isNull(bookmarks.deletedAt),
+        ),
+      )
+      .returning();
+    return row ?? null;
+  }
+
+  async softDeleteAudioAtTime(userId: number, bookId: number, time: number): Promise<boolean> {
+    const rows = await this.db
+      .update(bookmarks)
+      .set({ deletedAt: new Date() })
+      .where(
+        and(
+          eq(bookmarks.userId, userId),
+          eq(bookmarks.bookId, bookId),
+          eq(bookmarks.positionSeconds, time),
+          isNull(bookmarks.cfi),
+          isNull(bookmarks.deletedAt),
+        ),
+      )
+      .returning({ id: bookmarks.id });
+    return rows.length > 0;
+  }
+
   async findLiveByLocation(userId: number, bookId: number, data: Pick<NewBookmark, 'cfi' | 'positionSeconds'>): Promise<BookmarkRow | null> {
     if (data.cfi != null) {
       const [row] = await this.db

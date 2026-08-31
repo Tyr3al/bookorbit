@@ -17,6 +17,6 @@ describe('BookmarkModule', () => {
 
     expect(controllers).toEqual([BookmarkController]);
     expect(providers).toEqual(expect.arrayContaining([BookmarkService, BookmarkSyncService, BookmarkRepository]));
-    expect(Reflect.getMetadata(MODULE_METADATA.EXPORTS, BookmarkModule)).toEqual([BookmarkSyncService]);
+    expect(Reflect.getMetadata(MODULE_METADATA.EXPORTS, BookmarkModule)).toEqual([BookmarkRepository, BookmarkService, BookmarkSyncService]);
   });
 });

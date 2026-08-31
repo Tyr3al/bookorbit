@@ -10,6 +10,6 @@ import { BookmarkSyncService } from './bookmark-sync.service';
   imports: [BookModule],
   controllers: [BookmarkController],
   providers: [BookmarkService, BookmarkSyncService, BookmarkRepository],
-  exports: [BookmarkSyncService],
+  exports: [BookmarkRepository, BookmarkService, BookmarkSyncService],
 })
 export class BookmarkModule {}
