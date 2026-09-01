@@ -582,6 +582,13 @@
       "when": 1788109967198,
       "tag": "0082_add_libraries_enable_audiobookshelf_api",
       "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "7",
+      "when": 1788208930752,
+      "tag": "0083_abs_listening_sessions",
+      "breakpoints": true
     }
   ]
 }

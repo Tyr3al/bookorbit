@@ -34,6 +34,8 @@ import { AudiobookshelfCollectionsService } from './services/audiobookshelf-coll
 import { AudiobookshelfNarratorsService } from './services/audiobookshelf-narrators.service';
 import { AbsOAuthStateStore } from './services/abs-oauth-state.store';
 import { AbsRefreshRouteRegistrar } from './services/abs-refresh-route.registrar';
+import { AudiobookshelfSessionsRepository } from './services/audiobookshelf-sessions.repository';
+import { AudiobookshelfSessionsService } from './services/audiobookshelf-sessions.service';
 
 @Module({
   imports: [AuthModule, UserModule, BookModule, AuthorsModule, AppSettingsModule, BookmarkModule],
@@ -68,6 +70,8 @@ import { AbsRefreshRouteRegistrar } from './services/abs-refresh-route.registrar
     AbsOAuthStateStore,
     AbsRefreshRouteRegistrar,
     AudiobookshelfEnabledGuard,
+    AudiobookshelfSessionsRepository,
+    AudiobookshelfSessionsService,
   ],
 })
 export class AudiobookshelfModule {}

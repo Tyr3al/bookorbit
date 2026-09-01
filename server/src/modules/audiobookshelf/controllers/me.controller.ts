@@ -20,9 +20,11 @@ import type { FastifyRequest } from 'fastify';
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
 import type { RequestUser } from '../../../common/types/request-user';
 import { UpdateAbsProgressDto } from '../dto/update-abs-progress.dto';
+import { ABS_DEFAULT_SESSIONS_PAGE_SIZE } from '../audiobookshelf.constants';
 import { AudiobookshelfAuthService } from '../services/audiobookshelf-auth.service';
 import { AudiobookshelfProgressService } from '../services/audiobookshelf-progress.service';
 import { AudiobookshelfBookmarksService } from '../services/audiobookshelf-bookmarks.service';
+import { AudiobookshelfSessionsService } from '../services/audiobookshelf-sessions.service';
 import { CreateAbsBookmarkDto, UpdateAbsBookmarkDto } from '../dto/abs-bookmark.dto';
 import { extractBearerToken } from './authorize.controller';
 import { parseAbsId } from '../pipes/abs-id.pipe';
@@ -35,6 +37,7 @@ export class MeController {
     private readonly authService: AudiobookshelfAuthService,
     private readonly progressService: AudiobookshelfProgressService,
     private readonly bookmarksService: AudiobookshelfBookmarksService,
+    private readonly sessionsService: AudiobookshelfSessionsService,
   ) {}
 
   @Get()
@@ -43,15 +46,28 @@ export class MeController {
   }
 
   @Get('listening-sessions')
-  listeningSessions() {
-    return { total: 0, numPages: 0, page: 0, itemsPerPage: 10, sessions: [] };
+  listeningSessions(@CurrentUser() user: RequestUser, @Query('page') page?: string, @Query('itemsPerPage') itemsPerPage?: string) {
+    return this.sessionsService.getSessionsPage(user, parseOptionalInt(page) ?? 0, parseOptionalInt(itemsPerPage) ?? ABS_DEFAULT_SESSIONS_PAGE_SIZE);
+  }
+
+  @Get('listening-stats')
+  listeningStats(@CurrentUser() user: RequestUser) {
+    return this.sessionsService.getListeningStats(user);
   }
 
   @Get('item/listening-sessions/:libraryItemId/:episodeId?')
-  itemListeningSessions(@Query('page') page?: string, @Query('itemsPerPage') itemsPerPage?: string) {
-    const parsedItemsPerPage = itemsPerPage ? Number(itemsPerPage) : 10;
-    const parsedPage = page ? Number(page) : 0;
-    return { total: 0, numPages: 0, page: parsedPage, itemsPerPage: parsedItemsPerPage, sessions: [] };
+  itemListeningSessions(
+    @CurrentUser() user: RequestUser,
+    @Param('libraryItemId') libraryItemId: string,
+    @Query('page') page?: string,
+    @Query('itemsPerPage') itemsPerPage?: string,
+  ) {
+    return this.sessionsService.getItemSessionsPage(
+      user,
+      parseAbsId(libraryItemId),
+      parseOptionalInt(page) ?? 0,
+      parseOptionalInt(itemsPerPage) ?? ABS_DEFAULT_SESSIONS_PAGE_SIZE,
+    );
   }
 
   @Patch('progress/batch/update')

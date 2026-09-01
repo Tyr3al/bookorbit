@@ -1,12 +1,13 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 
 import { sanitizeLogValue } from '../../../common/utils/log-sanitize.utils';
-import { fromAbsCompositeUuid, toAbsCompositeUuid, toAbsUuid } from '../../../common/utils/abs-id.utils';
+import { fromAbsCompositeUuid, fromAbsUuid, toAbsCompositeUuid, toAbsUuid } from '../../../common/utils/abs-id.utils';
 import type { RequestUser } from '../../../common/types/request-user';
 import { ABS_SERVER_VERSION } from '../audiobookshelf.constants';
 import type { AbsFileMetadata, AbsLibraryItem, AbsPlaybackAudioTrack, AbsPlaybackSessionExpanded } from '../audiobookshelf.types';
 import { AudiobookshelfItemsService } from './audiobookshelf-items.service';
 import { AudiobookshelfProgressService, type UpdateProgressInput } from './audiobookshelf-progress.service';
+import { AudiobookshelfSessionsService } from './audiobookshelf-sessions.service';
 
 /** Builds the expanded direct-play session returned by ABS's play endpoint. */
 @Injectable()
@@ -16,6 +17,7 @@ export class AudiobookshelfPlaybackService {
   constructor(
     private readonly itemsService: AudiobookshelfItemsService,
     private readonly progressService: AudiobookshelfProgressService,
+    private readonly sessionsService: AudiobookshelfSessionsService,
   ) {}
 
   async play(user: RequestUser, bookId: number, request: unknown): Promise<AbsPlaybackSessionExpanded> {
@@ -30,6 +32,7 @@ export class AudiobookshelfPlaybackService {
       const currentTime = clampPlaybackTime(progress?.isFinished ? 0 : (progress?.currentTime ?? 0), item.media.duration);
       const now = Date.now();
       const session = this.buildSession(user, bookId, item, request, currentTime, now);
+      await this.persistLiveSessionStart(user, bookId, item, session, currentTime, new Date(now));
       this.logger.log(
         `[${event}] [end] userId=${user.id} bookId=${bookId} durationMs=${Date.now() - startedAt} tracks=${session.audioTracks.length} - playback session started`,
       );
@@ -49,6 +52,7 @@ export class AudiobookshelfPlaybackService {
     const input = toProgressInput(request);
     if (!hasProgressPosition(input)) throw new BadRequestException('Playback position is required');
     await this.progressService.updateMediaProgress(user, bookId, input);
+    await this.persistLiveSessionSync(user, bookId, request, input);
   }
 
   async close(user: RequestUser, sessionId: string, request: unknown): Promise<void> {
@@ -56,15 +60,69 @@ export class AudiobookshelfPlaybackService {
     const input = toProgressInput(request);
     if (hasProgressPosition(input)) {
       await this.progressService.updateMediaProgress(user, bookId, input);
-      return;
+    } else {
+      await this.itemsService.requireExposedBook(user, bookId);
     }
-    await this.itemsService.requireExposedBook(user, bookId);
+    await this.persistLiveSessionSync(user, bookId, request, input);
   }
 
   private requireOwnedSession(user: RequestUser, sessionId: string): number {
     const session = fromAbsCompositeUuid(sessionId);
     if (!session || session.a !== user.id) throw new NotFoundException('Session not found');
     return session.b;
+  }
+
+  /** Opens/refreshes the historical 'live' session row for this user+book. Never throws - a
+   * persistence failure here must not break the play() response the client is waiting on. */
+  private async persistLiveSessionStart(
+    user: RequestUser,
+    bookId: number,
+    item: AbsLibraryItem,
+    session: AbsPlaybackSessionExpanded,
+    currentTime: number,
+    now: Date,
+  ): Promise<void> {
+    const event = 'audiobookshelf.playback_session';
+    const startedAt = Date.now();
+    try {
+      await this.sessionsService.recordPlaybackStart(user.id, {
+        bookId,
+        libraryId: fromAbsUuid(item.libraryId) ?? 0,
+        displayTitle: session.displayTitle,
+        displayAuthor: session.displayAuthor,
+        coverPath: session.coverPath,
+        duration: session.duration,
+        mediaPlayer: session.mediaPlayer,
+        deviceInfo: session.deviceInfo,
+        mediaMetadata: session.mediaMetadata,
+        currentTime,
+        now,
+      });
+    } catch (error) {
+      const errorClass = error instanceof Error ? error.name : 'Error';
+      const errorMessage = sanitizeLogValue(error instanceof Error ? error.message : String(error));
+      this.logger.warn(
+        `[${event}] [fail] userId=${user.id} bookId=${bookId} durationMs=${Date.now() - startedAt} errorClass=${errorClass} error="${errorMessage}" - listening session persist failed`,
+      );
+    }
+  }
+
+  /** Accumulates timeListening on the live session row for sync/close. Never throws, for the
+   * same reason as persistLiveSessionStart. */
+  private async persistLiveSessionSync(user: RequestUser, bookId: number, request: unknown, input: UpdateProgressInput): Promise<void> {
+    const event = 'audiobookshelf.playback_session';
+    const startedAt = Date.now();
+    try {
+      const requestRecord = asRecord(request);
+      const timeListeningDelta = numericField(requestRecord?.timeListened) ?? numericField(requestRecord?.timeListening) ?? 0;
+      await this.sessionsService.recordPlaybackSync(user.id, bookId, { timeListeningDelta, currentTime: input.currentTime, now: new Date() });
+    } catch (error) {
+      const errorClass = error instanceof Error ? error.name : 'Error';
+      const errorMessage = sanitizeLogValue(error instanceof Error ? error.message : String(error));
+      this.logger.warn(
+        `[${event}] [fail] userId=${user.id} bookId=${bookId} durationMs=${Date.now() - startedAt} errorClass=${errorClass} error="${errorMessage}" - listening session persist failed`,
+      );
+    }
   }
 
   private buildSession(

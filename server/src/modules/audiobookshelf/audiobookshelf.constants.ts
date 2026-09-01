@@ -28,6 +28,10 @@ export const ABS_MAX_ITEM_LIMIT = 100;
 export const ABS_DEFAULT_IN_PROGRESS_LIMIT = 25;
 export const ABS_MAX_IN_PROGRESS_LIMIT = 100;
 
+export const ABS_DEFAULT_SESSIONS_PAGE_SIZE = 10;
+export const ABS_MAX_SESSIONS_PAGE_SIZE = 100;
+export const ABS_RECENT_SESSIONS_LIMIT = 10;
+
 // Matches the default library setting markAsFinishedPercentComplete = 98.
 export const ABS_FINISHED_PROGRESS = 0.98;
 

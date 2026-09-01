@@ -479,3 +479,57 @@ export interface AbsPlaybackAudioTrack {
   codec: string;
   metadata: AbsFileMetadata;
 }
+
+/** A historical listening-session record, returned by the listening-sessions and
+ * listening-stats read paths. Unlike AbsPlaybackSessionExpanded, this is never the live
+ * playback handle - see AudiobookshelfSessionsService. */
+export interface AbsPlaybackSession {
+  id: string;
+  userId: string;
+  libraryId: string;
+  libraryItemId: string;
+  bookId: string;
+  episodeId: null;
+  mediaType: 'book';
+  mediaMetadata: Record<string, unknown>;
+  chapters: null;
+  displayTitle: string;
+  displayAuthor: string;
+  coverPath: string | null;
+  duration: number | null;
+  playMethod: number;
+  mediaPlayer: string;
+  deviceInfo: Record<string, unknown> | null;
+  serverVersion: string;
+  date: string;
+  dayOfWeek: string;
+  timeListening: number;
+  startTime: number;
+  currentTime: number;
+  startedAt: number;
+  updatedAt: number;
+}
+
+export interface AbsListeningSessionsEnvelope {
+  total: number;
+  numPages: number;
+  page: number;
+  itemsPerPage: number;
+  sessions: AbsPlaybackSession[];
+}
+
+export interface AbsListeningStatsItem {
+  id: string;
+  timeListening: number;
+  mediaMetadata: Record<string, unknown>;
+  lastUpdate: number;
+}
+
+export interface AbsListeningStats {
+  totalTime: number;
+  items: Record<string, AbsListeningStatsItem>;
+  days: Record<string, number>;
+  dayOfWeek: Record<string, number>;
+  today: number;
+  recentSessions: AbsPlaybackSession[];
+}

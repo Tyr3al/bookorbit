@@ -61,17 +61,18 @@ function makeService(overrides: { files?: BookFile[] } = {}) {
       ]),
     findAudioFilesByBookId: vi.fn().mockResolvedValue(files),
     findAudioFilesByBookIds: vi.fn().mockResolvedValue(files),
-    findExposedAudioBooksByIds: vi.fn().mockImplementation((bookIds: number[]) => Promise.resolve(bookIds.map((id) => ({ id })))),
+    findExposedAudioBooksByIds: vi.fn().mockImplementation((bookIds: number[]) => Promise.resolve(bookIds.map((id) => ({ id, libraryId: 3 })))),
     deleteProgressByUserIdAndBookId: vi.fn().mockResolvedValue(true),
   } as unknown as AudiobookshelfRepository;
   const itemsService = {
-    requireExposedBook: vi.fn().mockResolvedValue({ id: 7 }),
+    requireExposedBook: vi.fn().mockResolvedValue({ id: 7, libraryId: 3 }),
     getMinifiedItemsByIds: vi.fn().mockResolvedValue([{ id: toAbsUuid(7) }]),
   } as unknown as AudiobookshelfItemsService;
   const bookService = { saveAudioProgress: vi.fn().mockResolvedValue(undefined) } as unknown as BookService;
+  const sessionsService = { recordLocalSessions: vi.fn().mockResolvedValue(undefined) };
 
-  const service = new AudiobookshelfProgressService(repository, bookService, itemsService);
-  return { service, repository, bookService, itemsService };
+  const service = new AudiobookshelfProgressService(repository, bookService, itemsService, sessionsService as never);
+  return { service, repository, bookService, itemsService, sessionsService };
 }
 
 describe('AudiobookshelfProgressService.getMediaProgressForUser', () => {
@@ -249,6 +250,24 @@ describe('AudiobookshelfProgressService.updateMediaProgress', () => {
     );
   });
 
+  it('persists a session row for a single local session', async () => {
+    const { service, sessionsService } = makeService();
+
+    await service.syncLocalSession(user(), { libraryItemId: toAbsUuid(7), currentTime: 30, timeListening: 15, displayTitle: 'A Book' });
+
+    expect(sessionsService.recordLocalSessions).toHaveBeenCalledWith(1, [
+      expect.objectContaining({ bookId: 7, libraryId: 3, currentTime: 30, timeListening: 15, displayTitle: 'A Book' }),
+    ]);
+  });
+
+  it('swallows a session persistence failure without breaking the single local sync', async () => {
+    const { service, sessionsService, bookService } = makeService();
+    sessionsService.recordLocalSessions.mockRejectedValue(new Error('db unavailable'));
+
+    await expect(service.syncLocalSession(user(), { libraryItemId: toAbsUuid(7), currentTime: 30 })).resolves.toBeUndefined();
+    expect(bookService.saveAudioProgress).toHaveBeenCalled();
+  });
+
   it('rejects malformed single local sessions', async () => {
     const { service } = makeService();
 
@@ -377,6 +396,53 @@ describe('AudiobookshelfProgressService.syncLocalSessions', () => {
 
     await expect(service.syncLocalSessions(user(), [{ libraryItemId: toAbsUuid(7), currentTime: 40 }])).resolves.toEqual({ results: [] });
     expect(bookService.saveAudioProgress).not.toHaveBeenCalled();
+  });
+
+  it('persists local session rows in a single batched call', async () => {
+    const { service, repository, sessionsService } = makeService();
+    vi.mocked(repository.findExposedAudioBooksByIds).mockResolvedValue([{ id: 7, libraryId: 3 }] as never);
+    vi.mocked(repository.findProgressByUserIdAndBookIds).mockResolvedValue([]);
+
+    await service.syncLocalSessions(user(), [
+      {
+        libraryItemId: toAbsUuid(7),
+        currentTime: 40,
+        timeListening: 90,
+        displayTitle: 'A Book',
+        displayAuthor: 'An Author',
+        duration: 3600,
+        mediaPlayer: 'AVPlayer',
+        deviceInfo: { deviceId: 'phone-1' },
+        startedAt: Date.parse('2025-01-01T00:00:00Z'),
+        updatedAt: Date.parse('2025-01-01T01:00:00Z'),
+      },
+    ]);
+
+    expect(sessionsService.recordLocalSessions).toHaveBeenCalledTimes(1);
+    expect(sessionsService.recordLocalSessions).toHaveBeenCalledWith(1, [
+      expect.objectContaining({
+        bookId: 7,
+        libraryId: 3,
+        displayTitle: 'A Book',
+        displayAuthor: 'An Author',
+        duration: 3600,
+        mediaPlayer: 'AVPlayer',
+        deviceInfo: { deviceId: 'phone-1' },
+        timeListening: 90,
+        currentTime: 40,
+      }),
+    ]);
+  });
+
+  it('swallows a session persistence failure without failing the local sync', async () => {
+    const { service, repository, sessionsService } = makeService();
+    vi.mocked(repository.findExposedAudioBooksByIds).mockResolvedValue([{ id: 7, libraryId: 3 }] as never);
+    vi.mocked(repository.findProgressByUserIdAndBookIds).mockResolvedValue([]);
+    sessionsService.recordLocalSessions.mockRejectedValue(new Error('db unavailable'));
+
+    await expect(service.syncLocalSessions(user(), [{ libraryItemId: toAbsUuid(7), currentTime: 40, timeListening: 10 }])).resolves.toEqual({
+      results: [],
+    });
   });
 });
 
