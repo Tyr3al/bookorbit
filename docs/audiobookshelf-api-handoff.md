@@ -52,6 +52,7 @@ code you did not touch (for example Drizzle inference collapsing to `{ [x: strin
 ## Commits completed in this pass
 
 ```text
+030897b6 feat(server): add ABS public session track route and public covers
 6f8f9850 feat(server): add ABS per-file download route with permission gate
 b9d3f43b fix(server): clamp live session positions and add sessions tests
 7ebeabf6 docs: update ABS handoff for completed listening sessions
@@ -110,6 +111,32 @@ Two BookOrbit-specific deviations, both deliberate:
 
 The item-list path keeps its title-only matching: `buildTitleSearch` is unchanged and search uses a
 separate `buildBookSearchClause`.
+
+### Public session track route and covers
+
+AudioBooth (and similar clients) stream each track from `{server}/public/session/:id/track/:index`
+with **no auth headers** - upstream's PublicRouter, where the session id is the bearer secret. The
+route was missing, so those clients failed playback immediately after a successful play (their
+play requests succeeded but no track request ever reached the server). Commit `030897b6` added it:
+
+- `AbsOpenSessionStore` (in-memory): sessions are opened on `play()`, refreshed on `sync()`, closed
+  on `close()`, and expire after 36h. The public track route only serves **open** sessions and
+  404s unknown/closed ones, matching upstream's getTrack. The registry exists because BookOrbit's
+  deterministic composite session ids would otherwise let anyone guess a (userId, bookId) pair and
+  stream any book; this bounds exposure to actively-open sessions. A server restart closes all
+  sessions (same as upstream's in-memory session manager).
+- The route streams the track file with Range support (`206`) and re-checks the book exists and
+  its library is still ABS-exposed.
+- `GET /abs/api/items/:id/cover` is now public (upstream has no auth on it); AudioBooth loads
+  covers without a token, which previously 401'd. `BookService.getCoverPath` was split so the
+  public read skips `verifyBookAccess` (callers check existence themselves).
+- `abs/public/(.*)` was added to the global-prefix excludes in `main.ts` and the e2e harness -
+  without it the public routes land at `/api/v1/abs/public/...` and clients 404.
+
+Note: the playlists 404s seen from these clients are the deliberately deferred playlists feature;
+clients tolerate them. If a client still fails after this, check the server log for what it
+requests - clients that 404 on `/play` itself would point at a play-response decoding issue in the
+client.
 
 ### Per-file download route
 
