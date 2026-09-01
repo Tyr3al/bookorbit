@@ -88,6 +88,10 @@ export class AudiobookshelfSessionsService {
     if (entries.length === 0) return;
     const rows: NewAbsListeningSession[] = entries.map((entry) => {
       const { date, dayOfWeek } = deriveDateFields(entry.updatedAt);
+      // currentTime/startTime/timeListening all back the CHECK constraints on the table, so clamp
+      // at this persistence boundary too - not just in the callers - so a hostile or buggy client
+      // payload cannot fail the whole batch insert.
+      const currentTime = Math.max(0, entry.currentTime);
       return {
         userId,
         bookId: entry.bookId,
@@ -104,8 +108,8 @@ export class AudiobookshelfSessionsService {
         date,
         dayOfWeek,
         timeListening: Math.max(0, Math.round(entry.timeListening)),
-        startTime: entry.currentTime,
-        currentTime: entry.currentTime,
+        startTime: currentTime,
+        currentTime,
         startedAt: entry.startedAt,
         updatedAt: entry.updatedAt,
       };

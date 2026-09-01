@@ -18,7 +18,8 @@ import { users } from './auth';
  * the same book accumulate into one row (its date/dayOfWeek refresh to the most recent play).
  * Upstream ABS creates a fresh row per play, so its day/weekday attribution splits across plays;
  * BookOrbit merges them. Acceptable for now - a later pass can rotate the live row on close() to
- * match upstream's per-play rows.
+ * match upstream's per-play rows. 'local' rows are inserts by design (no dedup on re-upload), so
+ * a client retry of the same offline session adds a duplicate row.
  */
 export const absListeningSessions = pgTable(
   'abs_listening_sessions',

@@ -434,6 +434,21 @@ describe('AudiobookshelfProgressService.syncLocalSessions', () => {
     ]);
   });
 
+  it('clamps negative positions in local sessions before persisting', async () => {
+    const { service, sessionsService } = makeService();
+
+    await service.syncLocalSessions(user(), [
+      { libraryItemId: toAbsUuid(7), currentTime: -12, timeListening: 30 },
+      { libraryItemId: toAbsUuid(8), currentTime: 20, timeListening: 40 },
+    ]);
+
+    expect(sessionsService.recordLocalSessions).toHaveBeenCalledTimes(1);
+    expect(sessionsService.recordLocalSessions).toHaveBeenCalledWith(1, [
+      expect.objectContaining({ bookId: 7, currentTime: 0, timeListening: 30 }),
+      expect.objectContaining({ bookId: 8, currentTime: 20, timeListening: 40 }),
+    ]);
+  });
+
   it('swallows a session persistence failure without failing the local sync', async () => {
     const { service, repository, sessionsService } = makeService();
     vi.mocked(repository.findExposedAudioBooksByIds).mockResolvedValue([{ id: 7, libraryId: 3 }] as never);

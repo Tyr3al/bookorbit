@@ -108,14 +108,17 @@ export class AudiobookshelfPlaybackService {
   }
 
   /** Accumulates timeListening on the live session row for sync/close. Never throws, for the
-   * same reason as persistLiveSessionStart. */
+   * same reason as persistLiveSessionStart. Negative positions are clamped before they reach the
+   * repository so a hostile client cannot trip the current_time CHECK constraint and drop the
+   * whole UPDATE (including the positive timeListening delta). */
   private async persistLiveSessionSync(user: RequestUser, bookId: number, request: unknown, input: UpdateProgressInput): Promise<void> {
     const event = 'audiobookshelf.playback_session';
     const startedAt = Date.now();
     try {
       const requestRecord = asRecord(request);
       const timeListeningDelta = numericField(requestRecord?.timeListened) ?? numericField(requestRecord?.timeListening) ?? 0;
-      await this.sessionsService.recordPlaybackSync(user.id, bookId, { timeListeningDelta, currentTime: input.currentTime, now: new Date() });
+      const currentTime = input.currentTime === undefined ? undefined : Math.max(0, input.currentTime);
+      await this.sessionsService.recordPlaybackSync(user.id, bookId, { timeListeningDelta, currentTime, now: new Date() });
     } catch (error) {
       const errorClass = error instanceof Error ? error.name : 'Error';
       const errorMessage = sanitizeLogValue(error instanceof Error ? error.message : String(error));

@@ -304,6 +304,16 @@ describe('AudiobookshelfPlaybackService', () => {
     expect(sessions.recordPlaybackSync).toHaveBeenCalledWith(7, 42, expect.objectContaining({ timeListeningDelta: 5, currentTime: 10 }));
   });
 
+  it('clamps a negative sync position before persisting the session', async () => {
+    const progressService = { updateMediaProgress: vi.fn().mockResolvedValue(undefined) };
+    const sessions = sessionsService();
+    const service = new AudiobookshelfPlaybackService({} as never, progressService as never, sessions as never);
+
+    await expect(service.sync(user(), toAbsCompositeUuid(7, 42), { currentTime: -5, timeListened: 10 })).resolves.toBeUndefined();
+
+    expect(sessions.recordPlaybackSync).toHaveBeenCalledWith(7, 42, expect.objectContaining({ timeListeningDelta: 10, currentTime: 0 }));
+  });
+
   it('does not break play() when session persistence fails', async () => {
     const sourceItem = item();
     const itemsService = { getItem: vi.fn().mockResolvedValue(sourceItem) };
