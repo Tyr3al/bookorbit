@@ -2,10 +2,10 @@
 
 ## Status
 
-The active branch is `feature/audiobookshelf-api`. This pass removed the temporary header
-diagnostic, corrected library search against upstream, bounded three more large-library query
-paths, and made author timestamps real. Listening-session persistence was started but is
-**incomplete and currently parked in a git stash** (see "Parked work" below).
+The active branch is `feature/audiobookshelf-api`. Listening sessions and stats are now **complete**
+and committed (see "Listening sessions and stats" below); the parked stash is gone. This pass also
+fixed a latent author-timestamp crash and repaired the audiobookshelf e2e suite, which had never
+been green since the `/abs` RouterModule mount.
 
 The working tree should contain only these user-owned untracked paths in addition to this
 document:
@@ -52,6 +52,9 @@ code you did not touch (for example Drizzle inference collapsing to `{ [x: strin
 ## Commits completed in this pass
 
 ```text
+de3bbeb9 test(server): repair audiobookshelf e2e suite and cover listening sessions
+930d61d2 fix(server): return real Dates from ABS timestamp aggregates
+30b1b1ac feat(server): persist ABS listening sessions and stats
 d65b57ab fix(server): drop temporary ABS header diagnostic
 76729412 perf(server): bound ABS filterdata and author queries
 08bd309b perf(server): batch ABS progress and session writes
@@ -150,77 +153,71 @@ Note there are **two** author mappers that must stay in sync:
 The duplication is deliberate: `AudiobookshelfAuthorsService` already injects
 `AudiobookshelfLibrariesService`, so reusing the mapper would create a circular DI cycle.
 
-## Parked work: listening sessions and stats
+## Listening sessions and stats (complete)
 
-This was started and is **incomplete**. It is saved in a git stash on this branch:
-
-```text
-stash@{0}  WIP: ABS listening sessions + stats (incomplete, agent stopped mid-edit)
-```
-
-Recover it with `git stash pop` (or inspect with `git stash show -p stash@{0}`). **A stash is
-local and easy to lose** - if this branch is going to sit for a while, pop it and commit it to a
-scratch branch instead.
-
-Tracked files it modifies:
-
-```text
-server/src/db/migrations/meta/_journal.json
-server/src/db/schema/index.ts
-server/src/modules/audiobookshelf/audiobookshelf.constants.ts
-server/src/modules/audiobookshelf/audiobookshelf.module.ts
-server/src/modules/audiobookshelf/audiobookshelf.types.ts
-server/src/modules/audiobookshelf/controllers/me.controller.ts
-server/src/modules/audiobookshelf/controllers/me.controller.test.ts
-server/src/modules/audiobookshelf/services/audiobookshelf-playback.service.ts
-server/src/modules/audiobookshelf/services/audiobookshelf-playback.service.test.ts
-server/src/modules/audiobookshelf/services/audiobookshelf-progress.service.ts
-server/src/modules/audiobookshelf/services/audiobookshelf-progress.service.test.ts
-```
-
-New files it adds:
-
-```text
-server/src/db/schema/audiobookshelf.ts
-server/src/db/migrations/0083_abs_listening_sessions.sql
-server/src/db/migrations/meta/0083_snapshot.json
-server/src/modules/audiobookshelf/services/audiobookshelf-sessions.repository.ts
-server/src/modules/audiobookshelf/services/audiobookshelf-sessions.service.ts
-```
-
-**Its state is unverified.** It did not type-check or lint cleanly when work stopped, it was
-mid-way through updating `me.controller.test.ts` for a new constructor argument on
-`AudiobookshelfProgressService`, and the generated migration has not been reviewed or applied. Do
-not assume any of it is correct; re-run the full check suite before trusting a line of it. It was
-stashed rather than committed specifically so a broken tree never landed on the branch.
-
-The design it was built against, which is still the right design:
+The previously parked stash was popped and finished. The `abs_listening_sessions` table (migration
+`0083`, schema `server/src/db/schema/audiobookshelf.ts`), `AudiobookshelfSessionsRepository` and
+`AudiobookshelfSessionsService` are committed; the stash is gone. The design is the one the stash
+was built against:
 
 - Keep the deterministic composite session id (`toAbsCompositeUuid(user.id, bookId)`) as the live
   playback handle so `play`/`sync`/`close` stay stateless. Persist a **separate** historical row
   with its own primary key purely for the read paths.
 - Write rows from `play()` (open/refresh), `sync()`/`close()` (accumulate the client-reported
-  `timeListening`, advance `currentTime`), and the local-session batch. Session persistence must
-  be batched alongside `applyProgressBatch()`, and a persistence failure must be logged and
-  swallowed rather than breaking playback or progress.
+  `timeListened`, advance `currentTime`), and the local-session batch. Session persistence is
+  batched alongside `applyProgressBatch()`, and a persistence failure is logged and swallowed
+  rather than breaking playback or progress.
 - Reads: `GET /api/me/listening-sessions` and
   `GET /api/me/item/listening-sessions/:libraryItemId/:episodeId?` return
   `{ total, numPages, page, itemsPerPage, sessions }` sorted by `updatedAt` desc, with
   `numPages = Math.ceil(total / itemsPerPage)` and `itemsPerPage` defaulting to 10. Pagination is
   SQL `LIMIT`/`OFFSET` plus a count, never a slice.
-- `GET /api/me/listening-stats` does not exist yet. Upstream shape:
+- `GET /api/me/listening-stats` matches the upstream shape:
   `{ totalTime, items: { "<libraryItemId>": { id, timeListening, mediaMetadata, lastUpdate } },
 days: { "YYYY-MM-DD": seconds }, dayOfWeek: { "Monday": seconds }, today, recentSessions }`.
-  Note `items`, `days` and `dayOfWeek` are objects keyed by id/date/weekday, not arrays. Compute
-  everything but `recentSessions` (limit 10) with grouped SQL aggregates.
+  `items`, `days` and `dayOfWeek` are objects keyed by id/date/weekday, not arrays. Everything but
+  `recentSessions` (limit 10) is computed with grouped SQL aggregates.
+
+Details worth preserving:
+
+- `play()`/`sync()`/`close()` read `timeListened` from the sync/close body (with a `timeListening`
+  fallback). The local-session payloads (`/api/session/local*`) use `timeListening`.
+- There is exactly one 'live' row per user+book (partial unique index), upserted atomically via
+  `ON CONFLICT`. Repeated plays of the same book therefore merge into one row and its
+  `date`/`dayOfWeek` refresh to the most recent play, whereas upstream creates a fresh row per
+  play. This day-attribution tradeoff is documented on the schema; rotating the live row on
+  `close()` would match upstream but is not done.
+- Negative client `currentTime`/`timeListening` values are clamped so a hostile payload cannot
+  trip the CHECK constraints and fail a whole batch insert.
+
+### Drizzle timestamp gotcha (important)
+
+drizzle's node-postgres driver deliberately returns raw **strings** for `sql<>` timestamp
+expressions - only schema `Column` fields get mapped back to `Date`. `sql<Date>\`max(...)\`` is a
+compile-time lie; at runtime it is a string, so calling `.getTime()` on it throws. Fix: chain
+`.mapWith(<the schema column>)` on the `sql` expression. Commit `930d61d2` fixed the author/series
+aggregates in `audiobookshelf.repository.ts` (they would have crashed on real data; the unit tests
+mocked the repository with `Date` objects so they never caught it). Use `.mapWith()` for any new
+`sql<>` timestamp aggregate.
+
+### E2E suite repair
+
+The audiobookshelf e2e suite had never been green. Two stale assumptions:
+
+- The harness global-prefix excludes predated the `/abs` RouterModule mount, so every ABS request
+  404'd. `app-harness.ts` now mirrors `main.ts`'s exclude list and the spec uses `/abs/api/...`
+  URLs.
+- The spec asserted raw integer ids before the ABS uuid id format existed; it now uses
+  `toAbsUuid(...)`. It also needed the global `audiobookshelf_enabled` app setting enabled in
+  `beforeAll` (per-library opt-in is not enough - the `AudiobookshelfEnabledGuard` checks the
+  global setting).
+
+The suite now covers listening sessions end to end: live play/sync/close, offline local-all
+upload, per-item sessions, stats aggregation shape, and derived author timestamps.
 
 ## Remaining work, in priority order
 
-### 1. Finish listening sessions and stats
-
-See "Parked work" above. This is the item in flight.
-
-### 2. Expand personalized shelves
+### 1. Expand personalized shelves
 
 Only `continue-listening` and `recently-added` are implemented. Verified against upstream
 `server/models/LibraryItem.js` -> `getPersonalizedShelves`, plus
@@ -264,7 +261,7 @@ Semantics of the missing ones:
 Every shelf query must be LIMIT/ORDER BY bounded in SQL, with counts via aggregate, and scoped by
 exposed library, visibility, audio content and content filters.
 
-### 3. Remaining response semantics
+### 2. Remaining response semantics
 
 - Item list handling reports `minified: true` unconditionally and does not implement
   `collapseseries`. Both live in `AudiobookshelfLibrariesService.getItemsPage()`.
@@ -273,7 +270,7 @@ exposed library, visibility, audio content and content filters.
   the API. Prefer upstream source and captured real-server responses over third-party API docs;
   the third-party docs were wrong about the search shape.
 
-### 4. Explicitly deferred by user decision
+### 3. Explicitly deferred by user decision
 
 These were considered this pass and deliberately excluded. Do not start them without asking:
 
@@ -289,12 +286,10 @@ These were considered this pass and deliberately excluded. Do not start them wit
 
 1. Read `CLAUDE.md`, this document, and the existing untracked `docs/handover.md` without
    modifying the latter.
-2. Confirm `git status --short` contains no unexpected files, and check `git stash list` for the
-   parked listening-sessions work before starting anything that touches
-   `audiobookshelf-progress.service.ts`, `audiobookshelf-playback.service.ts` or `me.controller.ts`.
-3. Confirm the server and database are healthy.
-4. Continue one fix or feature at a time, with one commit each.
-5. For every API change, verify route and method, DTO validation, response fields, user scope,
+2. Confirm `git status --short` contains no unexpected files, and confirm the server and database
+   are healthy.
+3. Continue one fix or feature at a time, with one commit each.
+4. For every API change, verify route and method, DTO validation, response fields, user scope,
    content filters, large-library bounds, focused tests, lint, formatting, and type-check.
 
 If work is split across parallel agents, note that `audiobookshelf.repository.ts` is the main
