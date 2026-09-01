@@ -525,8 +525,8 @@ export class AudiobookshelfRepository {
       .select({
         ...getTableColumns(schema.authors),
         numBooks: countDistinct(schema.bookAuthors.bookId),
-        addedAt: sql<Date>`min(${schema.books.addedAt})`,
-        updatedAt: sql<Date>`max(${schema.books.updatedAt})`,
+        addedAt: sql<Date>`min(${schema.books.addedAt})`.mapWith(schema.books.addedAt),
+        updatedAt: sql<Date>`max(${schema.books.updatedAt})`.mapWith(schema.books.updatedAt),
       })
       .from(schema.bookAuthors)
       .innerJoin(schema.authors, eq(schema.authors.id, schema.bookAuthors.authorId))
@@ -576,8 +576,8 @@ export class AudiobookshelfRepository {
         .select({
           ...getTableColumns(schema.authors),
           numBooks: countDistinct(schema.bookAuthors.bookId),
-          addedAt: sql<Date>`min(${schema.books.addedAt})`,
-          updatedAt: sql<Date>`max(${schema.books.updatedAt})`,
+          addedAt: sql<Date>`min(${schema.books.addedAt})`.mapWith(schema.books.addedAt),
+          updatedAt: sql<Date>`max(${schema.books.updatedAt})`.mapWith(schema.books.updatedAt),
         })
         .from(schema.bookAuthors)
         .innerJoin(schema.authors, eq(schema.authors.id, schema.bookAuthors.authorId))
@@ -788,8 +788,8 @@ export class AudiobookshelfRepository {
     const filterClauses = contentFilters ? buildContentFilterClauses(contentFilters, this.db) : [];
     const rows = await this.db
       .select({
-        addedAt: sql<Date>`min(${schema.books.addedAt})`,
-        updatedAt: sql<Date>`max(${schema.books.updatedAt})`,
+        addedAt: sql<Date>`min(${schema.books.addedAt})`.mapWith(schema.books.addedAt),
+        updatedAt: sql<Date>`max(${schema.books.updatedAt})`.mapWith(schema.books.updatedAt),
       })
       .from(schema.bookAuthors)
       .innerJoin(schema.books, eq(schema.books.id, schema.bookAuthors.bookId))
@@ -866,7 +866,7 @@ export class AudiobookshelfRepository {
       nameFilter ? this.buildLikeClause(schema.bookSeries.name, nameFilter) : undefined,
     );
     const numBooks = countDistinct(schema.bookSeriesMemberships.bookId);
-    const lastBookUpdated = sql<Date | null>`max(${schema.books.updatedAt})`;
+    const lastBookUpdated = sql<Date | null>`max(${schema.books.updatedAt})`.mapWith(schema.books.updatedAt);
     const orderColumn =
       sort === 'addedAt'
         ? schema.bookSeries.createdAt
