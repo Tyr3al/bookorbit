@@ -52,6 +52,7 @@ code you did not touch (for example Drizzle inference collapsing to `{ [x: strin
 ## Commits completed in this pass
 
 ```text
+6f8f9850 feat(server): add ABS per-file download route with permission gate
 b9d3f43b fix(server): clamp live session positions and add sessions tests
 7ebeabf6 docs: update ABS handoff for completed listening sessions
 de3bbeb9 test(server): repair audiobookshelf e2e suite and cover listening sessions
@@ -109,6 +110,16 @@ Two BookOrbit-specific deviations, both deliberate:
 
 The item-list path keeps its title-only matching: `buildTitleSearch` is unchanged and search uses a
 separate `buildBookSearchClause`.
+
+### Per-file download route
+
+Prologue downloads each audio file from `GET /api/items/:id/file/:fileId/download` and identifies
+files by their **inode** (`ino`), not the file id - upstream's `getLibraryFileWithIno` matches
+either. BookOrbit only had the whole-item `/download` route, so that URL 404'd. Commit `6f8f9850`
+added the missing route (file resolution already accepted id-or-ino via `resolveFileIdByIno`) and
+gated **both** download routes behind the `library_download` permission (403 without it), matching
+upstream's `canDownload` checks. The login response's `permissions.download` flag is what Prologue
+uses to show the download button; the server now enforces the same permission.
 
 ### Large-library query cleanup
 
