@@ -13,6 +13,15 @@ function sessionsService() {
   };
 }
 
+function openSessions() {
+  return {
+    open: vi.fn(),
+    touch: vi.fn(),
+    get: vi.fn(),
+    close: vi.fn(),
+  };
+}
+
 function user(): RequestUser {
   return {
     id: 7,
@@ -137,7 +146,12 @@ describe('AudiobookshelfPlaybackService', () => {
     const sourceItem = item();
     const itemsService = { getItem: vi.fn().mockResolvedValue(sourceItem) };
     const progressService = { getMediaProgress: vi.fn().mockResolvedValue({ currentTime: 37 }) };
-    const service = new AudiobookshelfPlaybackService(itemsService as never, progressService as never, sessionsService() as never);
+    const service = new AudiobookshelfPlaybackService(
+      itemsService as never,
+      progressService as never,
+      sessionsService() as never,
+      openSessions() as never,
+    );
 
     const result = await service.play(user(), 42, {
       deviceInfo: { deviceId: 'phone-1', clientName: 'Prologue', clientVersion: '1.0', ignored: { large: true } },
@@ -170,7 +184,12 @@ describe('AudiobookshelfPlaybackService', () => {
   it('does not build a session when the item is inaccessible', async () => {
     const itemsService = { getItem: vi.fn().mockRejectedValue(new NotFoundException()) };
     const progressService = { getMediaProgress: vi.fn() };
-    const service = new AudiobookshelfPlaybackService(itemsService as never, progressService as never, sessionsService() as never);
+    const service = new AudiobookshelfPlaybackService(
+      itemsService as never,
+      progressService as never,
+      sessionsService() as never,
+      openSessions() as never,
+    );
 
     await expect(service.play(user(), 42, {})).rejects.toBeInstanceOf(NotFoundException);
     expect(progressService.getMediaProgress).not.toHaveBeenCalled();
@@ -180,7 +199,12 @@ describe('AudiobookshelfPlaybackService', () => {
     const sourceItem = item();
     const itemsService = { getItem: vi.fn().mockResolvedValue(sourceItem) };
     const progressService = { getMediaProgress: vi.fn().mockResolvedValue({ currentTime: 120, isFinished: true }) };
-    const service = new AudiobookshelfPlaybackService(itemsService as never, progressService as never, sessionsService() as never);
+    const service = new AudiobookshelfPlaybackService(
+      itemsService as never,
+      progressService as never,
+      sessionsService() as never,
+      openSessions() as never,
+    );
 
     await expect(service.play(user(), 42, {})).resolves.toMatchObject({ startTime: 0, currentTime: 0 });
 
@@ -191,7 +215,12 @@ describe('AudiobookshelfPlaybackService', () => {
   it('syncs owned session fields through the shared progress service', async () => {
     const itemsService = { getItem: vi.fn() };
     const progressService = { updateMediaProgress: vi.fn().mockResolvedValue(undefined) };
-    const service = new AudiobookshelfPlaybackService(itemsService as never, progressService as never, sessionsService() as never);
+    const service = new AudiobookshelfPlaybackService(
+      itemsService as never,
+      progressService as never,
+      sessionsService() as never,
+      openSessions() as never,
+    );
     const currentUser = user();
 
     await service.sync(currentUser, toAbsCompositeUuid(7, 42), {
@@ -215,7 +244,7 @@ describe('AudiobookshelfPlaybackService', () => {
 
   it.each(['not-a-session', toAbsCompositeUuid(8, 42)])('rejects invalid or foreign session %s', async (sessionId) => {
     const progressService = { updateMediaProgress: vi.fn() };
-    const service = new AudiobookshelfPlaybackService({} as never, progressService as never, sessionsService() as never);
+    const service = new AudiobookshelfPlaybackService({} as never, progressService as never, sessionsService() as never, openSessions() as never);
 
     await expect(service.sync(user(), sessionId, {})).rejects.toBeInstanceOf(NotFoundException);
     expect(progressService.updateMediaProgress).not.toHaveBeenCalled();
@@ -224,7 +253,12 @@ describe('AudiobookshelfPlaybackService', () => {
   it('closes an owned session without resetting progress when the body is empty', async () => {
     const itemsService = { requireExposedBook: vi.fn().mockResolvedValue({ id: 42 }) };
     const progressService = { updateMediaProgress: vi.fn() };
-    const service = new AudiobookshelfPlaybackService(itemsService as never, progressService as never, sessionsService() as never);
+    const service = new AudiobookshelfPlaybackService(
+      itemsService as never,
+      progressService as never,
+      sessionsService() as never,
+      openSessions() as never,
+    );
 
     await expect(service.close(user(), toAbsCompositeUuid(7, 42), {})).resolves.toBeUndefined();
 
@@ -235,7 +269,12 @@ describe('AudiobookshelfPlaybackService', () => {
   it('syncs a final position when closing an owned session', async () => {
     const itemsService = { requireExposedBook: vi.fn() };
     const progressService = { updateMediaProgress: vi.fn().mockResolvedValue(undefined) };
-    const service = new AudiobookshelfPlaybackService(itemsService as never, progressService as never, sessionsService() as never);
+    const service = new AudiobookshelfPlaybackService(
+      itemsService as never,
+      progressService as never,
+      sessionsService() as never,
+      openSessions() as never,
+    );
     const currentUser = user();
 
     await service.close(currentUser, toAbsCompositeUuid(7, 42), { currentTime: 123.5, duration: 3600 });
@@ -254,7 +293,12 @@ describe('AudiobookshelfPlaybackService', () => {
   it.each(['not-a-session', toAbsCompositeUuid(8, 42)])('rejects invalid or foreign close session %s', async (sessionId) => {
     const itemsService = { requireExposedBook: vi.fn() };
     const progressService = { updateMediaProgress: vi.fn() };
-    const service = new AudiobookshelfPlaybackService(itemsService as never, progressService as never, sessionsService() as never);
+    const service = new AudiobookshelfPlaybackService(
+      itemsService as never,
+      progressService as never,
+      sessionsService() as never,
+      openSessions() as never,
+    );
 
     await expect(service.close(user(), sessionId, {})).rejects.toBeInstanceOf(NotFoundException);
     expect(itemsService.requireExposedBook).not.toHaveBeenCalled();
@@ -264,7 +308,12 @@ describe('AudiobookshelfPlaybackService', () => {
   it('does not sync a close body that has no usable position', async () => {
     const itemsService = { requireExposedBook: vi.fn().mockResolvedValue({ id: 42 }) };
     const progressService = { updateMediaProgress: vi.fn() };
-    const service = new AudiobookshelfPlaybackService(itemsService as never, progressService as never, sessionsService() as never);
+    const service = new AudiobookshelfPlaybackService(
+      itemsService as never,
+      progressService as never,
+      sessionsService() as never,
+      openSessions() as never,
+    );
 
     await expect(service.close(user(), toAbsCompositeUuid(7, 42), { timeListened: 10 })).resolves.toBeUndefined();
     expect(progressService.updateMediaProgress).not.toHaveBeenCalled();
@@ -272,7 +321,7 @@ describe('AudiobookshelfPlaybackService', () => {
 
   it('rejects an empty sync body instead of resetting progress', async () => {
     const progressService = { updateMediaProgress: vi.fn() };
-    const service = new AudiobookshelfPlaybackService({} as never, progressService as never, sessionsService() as never);
+    const service = new AudiobookshelfPlaybackService({} as never, progressService as never, sessionsService() as never, openSessions() as never);
 
     await expect(service.sync(user(), toAbsCompositeUuid(7, 42), {})).rejects.toBeInstanceOf(BadRequestException);
     expect(progressService.updateMediaProgress).not.toHaveBeenCalled();
@@ -283,7 +332,7 @@ describe('AudiobookshelfPlaybackService', () => {
     const itemsService = { getItem: vi.fn().mockResolvedValue(sourceItem) };
     const progressService = { getMediaProgress: vi.fn().mockResolvedValue({ currentTime: 37 }) };
     const sessions = sessionsService();
-    const service = new AudiobookshelfPlaybackService(itemsService as never, progressService as never, sessions as never);
+    const service = new AudiobookshelfPlaybackService(itemsService as never, progressService as never, sessions as never, openSessions() as never);
 
     await service.play(user(), 42, { mediaPlayer: 'AVPlayer' });
 
@@ -293,11 +342,29 @@ describe('AudiobookshelfPlaybackService', () => {
     );
   });
 
+  it('registers the session as open on play, refreshes it on sync, and closes it on close', async () => {
+    const sourceItem = item();
+    const itemsService = { getItem: vi.fn().mockResolvedValue(sourceItem) };
+    const progressService = { getMediaProgress: vi.fn().mockResolvedValue(undefined), updateMediaProgress: vi.fn().mockResolvedValue(undefined) };
+    const sessions = sessionsService();
+    const open = openSessions();
+    const service = new AudiobookshelfPlaybackService(itemsService as never, progressService as never, sessions as never, open as never);
+
+    await service.play(user(), 42, {});
+    expect(open.open).toHaveBeenCalledWith(toAbsCompositeUuid(7, 42), { userId: 7, bookId: 42, isSuperuser: false });
+
+    await service.sync(user(), toAbsCompositeUuid(7, 42), { currentTime: 10, timeListened: 5 });
+    expect(open.touch).toHaveBeenCalledWith(toAbsCompositeUuid(7, 42));
+
+    await service.close(user(), toAbsCompositeUuid(7, 42), { currentTime: 20 });
+    expect(open.close).toHaveBeenCalledWith(toAbsCompositeUuid(7, 42));
+  });
+
   it('accumulates listening time on sync without breaking the response when persistence fails', async () => {
     const progressService = { updateMediaProgress: vi.fn().mockResolvedValue(undefined) };
     const sessions = sessionsService();
     sessions.recordPlaybackSync.mockRejectedValue(new Error('db unavailable'));
-    const service = new AudiobookshelfPlaybackService({} as never, progressService as never, sessions as never);
+    const service = new AudiobookshelfPlaybackService({} as never, progressService as never, sessions as never, openSessions() as never);
 
     await expect(service.sync(user(), toAbsCompositeUuid(7, 42), { currentTime: 10, timeListened: 5 })).resolves.toBeUndefined();
 
@@ -307,7 +374,7 @@ describe('AudiobookshelfPlaybackService', () => {
   it('clamps a negative sync position before persisting the session', async () => {
     const progressService = { updateMediaProgress: vi.fn().mockResolvedValue(undefined) };
     const sessions = sessionsService();
-    const service = new AudiobookshelfPlaybackService({} as never, progressService as never, sessions as never);
+    const service = new AudiobookshelfPlaybackService({} as never, progressService as never, sessions as never, openSessions() as never);
 
     await expect(service.sync(user(), toAbsCompositeUuid(7, 42), { currentTime: -5, timeListened: 10 })).resolves.toBeUndefined();
 
@@ -320,7 +387,7 @@ describe('AudiobookshelfPlaybackService', () => {
     const progressService = { getMediaProgress: vi.fn().mockResolvedValue({ currentTime: 37 }) };
     const sessions = sessionsService();
     sessions.recordPlaybackStart.mockRejectedValue(new Error('db unavailable'));
-    const service = new AudiobookshelfPlaybackService(itemsService as never, progressService as never, sessions as never);
+    const service = new AudiobookshelfPlaybackService(itemsService as never, progressService as never, sessions as never, openSessions() as never);
 
     await expect(service.play(user(), 42, {})).resolves.toMatchObject({ displayTitle: 'A Book' });
   });
@@ -330,7 +397,7 @@ describe('AudiobookshelfPlaybackService', () => {
     const progressService = { updateMediaProgress: vi.fn() };
     const sessions = sessionsService();
     sessions.recordPlaybackSync.mockRejectedValue(new Error('db unavailable'));
-    const service = new AudiobookshelfPlaybackService(itemsService as never, progressService as never, sessions as never);
+    const service = new AudiobookshelfPlaybackService(itemsService as never, progressService as never, sessions as never, openSessions() as never);
 
     await expect(service.close(user(), toAbsCompositeUuid(7, 42), {})).resolves.toBeUndefined();
   });

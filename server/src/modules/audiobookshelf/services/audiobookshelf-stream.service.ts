@@ -29,6 +29,33 @@ export class AudiobookshelfStreamService {
     });
   }
 
+  /** GET /public/session/:id/track/:index - unauthenticated track stream for an open playback
+   * session (AudioBooth and similar clients). The caller has already resolved the session id to a
+   * user+book; this re-checks the book exists and its library is still exposed before serving,
+   * matching upstream's 404-when-session/access-is-gone behavior. */
+  async streamSessionTrack(
+    session: { userId: number; bookId: number; isSuperuser: boolean },
+    trackIndex: number,
+    reply: FastifyReply,
+    rangeHeader?: string,
+  ) {
+    const book = await this.repository.findBookById(session.bookId);
+    if (!book) throw new NotFoundException('Session not found');
+    const exposed = await this.repository.isLibraryExposedForUser(book.libraryId, session.userId, session.isSuperuser);
+    if (!exposed) throw new NotFoundException('Session not found');
+
+    const files = await this.repository.findAudioFilesByBookId(session.bookId);
+    const orderedFiles = [...files].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.id - b.id);
+    const file = orderedFiles[trackIndex];
+    if (!file?.absolutePath) throw new NotFoundException('Track not found');
+
+    sendFileStream(reply, file.absolutePath, file.sizeBytes ?? 0, rangeHeader, {
+      mimeType: resolveAbsAudioMimeType(file.format) ?? 'application/octet-stream',
+      filename: basename(file.absolutePath),
+      disposition: 'inline',
+    });
+  }
+
   /** GET /api/items/:id/file/:fileId/download - single audio file download (attachment). */
   async downloadFile(user: RequestUser, bookId: number, fileId: number, reply: FastifyReply) {
     const { path, size, format, originalFilename } = await this.itemsService.resolveFile(user, bookId, fileId);

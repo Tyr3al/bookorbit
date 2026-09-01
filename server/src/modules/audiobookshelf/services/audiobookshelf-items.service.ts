@@ -120,6 +120,14 @@ export class AudiobookshelfItemsService {
     return this.bookService.getCoverPath(bookId, user);
   }
 
+  /** Public cover read for GET /api/items/:id/cover (upstream serves covers unauthenticated).
+   * Only checks the book exists - no user access check, matching upstream. */
+  async getCoverPathPublic(bookId: number): Promise<string | null> {
+    const book = await this.repository.findBookById(bookId);
+    if (!book) return null;
+    return this.bookService.readCoverPath(bookId);
+  }
+
   /** File info for an audio file of an exposed item (used by /file and /download).
    * ABS clients (Prologue) build their own file URL from `audioFile.ino` rather than the
    * `contentUrl` we hand back, so a plain-integer fileId that isn't one of our own ids is

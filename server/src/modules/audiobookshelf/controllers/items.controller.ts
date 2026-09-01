@@ -5,6 +5,7 @@ import { createReadStream } from 'fs';
 import { stat } from 'fs/promises';
 
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
+import { Public } from '../../../common/decorators/public.decorator';
 import { RequirePermission } from '../../../common/decorators/require-permission.decorator';
 import type { RequestUser } from '../../../common/types/request-user';
 import { AudiobookshelfItemsService } from '../services/audiobookshelf-items.service';
@@ -46,9 +47,10 @@ export class ItemsController {
   }
 
   @Get(':id/cover')
-  async cover(@CurrentUser() user: RequestUser, @Param('id') idParam: string, @Res() reply: FastifyReply) {
+  @Public()
+  async cover(@Param('id') idParam: string, @Res() reply: FastifyReply) {
     const id = parseAbsId(idParam);
-    const coverPath = await this.itemsService.getCoverPath(user, id);
+    const coverPath = await this.itemsService.getCoverPathPublic(id);
     if (!coverPath) {
       reply.status(404).send();
       return;

@@ -268,8 +268,10 @@ describe('Audiobookshelf-compatible API', () => {
       expect(byIno.rawPayload).toEqual(byId.rawPayload);
     });
 
-    it('returns 404 for covers when none exists', async () => {
-      const response = await ctx.app.inject({ method: 'GET', url: `/abs/api/items/${bookOneId}/cover`, headers: authorized() });
+    it('serves covers without authentication (upstream public route)', async () => {
+      // The fixture books have no cover files, so the assertion is that the route is reachable
+      // without a token (404 for missing cover, not 401 for missing auth).
+      const response = await ctx.app.inject({ method: 'GET', url: `/abs/api/items/${bookOneId}/cover` });
       expect(response.statusCode).toBe(404);
     });
   });
@@ -543,6 +545,56 @@ describe('Audiobookshelf-compatible API', () => {
         headers: { authorization: `Bearer ${relogin.json().user.token}` },
       });
       expect(allowed.statusCode).toBe(200);
+    });
+  });
+
+  describe('public session streaming', () => {
+    it('streams tracks of an open session without auth and 404s unknown sessions', async () => {
+      const play = await ctx.app.inject({
+        method: 'POST',
+        url: `/abs/api/items/${bookOneId}/play`,
+        headers: { ...authorized(), 'content-type': 'application/json' },
+        payload: { deviceInfo: { deviceId: 'public-session-test', clientName: 'e2e', clientVersion: '1.0' }, mediaPlayer: 'e2e' },
+      });
+      expect(play.statusCode).toBe(200);
+      const sessionId = play.json().id as string;
+
+      const track = await ctx.app.inject({ method: 'GET', url: `/abs/public/session/${sessionId}/track/0` });
+      expect(track.statusCode).toBe(200);
+      expect(track.headers['content-type']).toContain('audio/mpeg');
+      expect(track.headers['accept-ranges']).toBe('bytes');
+
+      const ranged = await ctx.app.inject({ method: 'GET', url: `/abs/public/session/${sessionId}/track/0`, headers: { range: 'bytes=0-9' } });
+      expect(ranged.statusCode).toBe(206);
+      expect(ranged.headers['content-range']).toMatch(/^bytes 0-9\//);
+
+      const unknown = await ctx.app.inject({ method: 'GET', url: '/abs/public/session/00000000-0000-4000-8000-0000ffffffffff/track/0' });
+      expect(unknown.statusCode).toBe(404);
+
+      const badIndex = await ctx.app.inject({ method: 'GET', url: `/abs/public/session/${sessionId}/track/99` });
+      expect(badIndex.statusCode).toBe(404);
+    });
+
+    it('404s the public track route once the session is closed', async () => {
+      const play = await ctx.app.inject({
+        method: 'POST',
+        url: `/abs/api/items/${bookTwoId}/play`,
+        headers: { ...authorized(), 'content-type': 'application/json' },
+        payload: { deviceInfo: { deviceId: 'public-session-close', clientName: 'e2e', clientVersion: '1.0' }, mediaPlayer: 'e2e' },
+      });
+      expect(play.statusCode).toBe(200);
+      const sessionId = play.json().id as string;
+
+      const close = await ctx.app.inject({
+        method: 'POST',
+        url: `/abs/api/session/${sessionId}/close`,
+        headers: { ...authorized(), 'content-type': 'application/json' },
+        payload: {},
+      });
+      expect(close.statusCode).toBe(200);
+
+      const afterClose = await ctx.app.inject({ method: 'GET', url: `/abs/public/session/${sessionId}/track/0` });
+      expect(afterClose.statusCode).toBe(404);
     });
   });
 });

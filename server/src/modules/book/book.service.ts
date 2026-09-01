@@ -1257,8 +1257,15 @@ export class BookService {
   }
 
   async getCoverPath(id: number, user: RequestUser): Promise<string | null> {
-    const event = 'book.get_cover_path';
     await this.verifyBookAccess(id, user);
+    return this.readCoverPath(id, user.id);
+  }
+
+  /** Reads the cover file path off disk without any access check - used by the public ABS cover
+   * route, which matches upstream's unauthenticated GET /api/items/:id/cover. Callers must do
+   * their own existence check first. */
+  async readCoverPath(id: number, userId?: number): Promise<string | null> {
+    const event = 'book.get_cover_path';
     const dir = bookCoverDirPath(this.appDataPath, id);
     try {
       const files = await readdir(dir);
@@ -1270,7 +1277,7 @@ export class BookService {
       const errorMessage = sanitizeLogValue(err instanceof Error ? err.message : String(err));
       const pathValue = sanitizeLogValue(dir);
       this.logger.warn(
-        `[${event}] [fail] bookId=${id} userId=${user.id} path="${pathValue}" errorClass=${errorClass} error="${errorMessage}" - get cover path failed`,
+        `[${event}] [fail] bookId=${id} userId=${userId ?? 0} path="${pathValue}" errorClass=${errorClass} error="${errorMessage}" - get cover path failed`,
       );
       throw err;
     }

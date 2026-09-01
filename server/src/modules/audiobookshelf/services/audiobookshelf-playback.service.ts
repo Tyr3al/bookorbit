@@ -8,6 +8,7 @@ import type { AbsFileMetadata, AbsLibraryItem, AbsPlaybackAudioTrack, AbsPlaybac
 import { AudiobookshelfItemsService } from './audiobookshelf-items.service';
 import { AudiobookshelfProgressService, type UpdateProgressInput } from './audiobookshelf-progress.service';
 import { AudiobookshelfSessionsService } from './audiobookshelf-sessions.service';
+import { AbsOpenSessionStore } from './abs-open-session.store';
 
 /** Builds the expanded direct-play session returned by ABS's play endpoint. */
 @Injectable()
@@ -18,6 +19,7 @@ export class AudiobookshelfPlaybackService {
     private readonly itemsService: AudiobookshelfItemsService,
     private readonly progressService: AudiobookshelfProgressService,
     private readonly sessionsService: AudiobookshelfSessionsService,
+    private readonly openSessions: AbsOpenSessionStore,
   ) {}
 
   async play(user: RequestUser, bookId: number, request: unknown): Promise<AbsPlaybackSessionExpanded> {
@@ -32,6 +34,7 @@ export class AudiobookshelfPlaybackService {
       const currentTime = clampPlaybackTime(progress?.isFinished ? 0 : (progress?.currentTime ?? 0), item.media.duration);
       const now = Date.now();
       const session = this.buildSession(user, bookId, item, request, currentTime, now);
+      this.openSessions.open(session.id, { userId: user.id, bookId, isSuperuser: user.isSuperuser });
       await this.persistLiveSessionStart(user, bookId, item, session, currentTime, new Date(now));
       this.logger.log(
         `[${event}] [end] userId=${user.id} bookId=${bookId} durationMs=${Date.now() - startedAt} tracks=${session.audioTracks.length} - playback session started`,
@@ -53,6 +56,7 @@ export class AudiobookshelfPlaybackService {
     if (!hasProgressPosition(input)) throw new BadRequestException('Playback position is required');
     await this.progressService.updateMediaProgress(user, bookId, input);
     await this.persistLiveSessionSync(user, bookId, request, input);
+    this.openSessions.touch(sessionId);
   }
 
   async close(user: RequestUser, sessionId: string, request: unknown): Promise<void> {
@@ -64,6 +68,7 @@ export class AudiobookshelfPlaybackService {
       await this.itemsService.requireExposedBook(user, bookId);
     }
     await this.persistLiveSessionSync(user, bookId, request, input);
+    this.openSessions.close(sessionId);
   }
 
   private requireOwnedSession(user: RequestUser, sessionId: string): number {

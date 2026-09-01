@@ -20,6 +20,7 @@ import { AuthorsController } from './controllers/authors.controller';
 import { SeriesController } from './controllers/series.controller';
 import { CollectionsController } from './controllers/collections.controller';
 import { SessionController } from './controllers/session.controller';
+import { PublicSessionController } from './controllers/public-session.controller';
 import { LibraryItemMapperService } from './services/library-item-mapper.service';
 import { AudiobookshelfAuthService } from './services/audiobookshelf-auth.service';
 import { AudiobookshelfLibrariesService } from './services/audiobookshelf-libraries.service';
@@ -28,6 +29,7 @@ import { AudiobookshelfProgressService } from './services/audiobookshelf-progres
 import { AudiobookshelfBookmarksService } from './services/audiobookshelf-bookmarks.service';
 import { AudiobookshelfStreamService } from './services/audiobookshelf-stream.service';
 import { AudiobookshelfPlaybackService } from './services/audiobookshelf-playback.service';
+import { AbsOpenSessionStore } from './services/abs-open-session.store';
 import { AudiobookshelfAuthorsService } from './services/audiobookshelf-authors.service';
 import { AudiobookshelfSeriesService } from './services/audiobookshelf-series.service';
 import { AudiobookshelfCollectionsService } from './services/audiobookshelf-collections.service';
@@ -52,6 +54,7 @@ import { AudiobookshelfSessionsService } from './services/audiobookshelf-session
     SeriesController,
     CollectionsController,
     SessionController,
+    PublicSessionController,
   ],
   providers: [
     AudiobookshelfRepository,
@@ -72,6 +75,7 @@ import { AudiobookshelfSessionsService } from './services/audiobookshelf-session
     AudiobookshelfEnabledGuard,
     AudiobookshelfSessionsRepository,
     AudiobookshelfSessionsService,
+    AbsOpenSessionStore,
   ],
 })
 export class AudiobookshelfModule {}

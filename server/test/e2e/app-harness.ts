@@ -124,6 +124,7 @@ export async function createE2EContext(): Promise<E2EContext> {
       'abs/status',
       'abs/ping',
       'abs/api/(.*)',
+      'abs/public/(.*)',
       'abs/auth/openid',
       'abs/auth/openid/(.*)',
     ],

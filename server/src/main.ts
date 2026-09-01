@@ -81,6 +81,7 @@ async function bootstrap() {
       'abs/status',
       'abs/ping',
       'abs/api/(.*)',
+      'abs/public/(.*)',
       'abs/auth/openid',
       'abs/auth/openid/(.*)',
     ],
