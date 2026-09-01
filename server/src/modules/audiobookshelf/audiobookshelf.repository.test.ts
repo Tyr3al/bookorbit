@@ -40,6 +40,58 @@ describe('AudiobookshelfRepository', () => {
     expect(countQuery.limit).not.toHaveBeenCalled();
   });
 
+  it('folds derived addedAt/updatedAt aggregates into the author page query and results', async () => {
+    const rows = [{ id: 4, name: 'Author', numBooks: 3, addedAt: new Date(1000), updatedAt: new Date(2000) }];
+    const pageQuery = createQuery(rows);
+    const countQuery = createQuery([{ total: 1 }]);
+    const db = { select: vi.fn().mockReturnValueOnce(pageQuery).mockReturnValueOnce(countQuery) };
+    const repository = new AudiobookshelfRepository(db as never);
+
+    const result = await repository.findAuthorsWithCountsByLibrariesPage([10], undefined, 25, 0);
+
+    expect(result.rows[0]).toMatchObject({ addedAt: new Date(1000), updatedAt: new Date(2000) });
+    expect(db.select.mock.calls[0][0]).toEqual(expect.objectContaining({ addedAt: expect.anything(), updatedAt: expect.anything() }));
+  });
+
+  it('folds derived addedAt/updatedAt aggregates into the unpaginated author query', async () => {
+    const rows = [{ id: 4, name: 'Author', numBooks: 3, addedAt: new Date(1000), updatedAt: new Date(2000) }];
+    const query = createQuery(rows);
+    const db = { select: vi.fn().mockReturnValue(query) };
+    const repository = new AudiobookshelfRepository(db as never);
+
+    const result = await repository.findAuthorsWithCountsByLibraries([10]);
+
+    expect(result).toEqual(rows);
+    expect(db.select.mock.calls[0][0]).toEqual(expect.objectContaining({ addedAt: expect.anything(), updatedAt: expect.anything() }));
+  });
+
+  it('derives one author addedAt/updatedAt via a single SQL aggregate query', async () => {
+    const query = createQuery([{ addedAt: new Date(500), updatedAt: new Date(1500) }]);
+    const db = { select: vi.fn().mockReturnValue(query) };
+    const repository = new AudiobookshelfRepository(db as never);
+
+    await expect(repository.findAuthorBookStatsByLibraries(3, [10])).resolves.toEqual({
+      addedAt: new Date(500),
+      updatedAt: new Date(1500),
+    });
+  });
+
+  it('returns undefined from findAuthorBookStatsByLibraries when the author has no exposed books', async () => {
+    const query = createQuery([{ addedAt: null, updatedAt: null }]);
+    const db = { select: vi.fn().mockReturnValue(query) };
+    const repository = new AudiobookshelfRepository(db as never);
+
+    await expect(repository.findAuthorBookStatsByLibraries(3, [10])).resolves.toBeUndefined();
+  });
+
+  it('returns undefined for findAuthorBookStatsByLibraries with no libraries, without querying', async () => {
+    const db = { select: vi.fn() };
+    const repository = new AudiobookshelfRepository(db as never);
+
+    await expect(repository.findAuthorBookStatsByLibraries(3, [])).resolves.toBeUndefined();
+    expect(db.select).not.toHaveBeenCalled();
+  });
+
   it('counts audio books across libraries in SQL without returning ids', async () => {
     const countQuery = createQuery([{ count: 42 }]);
     const db = { select: vi.fn().mockReturnValue(countQuery) };

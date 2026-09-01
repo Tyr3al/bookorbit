@@ -222,6 +222,30 @@ describe('AudiobookshelfLibrariesService search', () => {
     expect(result.series).toEqual([{ series: expect.objectContaining({ name: 'Dune Saga' }), books: [{ id: toAbsUuid(1) }] }]);
   });
 
+  it('carries derived author addedAt/updatedAt into the search authors list', async () => {
+    const { service, repository } = createService();
+    repository.findAuthorsWithCountsByLibrariesPage.mockResolvedValue({
+      rows: [{ id: 2, name: 'Author', numBooks: 1, addedAt: new Date(1000), updatedAt: new Date(2000) }],
+      total: 1,
+    });
+
+    const result = await service.searchLibrary(user, 3, 'dune');
+
+    expect(result.authors).toEqual([expect.objectContaining({ addedAt: 1000, updatedAt: 2000 })]);
+  });
+
+  it('defaults search author timestamps to 0 without crashing when a row has no book stats', async () => {
+    const { service, repository } = createService();
+    repository.findAuthorsWithCountsByLibrariesPage.mockResolvedValue({
+      rows: [{ id: 2, name: 'Author', numBooks: 1 }],
+      total: 1,
+    });
+
+    const result = await service.searchLibrary(user, 3, 'dune');
+
+    expect(result.authors).toEqual([expect.objectContaining({ addedAt: 0, updatedAt: 0 })]);
+  });
+
   it('clamps the requested limit and passes it into every repository call', async () => {
     const { service, repository } = createService();
 

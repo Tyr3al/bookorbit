@@ -14,6 +14,7 @@ function createService() {
     findAuthorsWithCountsByLibrariesPage: vi.fn().mockResolvedValue({ rows: [], total: 0 }),
     findAuthorsByIds: vi.fn().mockResolvedValue([author]),
     findAuthorBookIdsByLibraries: vi.fn().mockResolvedValue([11]),
+    findAuthorBookStatsByLibraries: vi.fn().mockResolvedValue(undefined),
     findBooksByIds: vi.fn().mockResolvedValue([{ id: 11, libraryId: 10 }]),
   };
   const itemsService = { getMinifiedItemsByIds: vi.fn().mockResolvedValue([]) };
@@ -103,5 +104,50 @@ describe('AudiobookshelfAuthorsService', () => {
     repository.findAuthorBookIdsByLibraries.mockResolvedValue([]);
 
     await expect(service.getAuthor(user, 3, undefined, 99)).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('surfaces the SQL-derived addedAt/updatedAt on the author detail response', async () => {
+    const { service, repository } = createService();
+    repository.findAuthorBookStatsByLibraries.mockResolvedValue({ addedAt: new Date(1000), updatedAt: new Date(2000) });
+
+    const result = await service.getAuthor(user, 3);
+
+    expect(repository.findAuthorBookStatsByLibraries).toHaveBeenCalledWith(3, [10], user.contentFilters);
+    expect(result).toMatchObject({ addedAt: 1000, updatedAt: 2000 });
+  });
+
+  it('defaults author detail timestamps to 0 without crashing when no book stats are found', async () => {
+    const { service, repository } = createService();
+    repository.findAuthorBookStatsByLibraries.mockResolvedValue(undefined);
+
+    const result = await service.getAuthor(user, 3);
+
+    expect(result).toMatchObject({ addedAt: 0, updatedAt: 0 });
+  });
+
+  it('surfaces derived addedAt/updatedAt on the paginated author list', async () => {
+    const { service, repository } = createService();
+    repository.findAuthorsWithCountsByLibrariesPage.mockResolvedValue({
+      rows: [{ ...author, addedAt: new Date(1000), updatedAt: new Date(2000) }],
+      total: 1,
+    });
+
+    const result = await service.listLibraryAuthors(user, 10, 2, 0);
+
+    expect(result).toMatchObject({ results: [{ addedAt: 1000, updatedAt: 2000 }] });
+  });
+
+  it('surfaces derived addedAt/updatedAt on the unpaginated author list without crashing when a row has no stats', async () => {
+    const { service, repository } = createService();
+    repository.findAuthorsWithCountsByLibraries.mockResolvedValue([{ ...author, id: 4, addedAt: new Date(1000), updatedAt: new Date(2000) }, author]);
+
+    const result = await service.listLibraryAuthors(user, 10);
+
+    expect(result).toEqual({
+      authors: [
+        expect.objectContaining({ id: '00000000-0000-4000-8000-000000000004', addedAt: 1000, updatedAt: 2000 }),
+        expect.objectContaining({ id: '00000000-0000-4000-8000-000000000003', addedAt: 0, updatedAt: 0 }),
+      ],
+    });
   });
 });

@@ -75,21 +75,25 @@ export class AudiobookshelfAuthorsService {
     if (libraryId !== undefined) await this.librariesService.requireExposedLibrary(user, libraryId);
     const contentFilters = user.isSuperuser ? undefined : user.contentFilters;
     const libraryIds = libraryId === undefined ? await this.librariesService.getExposedLibraryIds(user) : [libraryId];
-    const bookIds = await this.repository.findAuthorBookIdsByLibraries(authorId, libraryIds, contentFilters);
+    const [bookIds, bookStats] = await Promise.all([
+      this.repository.findAuthorBookIdsByLibraries(authorId, libraryIds, contentFilters),
+      this.repository.findAuthorBookStatsByLibraries(authorId, libraryIds, contentFilters),
+    ]);
     if (bookIds.length === 0) throw new NotFoundException(`Author ${authorId} not found`);
+    const authorWithStats = { ...author, addedAt: bookStats?.addedAt, updatedAt: bookStats?.updatedAt };
 
     const wantsItems = include?.split(',').includes('items') ?? false;
     const wantsSeries = include?.split(',').includes('series') ?? false;
     const responseLibraryId = libraryId !== undefined ? toAbsUuid(libraryId) : await this.resolveAuthorLibraryId(bookIds);
     if (!wantsItems && !wantsSeries) {
-      return this.toAuthor(author, responseLibraryId);
+      return this.toAuthor(authorWithStats, responseLibraryId);
     }
 
     const items = await this.itemsService.getMinifiedItemsByIds(bookIds);
     const expandedLibraryId = items[0]?.libraryId ?? responseLibraryId;
 
     const result: AbsAuthorExpanded = {
-      ...this.toAuthor(author, expandedLibraryId),
+      ...this.toAuthor(authorWithStats, expandedLibraryId),
       libraryItems: items,
       series: wantsSeries ? await this.groupItemsBySeries(items, bookIds) : [],
     };
@@ -105,7 +109,15 @@ export class AudiobookshelfAuthorsService {
   }
 
   private toAuthor(
-    author: { id: number; name: string; description: string | null; sortName: string | null; hasPhoto?: boolean },
+    author: {
+      id: number;
+      name: string;
+      description: string | null;
+      sortName: string | null;
+      hasPhoto?: boolean;
+      addedAt?: Date;
+      updatedAt?: Date;
+    },
     libraryId?: string,
     numBooks?: number,
   ): AbsAuthor {
@@ -118,8 +130,10 @@ export class AudiobookshelfAuthorsService {
       name: author.name,
       description: author.description,
       imagePath: author.hasPhoto ? `/authors/${author.id}/photo.jpg` : null,
-      addedAt: 0,
-      updatedAt: 0,
+      // Authors have no timestamp columns of their own, so addedAt/updatedAt are derived from
+      // the author's exposed audio books (min/max computed in SQL) rather than stored directly.
+      addedAt: author.addedAt?.getTime() ?? 0,
+      updatedAt: author.updatedAt?.getTime() ?? 0,
       ...(libraryId !== undefined ? { libraryId } : {}),
       ...(numBooks !== undefined ? { numBooks } : {}),
       ...(isListContext ? { lastFirst: author.sortName ?? author.name } : {}),

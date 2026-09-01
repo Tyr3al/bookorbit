@@ -518,13 +518,15 @@ export class AudiobookshelfRepository {
   async findAuthorsWithCountsByLibraries(
     libraryIds: number[],
     contentFilters?: ContentFilterRules,
-  ): Promise<(schema.Author & { numBooks: number })[]> {
+  ): Promise<(schema.Author & { numBooks: number; addedAt: Date; updatedAt: Date })[]> {
     if (libraryIds.length === 0) return Promise.resolve([]);
     const filterClauses = contentFilters ? buildContentFilterClauses(contentFilters, this.db) : [];
     return this.db
       .select({
         ...getTableColumns(schema.authors),
         numBooks: countDistinct(schema.bookAuthors.bookId),
+        addedAt: sql<Date>`min(${schema.books.addedAt})`,
+        updatedAt: sql<Date>`max(${schema.books.updatedAt})`,
       })
       .from(schema.bookAuthors)
       .innerJoin(schema.authors, eq(schema.authors.id, schema.bookAuthors.authorId))
@@ -551,7 +553,7 @@ export class AudiobookshelfRepository {
     sort: AbsAuthorSort = 'name',
     sortDesc = false,
     nameFilter?: string,
-  ): Promise<{ rows: (schema.Author & { numBooks: number })[]; total: number }> {
+  ): Promise<{ rows: (schema.Author & { numBooks: number; addedAt: Date; updatedAt: Date })[]; total: number }> {
     if (libraryIds.length === 0) return { rows: [], total: 0 };
     const filterClauses = contentFilters ? buildContentFilterClauses(contentFilters, this.db) : [];
     const whereClause = and(
@@ -574,6 +576,8 @@ export class AudiobookshelfRepository {
         .select({
           ...getTableColumns(schema.authors),
           numBooks: countDistinct(schema.bookAuthors.bookId),
+          addedAt: sql<Date>`min(${schema.books.addedAt})`,
+          updatedAt: sql<Date>`max(${schema.books.updatedAt})`,
         })
         .from(schema.bookAuthors)
         .innerJoin(schema.authors, eq(schema.authors.id, schema.bookAuthors.authorId))
@@ -770,6 +774,35 @@ export class AudiobookshelfRepository {
       )
       .orderBy(asc(schema.bookAuthors.bookId));
     return rows.map((row) => row.id);
+  }
+
+  /** Added/updated timestamps derived from one author's exposed audio books - min(addedAt) and
+   * max(updatedAt) computed in SQL over the same scoping as {@link findAuthorBookIdsByLibraries}.
+   * Undefined when the author has no exposed books in scope. */
+  async findAuthorBookStatsByLibraries(
+    authorId: number,
+    libraryIds: number[],
+    contentFilters?: ContentFilterRules,
+  ): Promise<{ addedAt: Date; updatedAt: Date } | undefined> {
+    if (libraryIds.length === 0) return undefined;
+    const filterClauses = contentFilters ? buildContentFilterClauses(contentFilters, this.db) : [];
+    const rows = await this.db
+      .select({
+        addedAt: sql<Date>`min(${schema.books.addedAt})`,
+        updatedAt: sql<Date>`max(${schema.books.updatedAt})`,
+      })
+      .from(schema.bookAuthors)
+      .innerJoin(schema.books, eq(schema.books.id, schema.bookAuthors.bookId))
+      .where(
+        and(
+          eq(schema.bookAuthors.authorId, authorId),
+          inArray(schema.books.libraryId, libraryIds),
+          BOOK_VISIBLE_WHERE,
+          this.hasAudioFile(),
+          ...filterClauses,
+        ),
+      );
+    return rows[0]?.addedAt != null ? rows[0] : undefined;
   }
 
   findAuthorsByIds(authorIds: number[]): Promise<schema.Author[]> {

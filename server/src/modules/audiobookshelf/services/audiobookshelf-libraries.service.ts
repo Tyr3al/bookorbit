@@ -257,7 +257,16 @@ export class AudiobookshelfLibrariesService {
   }
 
   private toSearchAuthor(
-    author: { id: number; name: string; description: string | null; sortName: string | null; hasPhoto?: boolean; numBooks: number },
+    author: {
+      id: number;
+      name: string;
+      description: string | null;
+      sortName: string | null;
+      hasPhoto?: boolean;
+      numBooks: number;
+      addedAt?: Date;
+      updatedAt?: Date;
+    },
     libraryId: string,
   ): AbsAuthor {
     return {
@@ -266,8 +275,10 @@ export class AudiobookshelfLibrariesService {
       name: author.name,
       description: author.description,
       imagePath: author.hasPhoto ? `/authors/${author.id}/photo.jpg` : null,
-      addedAt: 0,
-      updatedAt: 0,
+      // Duplicated from AudiobookshelfAuthorsService.toAuthor to avoid a circular DI cycle -
+      // authors have no timestamp columns, so these are derived from the author's exposed books.
+      addedAt: author.addedAt?.getTime() ?? 0,
+      updatedAt: author.updatedAt?.getTime() ?? 0,
       libraryId,
       numBooks: author.numBooks,
       lastFirst: author.sortName ?? author.name,
