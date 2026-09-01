@@ -4,7 +4,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createFixtureTree, file, type FixtureTree } from './e2e/scanner/scanner-fixture-builder';
 import { ADMIN_SETUP_DTO, closeE2EContext, createE2EContext, seedLibrary, triggerAndWaitForLibraryScan, type E2EContext } from './e2e/app-harness';
-import { bookMetadata, libraries, users, collections, collectionBooks } from '../src/db/schema';
+import { toAbsUuid } from '../src/common/utils/abs-id.utils';
+import { appSettings, authors, bookAuthors, bookMetadata, libraries, users, collections, collectionBooks } from '../src/db/schema';
 
 describe('Audiobookshelf-compatible API', () => {
   let ctx: E2EContext;
@@ -19,6 +20,10 @@ describe('Audiobookshelf-compatible API', () => {
 
   beforeAll(async () => {
     ctx = await createE2EContext();
+    await ctx.db
+      .insert(appSettings)
+      .values({ key: 'audiobookshelf_enabled', value: 'true' })
+      .onConflictDoUpdate({ target: appSettings.key, set: { value: 'true' } });
     fixture = await createFixtureTree([
       file('A Collection/Book One/track-1.mp3'),
       file('A Collection/Book One/track-2.mp3'),
@@ -76,7 +81,7 @@ describe('Audiobookshelf-compatible API', () => {
   });
 
   function absLogin(username: string, password: string) {
-    return ctx.app.inject({ method: 'POST', url: '/login', payload: { username, password } });
+    return ctx.app.inject({ method: 'POST', url: '/abs/login', payload: { username, password } });
   }
 
   function authorized(headers: Record<string, string> = {}) {
@@ -97,7 +102,7 @@ describe('Audiobookshelf-compatible API', () => {
       expect(typeof body.user.token).toBe('string');
       expect(Array.isArray(body.user.mediaProgress)).toBe(true);
       expect(body.user.permissions.download).toBe(true);
-      expect(body.userDefaultLibraryId).toBe(String(absLibraryId));
+      expect(body.userDefaultLibraryId).toBe(toAbsUuid(absLibraryId));
       expect(body.serverSettings).toBeDefined();
 
       absToken = body.user.token;
@@ -109,42 +114,42 @@ describe('Audiobookshelf-compatible API', () => {
     });
 
     it('rejects a login payload with unknown fields', async () => {
-      const response = await ctx.app.inject({ method: 'POST', url: '/login', payload: { username: 'x', password: 'y', extra: true } });
+      const response = await ctx.app.inject({ method: 'POST', url: '/abs/login', payload: { username: 'x', password: 'y', extra: true } });
       expect(response.statusCode).toBe(400);
     });
   });
 
   describe('session endpoints', () => {
     it('validates the token via GET /api/authorize', async () => {
-      const response = await ctx.app.inject({ method: 'GET', url: '/api/authorize', headers: authorized() });
+      const response = await ctx.app.inject({ method: 'GET', url: '/abs/api/authorize', headers: authorized() });
       expect(response.statusCode).toBe(200);
       expect(response.json().user.username).toBe(ADMIN_SETUP_DTO.username);
     });
 
     it('returns the user via GET /api/me', async () => {
-      const response = await ctx.app.inject({ method: 'GET', url: '/api/me', headers: authorized() });
+      const response = await ctx.app.inject({ method: 'GET', url: '/abs/api/me', headers: authorized() });
       expect(response.statusCode).toBe(200);
       expect(response.json().username).toBe(ADMIN_SETUP_DTO.username);
     });
 
     it('rejects requests without a token', async () => {
-      const response = await ctx.app.inject({ method: 'GET', url: '/api/me' });
+      const response = await ctx.app.inject({ method: 'GET', url: '/abs/api/me' });
       expect(response.statusCode).toBe(401);
     });
   });
 
   describe('libraries and items', () => {
     it('lists only opted-in libraries', async () => {
-      const response = await ctx.app.inject({ method: 'GET', url: '/api/libraries', headers: authorized() });
+      const response = await ctx.app.inject({ method: 'GET', url: '/abs/api/libraries', headers: authorized() });
       expect(response.statusCode).toBe(200);
       const body = response.json();
       expect(body.libraries).toHaveLength(1);
-      expect(body.libraries[0]).toMatchObject({ id: String(absLibraryId), name: 'Audiobooks', mediaType: 'book' });
+      expect(body.libraries[0]).toMatchObject({ id: toAbsUuid(absLibraryId), name: 'Audiobooks', mediaType: 'book' });
       expect(body.libraries[0].folders).toHaveLength(1);
     });
 
     it('paginates items and excludes non-audio books', async () => {
-      const response = await ctx.app.inject({ method: 'GET', url: `/api/libraries/${absLibraryId}/items?limit=1&page=0`, headers: authorized() });
+      const response = await ctx.app.inject({ method: 'GET', url: `/abs/api/libraries/${absLibraryId}/items?limit=1&page=0`, headers: authorized() });
       expect(response.statusCode).toBe(200);
       const body = response.json();
       expect(body.total).toBe(2);
@@ -153,33 +158,33 @@ describe('Audiobookshelf-compatible API', () => {
       expect(body.results).toHaveLength(1);
       for (const item of body.results) {
         expect(item.mediaType).toBe('book');
-        expect(item.media.audioFiles.length).toBeGreaterThan(0);
-        expect(item.media.audioFiles[0].metadata.filename.endsWith('.mp3')).toBe(true);
+        expect(item.media.numAudioFiles).toBeGreaterThan(0);
+        expect(item.media.audioFiles).toBeUndefined();
       }
     });
 
     it('searches items by title query', async () => {
-      const response = await ctx.app.inject({ method: 'GET', url: `/api/libraries/${absLibraryId}/items?search=Book`, headers: authorized() });
+      const response = await ctx.app.inject({ method: 'GET', url: `/abs/api/libraries/${absLibraryId}/items?search=Book`, headers: authorized() });
       expect(response.statusCode).toBe(200);
       expect(response.json().total).toBe(2);
     });
 
     it('returns 404 for unknown or non-opted-in libraries', async () => {
-      const unknown = await ctx.app.inject({ method: 'GET', url: '/api/libraries/999999/items', headers: authorized() });
+      const unknown = await ctx.app.inject({ method: 'GET', url: '/abs/api/libraries/999999/items', headers: authorized() });
       expect(unknown.statusCode).toBe(404);
-      const hidden = await ctx.app.inject({ method: 'GET', url: `/api/libraries/${hiddenLibraryId}/items`, headers: authorized() });
+      const hidden = await ctx.app.inject({ method: 'GET', url: `/abs/api/libraries/${hiddenLibraryId}/items`, headers: authorized() });
       expect(hidden.statusCode).toBe(404);
     });
 
     it('returns a full LibraryItem with tracks and content urls', async () => {
-      const response = await ctx.app.inject({ method: 'GET', url: `/api/items/${bookOneId}`, headers: authorized() });
+      const response = await ctx.app.inject({ method: 'GET', url: `/abs/api/items/${bookOneId}`, headers: authorized() });
       expect(response.statusCode).toBe(200);
       const item = response.json();
-      expect(item.id).toBe(String(bookOneId));
+      expect(item.id).toBe(toAbsUuid(bookOneId));
       expect(item.isFile).toBe(false);
       expect(item.media.tracks).toHaveLength(2);
-      expect(item.media.tracks[0].contentUrl).toBe(`/api/items/${bookOneId}/file/${fileOneId}`);
-      expect(item.media.tracks[1].contentUrl).toBe(`/api/items/${bookOneId}/file/${fileTwoId}`);
+      expect(item.media.tracks[0].contentUrl).toBe(`/abs/api/items/${toAbsUuid(bookOneId)}/file/${toAbsUuid(fileOneId)}`);
+      expect(item.media.tracks[1].contentUrl).toBe(`/abs/api/items/${toAbsUuid(bookOneId)}/file/${toAbsUuid(fileTwoId)}`);
       // Durations are null under the mocked metadata service, so offsets stay at 0; the
       // mapper unit test covers cumulative offsets with real durations.
       expect(typeof item.media.tracks[1].startOffset).toBe('number');
@@ -189,7 +194,7 @@ describe('Audiobookshelf-compatible API', () => {
     it('hides items that have no audio files', async () => {
       const ebook = await ctx.db.query.books.findFirst({ where: (books, { like }) => like(books.folderPath, '%ebook%') });
       if (ebook) {
-        const response = await ctx.app.inject({ method: 'GET', url: `/api/items/${ebook.id}`, headers: authorized() });
+        const response = await ctx.app.inject({ method: 'GET', url: `/abs/api/items/${ebook.id}`, headers: authorized() });
         expect(response.statusCode).toBe(404);
       }
     });
@@ -197,7 +202,7 @@ describe('Audiobookshelf-compatible API', () => {
 
   describe('streaming and download', () => {
     it('serves a file without a Range header', async () => {
-      const response = await ctx.app.inject({ method: 'GET', url: `/api/items/${bookOneId}/file/${fileOneId}`, headers: authorized() });
+      const response = await ctx.app.inject({ method: 'GET', url: `/abs/api/items/${bookOneId}/file/${fileOneId}`, headers: authorized() });
       expect(response.statusCode).toBe(200);
       expect(response.headers['content-type']).toContain('audio/mpeg');
       expect(response.headers['accept-ranges']).toBe('bytes');
@@ -206,7 +211,7 @@ describe('Audiobookshelf-compatible API', () => {
     it('honors Range requests with 206 and Content-Range', async () => {
       const response = await ctx.app.inject({
         method: 'GET',
-        url: `/api/items/${bookOneId}/file/${fileOneId}`,
+        url: `/abs/api/items/${bookOneId}/file/${fileOneId}`,
         headers: { ...authorized(), range: 'bytes=0-9' },
       });
       expect(response.statusCode).toBe(206);
@@ -218,14 +223,14 @@ describe('Audiobookshelf-compatible API', () => {
     it('rejects unsatisfiable ranges with 416', async () => {
       const response = await ctx.app.inject({
         method: 'GET',
-        url: `/api/items/${bookOneId}/file/${fileOneId}`,
+        url: `/abs/api/items/${bookOneId}/file/${fileOneId}`,
         headers: { ...authorized(), range: 'bytes=999999999-' },
       });
       expect(response.statusCode).toBe(416);
     });
 
     it('zips multi-file books on /download', async () => {
-      const response = await ctx.app.inject({ method: 'GET', url: `/api/items/${bookOneId}/download`, headers: authorized() });
+      const response = await ctx.app.inject({ method: 'GET', url: `/abs/api/items/${bookOneId}/download`, headers: authorized() });
       expect(response.statusCode).toBe(200);
       expect(response.headers['content-type']).toContain('application/zip');
       // PK zip magic
@@ -233,13 +238,13 @@ describe('Audiobookshelf-compatible API', () => {
     });
 
     it('streams single-file books directly on /download', async () => {
-      const response = await ctx.app.inject({ method: 'GET', url: `/api/items/${bookTwoId}/download`, headers: authorized() });
+      const response = await ctx.app.inject({ method: 'GET', url: `/abs/api/items/${bookTwoId}/download`, headers: authorized() });
       expect(response.statusCode).toBe(200);
       expect(response.headers['content-type']).toContain('audio/mpeg');
     });
 
     it('returns 404 for covers when none exists', async () => {
-      const response = await ctx.app.inject({ method: 'GET', url: `/api/items/${bookOneId}/cover`, headers: authorized() });
+      const response = await ctx.app.inject({ method: 'GET', url: `/abs/api/items/${bookOneId}/cover`, headers: authorized() });
       expect(response.statusCode).toBe(404);
     });
   });
@@ -248,58 +253,201 @@ describe('Audiobookshelf-compatible API', () => {
     it('writes progress via PATCH and reads it back via GET /api/me', async () => {
       const patch = await ctx.app.inject({
         method: 'PATCH',
-        url: `/api/me/progress/${bookOneId}`,
+        url: `/abs/api/me/progress/${bookOneId}`,
         headers: { ...authorized(), 'content-type': 'application/json' },
         payload: { currentTime: 15, duration: 400, progress: 0.0375, isFinished: false },
       });
       expect(patch.statusCode).toBe(200);
-      expect(patch.json().libraryItemId).toBe(String(bookOneId));
+      expect(patch.json().libraryItemId).toBe(toAbsUuid(bookOneId));
 
-      const me = await ctx.app.inject({ method: 'GET', url: '/api/me', headers: authorized() });
-      const progress = me.json().mediaProgress.find((p: { libraryItemId: string }) => p.libraryItemId === String(bookOneId));
+      const me = await ctx.app.inject({ method: 'GET', url: '/abs/api/me', headers: authorized() });
+      const progress = me.json().mediaProgress.find((p: { libraryItemId: string }) => p.libraryItemId === toAbsUuid(bookOneId));
       expect(progress).toBeDefined();
       expect(progress.currentTime).toBe(15);
       expect(progress.isFinished).toBe(false);
 
-      const single = await ctx.app.inject({ method: 'GET', url: `/api/me/progress/${bookOneId}`, headers: authorized() });
+      const single = await ctx.app.inject({ method: 'GET', url: `/abs/api/me/progress/${bookOneId}`, headers: authorized() });
       expect(single.statusCode).toBe(200);
       expect(single.json().currentTime).toBe(15);
     });
 
     it('returns null for progress of an item with no recorded progress', async () => {
-      const response = await ctx.app.inject({ method: 'GET', url: `/api/me/progress/${bookTwoId}`, headers: authorized() });
+      const response = await ctx.app.inject({ method: 'GET', url: `/abs/api/me/progress/${bookTwoId}`, headers: authorized() });
       expect(response.statusCode).toBe(200);
       expect(response.body).toBe('null');
     });
   });
 
-  describe('authors, series, and collections', () => {
-    it('lists authors of a library', async () => {
-      const response = await ctx.app.inject({ method: 'GET', url: `/api/libraries/${absLibraryId}/authors`, headers: authorized() });
+  describe('listening sessions and stats', () => {
+    it('records a live session across play/sync/close and reads it back', async () => {
+      const play = await ctx.app.inject({
+        method: 'POST',
+        url: `/abs/api/items/${bookOneId}/play`,
+        headers: { ...authorized(), 'content-type': 'application/json' },
+        payload: { deviceInfo: { deviceId: 'e2e-device', clientName: 'E2E', clientVersion: '1.0' }, mediaPlayer: 'E2EPlayer' },
+      });
+      expect(play.statusCode).toBe(200);
+      const sessionId = play.json().id as string;
+
+      const sync = await ctx.app.inject({
+        method: 'POST',
+        url: `/abs/api/session/${sessionId}/sync`,
+        headers: { ...authorized(), 'content-type': 'application/json' },
+        payload: { currentTime: 30, duration: 400, timeListened: 20 },
+      });
+      expect(sync.statusCode).toBe(200);
+
+      const close = await ctx.app.inject({
+        method: 'POST',
+        url: `/abs/api/session/${sessionId}/close`,
+        headers: { ...authorized(), 'content-type': 'application/json' },
+        payload: { currentTime: 50, duration: 400, timeListened: 30 },
+      });
+      expect(close.statusCode).toBe(200);
+
+      const list = await ctx.app.inject({ method: 'GET', url: '/abs/api/me/listening-sessions', headers: authorized() });
+      expect(list.statusCode).toBe(200);
+      const envelope = list.json();
+      expect(envelope).toHaveProperty('total');
+      expect(envelope).toHaveProperty('numPages');
+      expect(envelope).toHaveProperty('page');
+      expect(envelope).toHaveProperty('itemsPerPage');
+      expect(Array.isArray(envelope.sessions)).toBe(true);
+
+      const session = envelope.sessions.find((s: { libraryItemId: string }) => s.libraryItemId === toAbsUuid(bookOneId));
+      expect(session).toBeDefined();
+      expect(session).toMatchObject({
+        libraryItemId: toAbsUuid(bookOneId),
+        bookId: toAbsUuid(bookOneId),
+        displayTitle: 'Book One',
+        mediaType: 'book',
+        episodeId: null,
+        timeListening: 50,
+        currentTime: 50,
+      });
+      expect(typeof session.id).toBe('string');
+      expect(typeof session.startedAt).toBe('number');
+      expect(typeof session.updatedAt).toBe('number');
+    });
+
+    it('persists offline sessions from /api/session/local-all', async () => {
+      const now = Date.now();
+      const response = await ctx.app.inject({
+        method: 'POST',
+        url: '/abs/api/session/local-all',
+        headers: { ...authorized(), 'content-type': 'application/json' },
+        payload: [
+          {
+            libraryItemId: toAbsUuid(bookTwoId),
+            currentTime: 12,
+            duration: 300,
+            timeListening: 75,
+            displayTitle: 'Book Two',
+            displayAuthor: 'An Author',
+            mediaPlayer: 'AVPlayer',
+            deviceInfo: { deviceId: 'e2e-local' },
+            startedAt: now - 60_000,
+            updatedAt: now - 30_000,
+          },
+        ],
+      });
       expect(response.statusCode).toBe(200);
-      expect(response.json()).toHaveProperty('authors');
+
+      const list = await ctx.app.inject({ method: 'GET', url: '/abs/api/me/listening-sessions', headers: authorized() });
+      const session = list.json().sessions.find((s: { libraryItemId: string }) => s.libraryItemId === toAbsUuid(bookTwoId));
+      expect(session).toBeDefined();
+      expect(session).toMatchObject({
+        libraryItemId: toAbsUuid(bookTwoId),
+        displayTitle: 'Book Two',
+        displayAuthor: 'An Author',
+        mediaPlayer: 'AVPlayer',
+        timeListening: 75,
+        currentTime: 12,
+      });
+    });
+
+    it('filters listening sessions by library item and 404s unknown items', async () => {
+      const response = await ctx.app.inject({ method: 'GET', url: `/abs/api/me/item/listening-sessions/${bookOneId}`, headers: authorized() });
+      expect(response.statusCode).toBe(200);
+      const envelope = response.json();
+      expect(envelope.numPages).toBe(Math.ceil(envelope.total / envelope.itemsPerPage));
+      expect(envelope.sessions.length).toBeGreaterThan(0);
+      for (const session of envelope.sessions) {
+        expect(session.libraryItemId).toBe(toAbsUuid(bookOneId));
+      }
+
+      const unknown = await ctx.app.inject({ method: 'GET', url: '/abs/api/me/item/listening-sessions/999999', headers: authorized() });
+      expect(unknown.statusCode).toBe(404);
+    });
+
+    it('aggregates listening stats in the upstream shape', async () => {
+      const response = await ctx.app.inject({ method: 'GET', url: '/abs/api/me/listening-stats', headers: authorized() });
+      expect(response.statusCode).toBe(200);
+      const stats = response.json();
+      expect(stats).toHaveProperty('totalTime');
+      expect(stats).toHaveProperty('items');
+      expect(stats).toHaveProperty('days');
+      expect(stats).toHaveProperty('dayOfWeek');
+      expect(stats).toHaveProperty('today');
+      expect(Array.isArray(stats.recentSessions)).toBe(true);
+
+      const item = stats.items[toAbsUuid(bookOneId)];
+      expect(item).toBeDefined();
+      expect(item.id).toBe(toAbsUuid(bookOneId));
+      expect(item.timeListening).toBe(50);
+      expect(typeof item.lastUpdate).toBe('number');
+      expect(typeof item.mediaMetadata).toBe('object');
+
+      // The admin user also owns sessions written by earlier e2e runs, so use lower bounds.
+      expect(stats.totalTime).toBeGreaterThanOrEqual(125); // 50 live + 75 local
+      expect(stats.today).toBeGreaterThanOrEqual(50);
+      expect(Object.keys(stats.days).length).toBeGreaterThan(0);
+      expect(Object.keys(stats.dayOfWeek).length).toBeGreaterThan(0);
+      const localNow = new Date();
+      const todayKey = `${localNow.getFullYear()}-${String(localNow.getMonth() + 1).padStart(2, '0')}-${String(localNow.getDate()).padStart(2, '0')}`;
+      expect(stats.days).toHaveProperty(todayKey);
+    });
+  });
+
+  describe('authors, series, and collections', () => {
+    it('lists authors of a library with derived timestamps', async () => {
+      const [author] = await ctx.db.insert(authors).values({ name: 'Ada Lovelace' }).returning({ id: authors.id });
+      await ctx.db.insert(bookAuthors).values({ bookId: bookOneId, authorId: author.id, displayOrder: 0 });
+
+      const response = await ctx.app.inject({ method: 'GET', url: `/abs/api/libraries/${absLibraryId}/authors`, headers: authorized() });
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(Array.isArray(body.authors)).toBe(true);
+      const mapped = body.authors.find((a: { id: string }) => a.id === toAbsUuid(author.id));
+      expect(mapped).toBeDefined();
+      // addedAt/updatedAt are SQL-derived from the author's books and must be epoch numbers, not strings.
+      expect(typeof mapped.addedAt).toBe('number');
+      expect(typeof mapped.updatedAt).toBe('number');
+      expect(mapped.addedAt).toBeGreaterThan(0);
     });
 
     it('lists series of a library', async () => {
-      const response = await ctx.app.inject({ method: 'GET', url: `/api/libraries/${absLibraryId}/series`, headers: authorized() });
+      const response = await ctx.app.inject({ method: 'GET', url: `/abs/api/libraries/${absLibraryId}/series`, headers: authorized() });
       expect(response.statusCode).toBe(200);
-      expect(response.json()).toHaveProperty('series');
+      const body = response.json();
+      expect(Array.isArray(body.results)).toBe(true);
+      expect(typeof body.total).toBe('number');
     });
 
     it('exposes the user collections with only exposed audio items', async () => {
       const [collection] = await ctx.db.insert(collections).values({ userId: 1, name: 'Test Shelf' }).returning({ id: collections.id });
       await ctx.db.insert(collectionBooks).values({ collectionId: collection.id, bookId: bookOneId });
 
-      const list = await ctx.app.inject({ method: 'GET', url: '/api/collections', headers: authorized() });
+      const list = await ctx.app.inject({ method: 'GET', url: '/abs/api/collections', headers: authorized() });
       expect(list.statusCode).toBe(200);
       expect(list.json().collections).toHaveLength(1);
-      expect(list.json().collections[0]).toMatchObject({ id: String(collection.id), name: 'Test Shelf' });
+      expect(list.json().collections[0]).toMatchObject({ id: toAbsUuid(collection.id), name: 'Test Shelf' });
       expect(list.json().collections[0].books).toHaveLength(1);
-      expect(list.json().collections[0].books[0].id).toBe(String(bookOneId));
+      expect(list.json().collections[0].books[0].id).toBe(toAbsUuid(bookOneId));
 
-      const single = await ctx.app.inject({ method: 'GET', url: `/api/collections/${collection.id}`, headers: authorized() });
+      const single = await ctx.app.inject({ method: 'GET', url: `/abs/api/collections/${collection.id}`, headers: authorized() });
       expect(single.statusCode).toBe(200);
-      expect(single.json().books[0].id).toBe(String(bookOneId));
+      expect(single.json().books[0].id).toBe(toAbsUuid(bookOneId));
     });
   });
 
@@ -320,10 +468,10 @@ describe('Audiobookshelf-compatible API', () => {
       expect(login.statusCode).toBe(200);
       const outsiderToken = login.json().user.token;
 
-      const libraries = await ctx.app.inject({ method: 'GET', url: '/api/libraries', headers: { authorization: `Bearer ${outsiderToken}` } });
-      expect(libraries.json()).toEqual([]);
+      const libraries = await ctx.app.inject({ method: 'GET', url: '/abs/api/libraries', headers: { authorization: `Bearer ${outsiderToken}` } });
+      expect(libraries.json().libraries).toEqual([]);
 
-      const item = await ctx.app.inject({ method: 'GET', url: `/api/items/${bookOneId}`, headers: { authorization: `Bearer ${outsiderToken}` } });
+      const item = await ctx.app.inject({ method: 'GET', url: `/abs/api/items/${bookOneId}`, headers: { authorization: `Bearer ${outsiderToken}` } });
       expect(item.statusCode).toBe(404);
     });
   });

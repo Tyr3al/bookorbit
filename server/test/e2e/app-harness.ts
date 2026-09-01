@@ -116,7 +116,17 @@ export async function createE2EContext(): Promise<E2EContext> {
 
   const app = moduleFixture.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
   app.setGlobalPrefix('api/v1', {
-    exclude: ['api/kobo/:deviceToken/(.*)', 'api/v3/(.*)', 'api/UserStorage/(.*)', 'login', 'api/(.*)'],
+    exclude: [
+      'api/kobo/:deviceToken/(.*)',
+      'api/v3/(.*)',
+      'api/UserStorage/(.*)',
+      'abs/login',
+      'abs/status',
+      'abs/ping',
+      'abs/api/(.*)',
+      'abs/auth/openid',
+      'abs/auth/openid/(.*)',
+    ],
   });
   app.useGlobalPipes(
     new ValidationPipe({
