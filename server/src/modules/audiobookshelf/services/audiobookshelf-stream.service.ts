@@ -29,6 +29,16 @@ export class AudiobookshelfStreamService {
     });
   }
 
+  /** GET /api/items/:id/file/:fileId/download - single audio file download (attachment). */
+  async downloadFile(user: RequestUser, bookId: number, fileId: number, reply: FastifyReply) {
+    const { path, size, format, originalFilename } = await this.itemsService.resolveFile(user, bookId, fileId);
+    sendFileStream(reply, path, size, undefined, {
+      mimeType: resolveAbsAudioMimeType(format) ?? 'application/octet-stream',
+      filename: originalFilename,
+      disposition: 'attachment',
+    });
+  }
+
   /** GET /api/items/:id/download - single file stream (Range-capable) or a zip of all audio files. */
   async download(user: RequestUser, bookId: number, reply: FastifyReply, rangeHeader?: string) {
     await this.itemsService.requireExposedBook(user, bookId);

@@ -5,7 +5,18 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createFixtureTree, file, type FixtureTree } from './e2e/scanner/scanner-fixture-builder';
 import { ADMIN_SETUP_DTO, closeE2EContext, createE2EContext, seedLibrary, triggerAndWaitForLibraryScan, type E2EContext } from './e2e/app-harness';
 import { toAbsUuid } from '../src/common/utils/abs-id.utils';
-import { appSettings, authors, bookAuthors, bookMetadata, libraries, users, collections, collectionBooks } from '../src/db/schema';
+import {
+  appSettings,
+  authors,
+  bookAuthors,
+  bookMetadata,
+  libraries,
+  userLibraryAccess,
+  userPermissions,
+  users,
+  collections,
+  collectionBooks,
+} from '../src/db/schema';
 
 describe('Audiobookshelf-compatible API', () => {
   let ctx: E2EContext;
@@ -243,6 +254,20 @@ describe('Audiobookshelf-compatible API', () => {
       expect(response.headers['content-type']).toContain('audio/mpeg');
     });
 
+    it('downloads a single file via /file/:fileId/download by id or ino', async () => {
+      const byId = await ctx.app.inject({ method: 'GET', url: `/abs/api/items/${bookOneId}/file/${fileOneId}/download`, headers: authorized() });
+      expect(byId.statusCode).toBe(200);
+      expect(byId.headers['content-type']).toContain('audio/mpeg');
+      expect(byId.headers['content-disposition']).toContain('attachment');
+
+      const file = await ctx.db.query.bookFiles.findFirst({ where: (bookFiles, { eq }) => eq(bookFiles.id, fileOneId) });
+      expect(file).toBeDefined();
+      // Prologue builds download urls from the file's ino, matching upstream getLibraryFileWithIno.
+      const byIno = await ctx.app.inject({ method: 'GET', url: `/abs/api/items/${bookOneId}/file/${file!.ino}/download`, headers: authorized() });
+      expect(byIno.statusCode).toBe(200);
+      expect(byIno.rawPayload).toEqual(byId.rawPayload);
+    });
+
     it('returns 404 for covers when none exists', async () => {
       const response = await ctx.app.inject({ method: 'GET', url: `/abs/api/items/${bookOneId}/cover`, headers: authorized() });
       expect(response.statusCode).toBe(404);
@@ -473,6 +498,51 @@ describe('Audiobookshelf-compatible API', () => {
 
       const item = await ctx.app.inject({ method: 'GET', url: `/abs/api/items/${bookOneId}`, headers: { authorization: `Bearer ${outsiderToken}` } });
       expect(item.statusCode).toBe(404);
+    });
+
+    it('gates download routes on the library_download permission', async () => {
+      const passwordHash = await hash('Downloader123', 4);
+      const [downloader] = await ctx.db
+        .insert(users)
+        .values({
+          username: 'abs-downloader',
+          name: 'ABS Downloader',
+          email: 'abs-downloader@example.com',
+          passwordHash,
+          isSuperuser: false,
+          isDefaultPassword: false,
+          provisioningMethod: 'local',
+        })
+        .returning({ id: users.id });
+      await ctx.db.insert(userLibraryAccess).values({ userId: downloader.id, libraryId: absLibraryId, accessLevel: 'viewer' });
+
+      const login = await absLogin('abs-downloader', 'Downloader123');
+      expect(login.statusCode).toBe(200);
+      expect(login.json().user.permissions.download).toBe(false);
+      const token = login.json().user.token;
+
+      const denied = await ctx.app.inject({
+        method: 'GET',
+        url: `/abs/api/items/${bookTwoId}/download`,
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(denied.statusCode).toBe(403);
+      const deniedFile = await ctx.app.inject({
+        method: 'GET',
+        url: `/abs/api/items/${bookTwoId}/file/${fileTwoId}/download`,
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(deniedFile.statusCode).toBe(403);
+
+      await ctx.db.insert(userPermissions).values({ userId: downloader.id, permissionName: 'library_download' });
+      const relogin = await absLogin('abs-downloader', 'Downloader123');
+      expect(relogin.json().user.permissions.download).toBe(true);
+      const allowed = await ctx.app.inject({
+        method: 'GET',
+        url: `/abs/api/items/${bookTwoId}/download`,
+        headers: { authorization: `Bearer ${relogin.json().user.token}` },
+      });
+      expect(allowed.statusCode).toBe(200);
     });
   });
 });

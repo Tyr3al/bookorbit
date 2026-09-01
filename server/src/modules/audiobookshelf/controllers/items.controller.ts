@@ -1,9 +1,11 @@
 import { Body, Controller, Get, Headers, HttpCode, HttpStatus, Param, Post, Query, Res, UseGuards } from '@nestjs/common';
+import { Permission } from '@bookorbit/types';
 import type { FastifyReply } from 'fastify';
 import { createReadStream } from 'fs';
 import { stat } from 'fs/promises';
 
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
+import { RequirePermission } from '../../../common/decorators/require-permission.decorator';
 import type { RequestUser } from '../../../common/types/request-user';
 import { AudiobookshelfItemsService } from '../services/audiobookshelf-items.service';
 import { AudiobookshelfStreamService } from '../services/audiobookshelf-stream.service';
@@ -60,8 +62,15 @@ export class ItemsController {
   }
 
   @Get(':id/download')
+  @RequirePermission(Permission.LibraryDownload)
   download(@CurrentUser() user: RequestUser, @Param('id') id: string, @Res() reply: FastifyReply, @Headers('range') range?: string) {
     return this.streamService.download(user, parseAbsId(id), reply, range);
+  }
+
+  @Get(':id/file/:fileId/download')
+  @RequirePermission(Permission.LibraryDownload)
+  fileDownload(@CurrentUser() user: RequestUser, @Param('id') id: string, @Param('fileId') fileId: string, @Res() reply: FastifyReply) {
+    return this.streamService.downloadFile(user, parseAbsId(id), parseAbsId(fileId), reply);
   }
 
   @Get(':id/file/:fileId')
