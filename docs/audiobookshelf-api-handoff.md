@@ -52,6 +52,8 @@ code you did not touch (for example Drizzle inference collapsing to `{ [x: strin
 ## Commits completed in this pass
 
 ```text
+b9d3f43b fix(server): clamp live session positions and add sessions tests
+7ebeabf6 docs: update ABS handoff for completed listening sessions
 de3bbeb9 test(server): repair audiobookshelf e2e suite and cover listening sessions
 930d61d2 fix(server): return real Dates from ABS timestamp aggregates
 30b1b1ac feat(server): persist ABS listening sessions and stats
@@ -188,7 +190,12 @@ Details worth preserving:
   play. This day-attribution tradeoff is documented on the schema; rotating the live row on
   `close()` would match upstream but is not done.
 - Negative client `currentTime`/`timeListening` values are clamped so a hostile payload cannot
-  trip the CHECK constraints and fail a whole batch insert.
+  trip the CHECK constraints and fail a whole batch insert. The clamp happens at every boundary
+  that writes rows: `persistLiveSessionSync` (live sync/close), `toLocalSessionInput` (local
+  batch), and `recordLocalSessions` (persistence boundary, so `currentTime`/`startTime`/
+  `timeListening` - all three back CHECK constraints - stay non-negative even if a caller changes
+  later). `AudiobookshelfSessionsService` has unit tests pinning the clamps, date-field
+  derivation, pagination bounds, the uuid-keyed stats envelope, and the item-route scope check.
 
 ### Drizzle timestamp gotcha (important)
 
