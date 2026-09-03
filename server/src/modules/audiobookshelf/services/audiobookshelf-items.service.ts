@@ -3,27 +3,27 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import type { Book } from '../../../db/schema';
 import { BookService } from '../../book/book.service';
 import { AudiobookshelfRepository } from '../audiobookshelf.repository';
-import type { AbsLibraryItem, AbsLibraryItemMinified } from '../audiobookshelf.types';
+import type { AudiobookshelfLibraryItem, AudiobookshelfLibraryItemMinified } from '../audiobookshelf.types';
 import {
-  LibraryItemMapperService,
+  AudiobookshelfLibraryItemMapperService,
   type MapLibraryItemInput,
   type MapperAuthorRow,
   type MapperNarratorRow,
   type MapperSeriesRow,
-} from './library-item-mapper.service';
+} from './audiobookshelf-library-item-mapper.service';
 import type { RequestUser } from '../../../common/types/request-user';
-import { parseAbsId } from '../pipes/abs-id.pipe';
+import { parseAudiobookshelfId } from '../pipes/audiobookshelf-id.pipe';
 
 @Injectable()
 export class AudiobookshelfItemsService {
   constructor(
     private readonly repository: AudiobookshelfRepository,
-    private readonly mapper: LibraryItemMapperService,
+    private readonly mapper: AudiobookshelfLibraryItemMapperService,
     private readonly bookService: BookService,
   ) {}
 
   /** One item by id; 404 unless the book is exposed (opted-in library, user access, has audio). */
-  async getItem(user: RequestUser, bookId: number): Promise<AbsLibraryItem> {
+  async getItem(user: RequestUser, bookId: number): Promise<AudiobookshelfLibraryItem> {
     await this.requireExposedBook(user, bookId);
     const items = await this.getItemsByIds([bookId]);
     if (items.length === 0) throw new NotFoundException(`Book ${bookId} not found`);
@@ -31,24 +31,24 @@ export class AudiobookshelfItemsService {
   }
 
   /** Maps book ids to LibraryItem payloads, preserving input order. Batched, no N+1. */
-  async getItemsByIds(bookIds: number[]): Promise<AbsLibraryItem[]> {
+  async getItemsByIds(bookIds: number[]): Promise<AudiobookshelfLibraryItem[]> {
     return this.mapBookIds(bookIds, (input) => this.mapper.toLibraryItem(input));
   }
 
   /** Real ABS's leaner list/search shape - used everywhere except `GET /api/items/:id`. */
-  async getMinifiedItemsByIds(bookIds: number[]): Promise<AbsLibraryItemMinified[]> {
+  async getMinifiedItemsByIds(bookIds: number[]): Promise<AudiobookshelfLibraryItemMinified[]> {
     return this.mapBookIds(bookIds, (input) => this.mapper.toLibraryItemMinified(input));
   }
 
   /** ABS POST /api/items/batch/get - validates and maps a bounded all-or-nothing batch. */
-  async getBatchItems(user: RequestUser, libraryItemIds: string[]): Promise<AbsLibraryItem[]> {
+  async getBatchItems(user: RequestUser, libraryItemIds: string[]): Promise<AudiobookshelfLibraryItem[]> {
     if (!Array.isArray(libraryItemIds) || libraryItemIds.length === 0 || libraryItemIds.length > 100) {
       throw new BadRequestException('libraryItemIds must contain between 1 and 100 ids');
     }
 
     let bookIds: number[];
     try {
-      bookIds = libraryItemIds.map((id) => parseAbsId(id));
+      bookIds = libraryItemIds.map((id) => parseAudiobookshelfId(id));
     } catch {
       throw new BadRequestException('libraryItemIds contains an invalid id');
     }

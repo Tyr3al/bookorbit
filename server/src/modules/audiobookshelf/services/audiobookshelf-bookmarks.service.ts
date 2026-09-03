@@ -1,18 +1,18 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 
 import type { RequestUser } from '../../../common/types/request-user';
-import { toAbsUuid } from '../../../common/utils/abs-id.utils';
+import { toAudiobookshelfUuid } from '../../../common/utils/audiobookshelf-id.utils';
 import { BookmarkRepository } from '../../bookmark/bookmark.repository';
 import { AudiobookshelfRepository } from '../audiobookshelf.repository';
 
-export interface AbsBookmark {
+export interface AudiobookshelfBookmark {
   libraryItemId: string;
   title: string;
   time: number;
   createdAt: number;
 }
 
-type AbsBookmarkUser = Pick<RequestUser, 'id' | 'isSuperuser'> & { contentFilters?: RequestUser['contentFilters'] };
+type AudiobookshelfBookmarkUser = Pick<RequestUser, 'id' | 'isSuperuser'> & { contentFilters?: RequestUser['contentFilters'] };
 
 @Injectable()
 export class AudiobookshelfBookmarksService {
@@ -21,39 +21,39 @@ export class AudiobookshelfBookmarksService {
     private readonly audiobookshelfRepository: AudiobookshelfRepository,
   ) {}
 
-  async getBookmarks(user: AbsBookmarkUser): Promise<{ bookmarks: AbsBookmark[] }> {
+  async getBookmarks(user: AudiobookshelfBookmarkUser): Promise<{ bookmarks: AudiobookshelfBookmark[] }> {
     const rows = await this.audiobookshelfRepository.findBookmarksForAudiobookshelfUser(user);
-    return { bookmarks: rows.map((row) => this.toAbsBookmark(row)) };
+    return { bookmarks: rows.map((row) => this.toAudiobookshelfBookmark(row)) };
   }
 
-  async getBookmarksForItem(user: RequestUser, bookId: number): Promise<{ bookmarks: AbsBookmark[] }> {
+  async getBookmarksForItem(user: RequestUser, bookId: number): Promise<{ bookmarks: AudiobookshelfBookmark[] }> {
     await this.requireExposedBook(user, bookId);
     const rows = await this.bookmarkRepository.findByBookId(bookId, user.id);
-    return { bookmarks: rows.filter((row) => row.positionSeconds !== null).map((row) => this.toAbsBookmark(row)) };
+    return { bookmarks: rows.filter((row) => row.positionSeconds !== null).map((row) => this.toAudiobookshelfBookmark(row)) };
   }
 
-  async createBookmark(user: RequestUser, bookId: number, time: number, title: string): Promise<AbsBookmark> {
+  async createBookmark(user: RequestUser, bookId: number, time: number, title: string): Promise<AudiobookshelfBookmark> {
     await this.requireExposedBook(user, bookId);
     const existing = await this.bookmarkRepository.findLiveAudioByTime(user.id, bookId, time);
-    if (existing) return this.toAbsBookmark(existing);
+    if (existing) return this.toAudiobookshelfBookmark(existing);
 
     const created = await this.bookmarkRepository.createAudio(user.id, bookId, time, title);
-    if (created) return this.toAbsBookmark(created);
+    if (created) return this.toAudiobookshelfBookmark(created);
 
     const restored = await this.bookmarkRepository.restoreAudioAtTime(user.id, bookId, time, title);
-    if (restored) return this.toAbsBookmark(restored);
+    if (restored) return this.toAudiobookshelfBookmark(restored);
 
     const concurrent = await this.bookmarkRepository.findLiveAudioByTime(user.id, bookId, time);
-    if (concurrent) return this.toAbsBookmark(concurrent);
+    if (concurrent) return this.toAudiobookshelfBookmark(concurrent);
     throw new ConflictException('Unable to create bookmark');
   }
 
-  async updateBookmark(user: RequestUser, bookId: number, time: number, title: string): Promise<AbsBookmark> {
+  async updateBookmark(user: RequestUser, bookId: number, time: number, title: string): Promise<AudiobookshelfBookmark> {
     await this.requireExposedBook(user, bookId);
     const existing = await this.bookmarkRepository.findLiveAudioByTime(user.id, bookId, time);
     if (!existing) throw new NotFoundException('Bookmark not found');
     const updated = await this.bookmarkRepository.updateAudioTitle(user.id, bookId, time, title);
-    return this.toAbsBookmark(updated ?? existing);
+    return this.toAudiobookshelfBookmark(updated ?? existing);
   }
 
   async deleteBookmark(user: RequestUser, bookId: number, time: number): Promise<void> {
@@ -69,9 +69,9 @@ export class AudiobookshelfBookmarksService {
     }
   }
 
-  private toAbsBookmark(row: { bookId: number; title: string; positionSeconds: number | null; createdAt: Date }): AbsBookmark {
+  private toAudiobookshelfBookmark(row: { bookId: number; title: string; positionSeconds: number | null; createdAt: Date }): AudiobookshelfBookmark {
     return {
-      libraryItemId: toAbsUuid(row.bookId),
+      libraryItemId: toAudiobookshelfUuid(row.bookId),
       title: row.title,
       time: row.positionSeconds ?? 0,
       createdAt: row.createdAt.getTime(),

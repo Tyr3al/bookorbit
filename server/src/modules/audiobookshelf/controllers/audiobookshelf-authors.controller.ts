@@ -6,23 +6,23 @@ import { stat } from 'fs/promises';
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
 import type { RequestUser } from '../../../common/types/request-user';
 import { AudiobookshelfAuthorsService } from '../services/audiobookshelf-authors.service';
-import { parseAbsId } from '../pipes/abs-id.pipe';
+import { parseAudiobookshelfId } from '../pipes/audiobookshelf-id.pipe';
 import { imageContentTypeFromPath } from '../../../common/image-content-type';
 import { AudiobookshelfEnabledGuard } from '../audiobookshelf-enabled.guard';
 
 @Controller('api/authors')
 @UseGuards(AudiobookshelfEnabledGuard)
-export class AuthorsController {
+export class AudiobookshelfAuthorsController {
   constructor(private readonly authorsService: AudiobookshelfAuthorsService) {}
 
   @Get(':id')
   getAuthor(@CurrentUser() user: RequestUser, @Param('id') id: string, @Query('include') include?: string) {
-    return this.authorsService.getAuthor(user, parseAbsId(id), include);
+    return this.authorsService.getAuthor(user, parseAudiobookshelfId(id), include);
   }
 
   @Get(':id/image')
   async image(@CurrentUser() user: RequestUser, @Param('id') id: string, @Res() reply: FastifyReply) {
-    const imagePath = await this.authorsService.getImagePath(user, parseAbsId(id));
+    const imagePath = await this.authorsService.getImagePath(user, parseAudiobookshelfId(id));
     if (!imagePath) {
       reply.status(404).send();
       return;

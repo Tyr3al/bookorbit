@@ -2,9 +2,16 @@ import { Injectable } from '@nestjs/common';
 import { basename } from 'path';
 
 import type { Book, BookFile, BookMetadata, BookSeries, Narrator, Author } from '../../../db/schema';
-import { ABS_BASE_PATH, ABS_SERVER_VERSION, resolveAbsAudioMimeType } from '../audiobookshelf.constants';
-import type { AbsAudioFile, AbsBookMedia, AbsChapter, AbsLibraryItem, AbsLibraryItemMinified, AbsTrack } from '../audiobookshelf.types';
-import { toAbsSeriesUuid, toAbsUuid } from '../../../common/utils/abs-id.utils';
+import { AUDIOBOOKSHELF_BASE_PATH, AUDIOBOOKSHELF_SERVER_VERSION, resolveAudiobookshelfAudioMimeType } from '../audiobookshelf.constants';
+import type {
+  AudiobookshelfAudioFile,
+  AudiobookshelfBookMedia,
+  AudiobookshelfChapter,
+  AudiobookshelfLibraryItem,
+  AudiobookshelfLibraryItemMinified,
+  AudiobookshelfTrack,
+} from '../audiobookshelf.types';
+import { toAudiobookshelfSeriesUuid, toAudiobookshelfUuid } from '../../../common/utils/audiobookshelf-id.utils';
 
 export interface MapperAuthorRow extends Author {
   bookId: number;
@@ -33,10 +40,10 @@ export interface MapLibraryItemInput {
 
 /** Converts BookOrbit book rows into Audiobookshelf LibraryItem payloads. */
 @Injectable()
-export class LibraryItemMapperService {
-  toLibraryItem(input: MapLibraryItemInput): AbsLibraryItem {
+export class AudiobookshelfLibraryItemMapperService {
+  toLibraryItem(input: MapLibraryItemInput): AudiobookshelfLibraryItem {
     const { book, metadata, audioFiles, authors, narrators, series, genres } = input;
-    const bookId = toAbsUuid(book.id);
+    const bookId = toAudiobookshelfUuid(book.id);
     const orderedFiles = [...audioFiles].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.id - b.id);
 
     const duration = metadata?.durationSeconds ?? sumDurations(orderedFiles);
@@ -56,9 +63,9 @@ export class LibraryItemMapperService {
       title: metadata?.title ?? '',
       titleIgnorePrefix: metadata?.title ?? '',
       subtitle: metadata?.subtitle ?? null,
-      authors: authors.map((author) => ({ id: toAbsUuid(author.id), name: author.name })),
+      authors: authors.map((author) => ({ id: toAudiobookshelfUuid(author.id), name: author.name })),
       narrators: narrators.map((n) => n.name),
-      series: series.map((s) => ({ id: toAbsSeriesUuid(s.id), name: s.name, sequence: s.seriesIndex })),
+      series: series.map((s) => ({ id: toAudiobookshelfSeriesUuid(s.id), name: s.name, sequence: s.seriesIndex })),
       genres: genres.map((g) => g.name),
       publishedYear: metadata?.publishedYear != null ? String(metadata.publishedYear) : null,
       publishedDate: metadata?.publishedDate ?? null,
@@ -76,7 +83,7 @@ export class LibraryItemMapperService {
       seriesName,
     };
 
-    const media: AbsBookMedia = {
+    const media: AudiobookshelfBookMedia = {
       id: bookId,
       libraryItemId: bookId,
       metadata: absMetadata,
@@ -100,8 +107,8 @@ export class LibraryItemMapperService {
       id: bookId,
       ino: firstFile ? String(firstFile.ino) : '0',
       oldLibraryItemId: null,
-      libraryId: toAbsUuid(book.libraryId),
-      folderId: toAbsUuid(book.libraryFolderId),
+      libraryId: toAudiobookshelfUuid(book.libraryId),
+      folderId: toAudiobookshelfUuid(book.libraryFolderId),
       path: book.folderPath,
       relPath: firstFile?.relPath ?? basename(book.folderPath),
       isFile: orderedFiles.length === 1,
@@ -111,7 +118,7 @@ export class LibraryItemMapperService {
       addedAt: book.addedAt.getTime(),
       updatedAt: book.updatedAt.getTime(),
       lastScan: book.updatedAt.getTime(),
-      scanVersion: ABS_SERVER_VERSION,
+      scanVersion: AUDIOBOOKSHELF_SERVER_VERSION,
       isMissing: book.status === 'missing',
       isInvalid: false,
       mediaType: 'book',
@@ -131,7 +138,7 @@ export class LibraryItemMapperService {
 
   /** Real ABS uses this leaner shape (no per-file/track/chapter/author-id detail) for paginated
    * list and search results; `GET /api/items/:id` alone returns the full expanded item. */
-  toLibraryItemMinified(input: MapLibraryItemInput): AbsLibraryItemMinified {
+  toLibraryItemMinified(input: MapLibraryItemInput): AudiobookshelfLibraryItemMinified {
     const full = this.toLibraryItem(input);
     return {
       id: full.id,
@@ -184,8 +191,8 @@ export class LibraryItemMapperService {
     };
   }
 
-  private mapAudioFile(file: BookFile, index: number): AbsAudioFile {
-    const mimeType = resolveAbsAudioMimeType(file.format) ?? 'application/octet-stream';
+  private mapAudioFile(file: BookFile, index: number): AudiobookshelfAudioFile {
+    const mimeType = resolveAudiobookshelfAudioMimeType(file.format) ?? 'application/octet-stream';
     // Real ABS's client models several probe-derived fields (bitRate/codec/timeBase/channels/
     // channelLayout) as non-optional, so a best-effort estimate stands in for values BookOrbit
     // doesn't store from its own scan.
@@ -218,14 +225,14 @@ export class LibraryItemMapperService {
     };
   }
 
-  private mapTracks(bookId: string, orderedFiles: BookFile[]): AbsTrack[] {
+  private mapTracks(bookId: string, orderedFiles: BookFile[]): AudiobookshelfTrack[] {
     let startOffset = 0;
     return orderedFiles.map((file, index) => {
-      const track: AbsTrack = {
+      const track: AudiobookshelfTrack = {
         ...this.mapAudioFile(file, index),
         title: basename(file.absolutePath),
         startOffset,
-        contentUrl: `${ABS_BASE_PATH}/api/items/${bookId}/file/${toAbsUuid(file.id)}`,
+        contentUrl: `${AUDIOBOOKSHELF_BASE_PATH}/api/items/${bookId}/file/${toAudiobookshelfUuid(file.id)}`,
       };
       startOffset += file.durationSeconds ?? 0;
       return track;
@@ -252,7 +259,7 @@ export class LibraryItemMapperService {
    * ABS wants `{ id, start, end, title }` with times in seconds; each chapter ends where the
    * next starts, and the last chapter ends at the total duration.
    */
-  private mapChapters(metadata: BookMetadata | undefined, totalDuration: number | null, orderedFiles: BookFile[]): AbsChapter[] {
+  private mapChapters(metadata: BookMetadata | undefined, totalDuration: number | null, orderedFiles: BookFile[]): AudiobookshelfChapter[] {
     const raw = metadata?.chapters;
     if (Array.isArray(raw) && raw.length > 0) {
       return raw.map((chapter, index) => {

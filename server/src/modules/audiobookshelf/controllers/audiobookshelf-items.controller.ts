@@ -11,14 +11,14 @@ import type { RequestUser } from '../../../common/types/request-user';
 import { AudiobookshelfItemsService } from '../services/audiobookshelf-items.service';
 import { AudiobookshelfStreamService } from '../services/audiobookshelf-stream.service';
 import { AudiobookshelfProgressService } from '../services/audiobookshelf-progress.service';
-import { parseAbsId } from '../pipes/abs-id.pipe';
+import { parseAudiobookshelfId } from '../pipes/audiobookshelf-id.pipe';
 import { AudiobookshelfEnabledGuard } from '../audiobookshelf-enabled.guard';
 import { AudiobookshelfPlaybackService } from '../services/audiobookshelf-playback.service';
-import { GetAbsItemsBatchDto } from '../dto/get-abs-items-batch.dto';
+import { GetAudiobookshelfItemsBatchDto } from '../dto/get-audiobookshelf-items-batch.dto';
 
 @Controller('api/items')
 @UseGuards(AudiobookshelfEnabledGuard)
-export class ItemsController {
+export class AudiobookshelfItemsController {
   constructor(
     private readonly itemsService: AudiobookshelfItemsService,
     private readonly streamService: AudiobookshelfStreamService,
@@ -28,13 +28,13 @@ export class ItemsController {
 
   @Post('batch/get')
   @HttpCode(HttpStatus.OK)
-  async getBatch(@CurrentUser() user: RequestUser, @Body() dto: GetAbsItemsBatchDto) {
+  async getBatch(@CurrentUser() user: RequestUser, @Body() dto: GetAudiobookshelfItemsBatchDto) {
     return { libraryItems: await this.itemsService.getBatchItems(user, dto.libraryItemIds) };
   }
 
   @Get(':id')
   async getItem(@CurrentUser() user: RequestUser, @Param('id') id: string, @Query('include') include?: string) {
-    const bookId = parseAbsId(id);
+    const bookId = parseAudiobookshelfId(id);
     const item = await this.itemsService.getItem(user, bookId);
     if (!include?.split(',').includes('progress')) return item;
     return { ...item, userMediaProgress: await this.progressService.getMediaProgress(user, bookId) };
@@ -43,13 +43,13 @@ export class ItemsController {
   @Post(':id/play')
   @HttpCode(HttpStatus.OK)
   play(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() body: unknown) {
-    return this.playbackService.play(user, parseAbsId(id), body);
+    return this.playbackService.play(user, parseAudiobookshelfId(id), body);
   }
 
   @Get(':id/cover')
   @Public()
   async cover(@Param('id') idParam: string, @Res() reply: FastifyReply) {
-    const id = parseAbsId(idParam);
+    const id = parseAudiobookshelfId(idParam);
     const coverPath = await this.itemsService.getCoverPathPublic(id);
     if (!coverPath) {
       reply.status(404).send();
@@ -66,13 +66,13 @@ export class ItemsController {
   @Get(':id/download')
   @RequirePermission(Permission.LibraryDownload)
   download(@CurrentUser() user: RequestUser, @Param('id') id: string, @Res() reply: FastifyReply, @Headers('range') range?: string) {
-    return this.streamService.download(user, parseAbsId(id), reply, range);
+    return this.streamService.download(user, parseAudiobookshelfId(id), reply, range);
   }
 
   @Get(':id/file/:fileId/download')
   @RequirePermission(Permission.LibraryDownload)
   fileDownload(@CurrentUser() user: RequestUser, @Param('id') id: string, @Param('fileId') fileId: string, @Res() reply: FastifyReply) {
-    return this.streamService.downloadFile(user, parseAbsId(id), parseAbsId(fileId), reply);
+    return this.streamService.downloadFile(user, parseAudiobookshelfId(id), parseAudiobookshelfId(fileId), reply);
   }
 
   @Get(':id/file/:fileId')
@@ -83,6 +83,6 @@ export class ItemsController {
     @Res() reply: FastifyReply,
     @Headers('range') range?: string,
   ) {
-    return this.streamService.streamFile(user, parseAbsId(id), parseAbsId(fileId), reply, range);
+    return this.streamService.streamFile(user, parseAudiobookshelfId(id), parseAudiobookshelfId(fileId), reply, range);
   }
 }

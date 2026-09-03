@@ -7,7 +7,7 @@ import { AudiobookshelfEnabledGuard } from '../audiobookshelf-enabled.guard';
 @Controller('ping')
 @Public()
 @UseGuards(AudiobookshelfEnabledGuard)
-export class PingController {
+export class AudiobookshelfPingController {
   @Get()
   ping() {
     return { success: true };

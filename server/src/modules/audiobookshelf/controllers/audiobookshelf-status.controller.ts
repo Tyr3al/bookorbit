@@ -1,7 +1,7 @@
 import { Controller, Get, UseGuards } from '@nestjs/common';
 
 import { Public } from '../../../common/decorators/public.decorator';
-import { ABS_SERVER_VERSION } from '../audiobookshelf.constants';
+import { AUDIOBOOKSHELF_SERVER_VERSION } from '../audiobookshelf.constants';
 import { AudiobookshelfEnabledGuard } from '../audiobookshelf-enabled.guard';
 
 /**
@@ -13,12 +13,12 @@ import { AudiobookshelfEnabledGuard } from '../audiobookshelf-enabled.guard';
 @Controller('status')
 @Public()
 @UseGuards(AudiobookshelfEnabledGuard)
-export class StatusController {
+export class AudiobookshelfStatusController {
   @Get()
   status() {
     return {
       app: 'audiobookshelf',
-      serverVersion: ABS_SERVER_VERSION,
+      serverVersion: AUDIOBOOKSHELF_SERVER_VERSION,
       isInit: true,
       language: 'en-us',
       authMethods: ['local'],

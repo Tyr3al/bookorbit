@@ -7,7 +7,7 @@ import { sendFileStream } from '../../../common/utils/range-stream.utils';
 import { sanitizeLogValue } from '../../../common/utils/log-sanitize.utils';
 import type { RequestUser } from '../../../common/types/request-user';
 import { AudiobookshelfRepository } from '../audiobookshelf.repository';
-import { resolveAbsAudioMimeType } from '../audiobookshelf.constants';
+import { resolveAudiobookshelfAudioMimeType } from '../audiobookshelf.constants';
 import { AudiobookshelfItemsService } from './audiobookshelf-items.service';
 
 @Injectable()
@@ -23,7 +23,7 @@ export class AudiobookshelfStreamService {
   async streamFile(user: RequestUser, bookId: number, fileId: number, reply: FastifyReply, rangeHeader?: string) {
     const { path, size, format, originalFilename } = await this.itemsService.resolveFile(user, bookId, fileId);
     sendFileStream(reply, path, size, rangeHeader, {
-      mimeType: resolveAbsAudioMimeType(format) ?? 'application/octet-stream',
+      mimeType: resolveAudiobookshelfAudioMimeType(format) ?? 'application/octet-stream',
       filename: originalFilename,
       disposition: 'inline',
     });
@@ -50,7 +50,7 @@ export class AudiobookshelfStreamService {
     if (!file?.absolutePath) throw new NotFoundException('Track not found');
 
     sendFileStream(reply, file.absolutePath, file.sizeBytes ?? 0, rangeHeader, {
-      mimeType: resolveAbsAudioMimeType(file.format) ?? 'application/octet-stream',
+      mimeType: resolveAudiobookshelfAudioMimeType(file.format) ?? 'application/octet-stream',
       filename: basename(file.absolutePath),
       disposition: 'inline',
     });
@@ -60,7 +60,7 @@ export class AudiobookshelfStreamService {
   async downloadFile(user: RequestUser, bookId: number, fileId: number, reply: FastifyReply) {
     const { path, size, format, originalFilename } = await this.itemsService.resolveFile(user, bookId, fileId);
     sendFileStream(reply, path, size, undefined, {
-      mimeType: resolveAbsAudioMimeType(format) ?? 'application/octet-stream',
+      mimeType: resolveAudiobookshelfAudioMimeType(format) ?? 'application/octet-stream',
       filename: originalFilename,
       disposition: 'attachment',
     });
@@ -76,7 +76,7 @@ export class AudiobookshelfStreamService {
     if (orderedFiles.length === 1) {
       const { path, size, format, originalFilename } = await this.itemsService.resolveFile(user, bookId, orderedFiles[0].id);
       sendFileStream(reply, path, size, rangeHeader, {
-        mimeType: resolveAbsAudioMimeType(format) ?? 'application/octet-stream',
+        mimeType: resolveAudiobookshelfAudioMimeType(format) ?? 'application/octet-stream',
         filename: originalFilename,
         disposition: 'attachment',
       });

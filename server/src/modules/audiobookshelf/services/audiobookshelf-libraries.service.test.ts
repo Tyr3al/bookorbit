@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { RequestUser } from '../../../common/types/request-user';
-import { toAbsUuid } from '../../../common/utils/abs-id.utils';
+import { toAudiobookshelfUuid } from '../../../common/utils/audiobookshelf-id.utils';
 import { AudiobookshelfLibrariesService } from './audiobookshelf-libraries.service';
 
 const user = { id: 7, isSuperuser: false, contentFilters: {} } as RequestUser;
@@ -98,7 +98,9 @@ describe('AudiobookshelfLibrariesService personalized shelves', () => {
     repository.countItemsInProgressForAudiobookshelfUser.mockResolvedValue(4);
     repository.findAudioBookIds.mockResolvedValue([2]);
     repository.countAudioBooks.mockResolvedValue(8);
-    itemsService.getMinifiedItemsByIds.mockImplementation((bookIds: number[]) => Promise.resolve(bookIds.map((id) => ({ id: toAbsUuid(id) }))));
+    itemsService.getMinifiedItemsByIds.mockImplementation((bookIds: number[]) =>
+      Promise.resolve(bookIds.map((id) => ({ id: toAudiobookshelfUuid(id) }))),
+    );
 
     await expect(service.getPersonalized(user, 3, 20)).resolves.toEqual([
       {
@@ -106,7 +108,7 @@ describe('AudiobookshelfLibrariesService personalized shelves', () => {
         label: 'Continue Listening',
         labelStringKey: 'LabelContinueListening',
         type: 'book',
-        entities: [{ id: toAbsUuid(1), progressLastUpdate: 3000 }],
+        entities: [{ id: toAudiobookshelfUuid(1), progressLastUpdate: 3000 }],
         total: 4,
       },
       {
@@ -114,7 +116,7 @@ describe('AudiobookshelfLibrariesService personalized shelves', () => {
         label: 'Recently Added',
         labelStringKey: 'LabelRecentlyAdded',
         type: 'book',
-        entities: [{ id: toAbsUuid(2) }],
+        entities: [{ id: toAudiobookshelfUuid(2) }],
         total: 8,
       },
     ]);
@@ -177,7 +179,7 @@ describe('AudiobookshelfLibrariesService search', () => {
   it('returns the six upstream keys, wraps books as libraryItem, and clamps the limit into every category query', async () => {
     const { service, repository, itemsService } = createService();
     repository.findAudioBookSearchIds.mockResolvedValue([1]);
-    itemsService.getItemsByIds.mockResolvedValue([{ id: toAbsUuid(1) }]);
+    itemsService.getItemsByIds.mockResolvedValue([{ id: toAudiobookshelfUuid(1) }]);
     repository.findAuthorsWithCountsByLibrariesPage.mockResolvedValue({ rows: [{ id: 2, name: 'Author', numBooks: 1 }], total: 1 });
     repository.findNarratorsWithCountsByLibraries.mockResolvedValue([{ id: 3, name: 'Narrator', numBooks: 1 }]);
     repository.findGenresWithCountsByLibraries.mockResolvedValue([{ name: 'Sci-Fi', numItems: 1 }]);
@@ -186,7 +188,7 @@ describe('AudiobookshelfLibrariesService search', () => {
     const result = await service.searchLibrary(user, 3, 'dune', 5000);
 
     expect(result).toEqual({
-      book: [{ libraryItem: { id: toAbsUuid(1) } }],
+      book: [{ libraryItem: { id: toAudiobookshelfUuid(1) } }],
       narrators: [{ name: 'Narrator', numBooks: 1 }],
       tags: [{ name: 'favorite', numItems: 1 }],
       genres: [{ name: 'Sci-Fi', numItems: 1 }],
@@ -215,11 +217,11 @@ describe('AudiobookshelfLibrariesService search', () => {
     const { service, repository, itemsService } = createService();
     repository.findSeriesByLibrariesPage.mockResolvedValue({ rows: [{ id: 10, name: 'Dune Saga' }], total: 1 });
     repository.findSeriesMembershipBookIdsByLibraries.mockResolvedValue([{ seriesId: 10, bookId: 1 }]);
-    itemsService.getMinifiedItemsByIds.mockResolvedValue([{ id: toAbsUuid(1) }]);
+    itemsService.getMinifiedItemsByIds.mockResolvedValue([{ id: toAudiobookshelfUuid(1) }]);
 
     const result = await service.searchLibrary(user, 3, 'dune');
 
-    expect(result.series).toEqual([{ series: expect.objectContaining({ name: 'Dune Saga' }), books: [{ id: toAbsUuid(1) }] }]);
+    expect(result.series).toEqual([{ series: expect.objectContaining({ name: 'Dune Saga' }), books: [{ id: toAudiobookshelfUuid(1) }] }]);
   });
 
   it('carries derived author addedAt/updatedAt into the search authors list', async () => {

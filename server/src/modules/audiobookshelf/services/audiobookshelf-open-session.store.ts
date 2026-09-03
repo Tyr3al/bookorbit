@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 
-export interface AbsOpenSession {
+export interface AudiobookshelfOpenSession {
   userId: number;
   bookId: number;
   isSuperuser: boolean;
@@ -19,22 +19,22 @@ export interface AbsOpenSession {
  * (36h) and are refreshed on sync.
  */
 @Injectable()
-export class AbsOpenSessionStore {
-  private readonly sessions = new Map<string, AbsOpenSession & { expiresAt: number }>();
+export class AudiobookshelfOpenSessionStore {
+  private readonly sessions = new Map<string, AudiobookshelfOpenSession & { expiresAt: number }>();
 
   private static readonly TTL_MS = 36 * 60 * 60 * 1000;
 
-  open(sessionId: string, session: AbsOpenSession): void {
-    this.sessions.set(sessionId, { ...session, expiresAt: Date.now() + AbsOpenSessionStore.TTL_MS });
+  open(sessionId: string, session: AudiobookshelfOpenSession): void {
+    this.sessions.set(sessionId, { ...session, expiresAt: Date.now() + AudiobookshelfOpenSessionStore.TTL_MS });
   }
 
   /** Refreshes the expiry of an open session on sync/close activity. */
   touch(sessionId: string): void {
     const entry = this.sessions.get(sessionId);
-    if (entry) entry.expiresAt = Date.now() + AbsOpenSessionStore.TTL_MS;
+    if (entry) entry.expiresAt = Date.now() + AudiobookshelfOpenSessionStore.TTL_MS;
   }
 
-  get(sessionId: string): AbsOpenSession | null {
+  get(sessionId: string): AudiobookshelfOpenSession | null {
     const entry = this.sessions.get(sessionId);
     if (!entry) return null;
     if (entry.expiresAt < Date.now()) {

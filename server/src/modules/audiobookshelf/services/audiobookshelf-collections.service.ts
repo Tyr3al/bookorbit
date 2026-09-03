@@ -3,9 +3,9 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { AudiobookshelfRepository } from '../audiobookshelf.repository';
 import { AudiobookshelfItemsService } from './audiobookshelf-items.service';
 import { AudiobookshelfLibrariesService } from './audiobookshelf-libraries.service';
-import type { AbsCollection, AbsPaginatedCollections } from '../audiobookshelf.types';
+import type { AudiobookshelfCollection, AudiobookshelfPaginatedCollections } from '../audiobookshelf.types';
 import type { RequestUser } from '../../../common/types/request-user';
-import { fromAbsUuid, toAbsUuid } from '../../../common/utils/abs-id.utils';
+import { fromAudiobookshelfUuid, toAudiobookshelfUuid } from '../../../common/utils/audiobookshelf-id.utils';
 
 @Injectable()
 export class AudiobookshelfCollectionsService {
@@ -16,13 +16,13 @@ export class AudiobookshelfCollectionsService {
   ) {}
 
   /** GET /api/collections - the user's own collections, books filtered to exposed audio items. */
-  async listCollections(user: RequestUser): Promise<{ collections: AbsCollection[] }> {
+  async listCollections(user: RequestUser): Promise<{ collections: AudiobookshelfCollection[] }> {
     const collections = await this.repository.findCollectionsByUserId(user.id);
     return { collections: await this.hydrate(user, collections) };
   }
 
   /** GET /api/libraries/:id/collections - the user's collections scoped to a library. */
-  async listLibraryCollections(user: RequestUser, libraryId: number, limit = 5, page = 0): Promise<AbsPaginatedCollections> {
+  async listLibraryCollections(user: RequestUser, libraryId: number, limit = 5, page = 0): Promise<AudiobookshelfPaginatedCollections> {
     await this.librariesService.requireExposedLibrary(user, libraryId);
     const contentFilters = user.isSuperuser ? undefined : user.contentFilters;
     const offset = page * limit;
@@ -42,7 +42,7 @@ export class AudiobookshelfCollectionsService {
   }
 
   /** GET /api/collections/:id - one of the user's collections. */
-  async getCollection(user: RequestUser, collectionId: number): Promise<AbsCollection> {
+  async getCollection(user: RequestUser, collectionId: number): Promise<AudiobookshelfCollection> {
     const collection = await this.repository.findCollectionById(collectionId);
     if (!collection || collection.userId !== user.id) throw new NotFoundException(`Collection ${collectionId} not found`);
     const [hydrated] = await this.hydrate(user, [collection]);
@@ -53,7 +53,7 @@ export class AudiobookshelfCollectionsService {
     user: RequestUser,
     collections: { id: number; name: string; description: string | null; createdAt: Date; updatedAt: Date }[],
     libraryIds?: number[],
-  ): Promise<AbsCollection[]> {
+  ): Promise<AudiobookshelfCollection[]> {
     if (collections.length === 0) return [];
 
     const collectionIds = collections.map((collection) => collection.id);
@@ -66,7 +66,7 @@ export class AudiobookshelfCollectionsService {
     const exposedBookIds = libraryIds ? undefined : new Set(await this.repository.findAudioBookIdsByLibraries(exposedLibraryIds, contentFilters));
 
     const bookIds = links.filter((link) => exposedBookIds?.has(link.bookId) ?? true).map((link) => link.bookId);
-    const itemsById = new Map((await this.itemsService.getItemsByIds(bookIds)).map((item) => [fromAbsUuid(item.id), item]));
+    const itemsById = new Map((await this.itemsService.getItemsByIds(bookIds)).map((item) => [fromAudiobookshelfUuid(item.id), item]));
 
     const byCollectionId = new Map<number, typeof links>();
     for (const link of links) {
@@ -76,14 +76,14 @@ export class AudiobookshelfCollectionsService {
       else byCollectionId.set(link.collectionId, [link]);
     }
 
-    const defaultLibraryId = exposedLibraryIds[0] !== undefined ? toAbsUuid(exposedLibraryIds[0]) : '';
+    const defaultLibraryId = exposedLibraryIds[0] !== undefined ? toAudiobookshelfUuid(exposedLibraryIds[0]) : '';
 
     return collections.map((collection) => {
       const books = (byCollectionId.get(collection.id) ?? [])
         .map((link) => itemsById.get(link.bookId))
         .filter((item): item is NonNullable<typeof item> => item != null);
       return {
-        id: toAbsUuid(collection.id),
+        id: toAudiobookshelfUuid(collection.id),
         // Real ABS collections belong to exactly one library; BookOrbit's don't, so the
         // library of the collection's own books stands in (falling back to the user's first
         // exposed library for an empty collection).

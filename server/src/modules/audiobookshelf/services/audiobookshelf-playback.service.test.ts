@@ -2,8 +2,8 @@ import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { RequestUser } from '../../../common/types/request-user';
-import { toAbsCompositeUuid, toAbsUuid } from '../../../common/utils/abs-id.utils';
-import type { AbsLibraryItem } from '../audiobookshelf.types';
+import { toAudiobookshelfCompositeUuid, toAudiobookshelfUuid } from '../../../common/utils/audiobookshelf-id.utils';
+import type { AudiobookshelfLibraryItem } from '../audiobookshelf.types';
 import { AudiobookshelfPlaybackService } from './audiobookshelf-playback.service';
 
 function sessionsService() {
@@ -40,7 +40,7 @@ function user(): RequestUser {
   };
 }
 
-function item(): AbsLibraryItem {
+function item(): AudiobookshelfLibraryItem {
   const fileMetadata = {
     filename: 'chapter-1.mp3',
     ext: 'mp3',
@@ -77,13 +77,18 @@ function item(): AbsLibraryItem {
     metaTags: {},
     mimeType: 'audio/mpeg',
   };
-  const track = { ...audioFile, title: 'chapter-1.mp3', startOffset: 0, contentUrl: `/abs/api/items/${toAbsUuid(42)}/file/${toAbsUuid(900)}` };
+  const track = {
+    ...audioFile,
+    title: 'chapter-1.mp3',
+    startOffset: 0,
+    contentUrl: `/abs/api/items/${toAudiobookshelfUuid(42)}/file/${toAudiobookshelfUuid(900)}`,
+  };
   return {
-    id: toAbsUuid(42),
+    id: toAudiobookshelfUuid(42),
     ino: '900',
     oldLibraryItemId: null,
-    libraryId: toAbsUuid(3),
-    folderId: toAbsUuid(4),
+    libraryId: toAudiobookshelfUuid(3),
+    folderId: toAudiobookshelfUuid(4),
     path: '/srv/books/Book',
     relPath: 'Book/chapter-1.mp3',
     isFile: true,
@@ -98,13 +103,13 @@ function item(): AbsLibraryItem {
     isInvalid: false,
     mediaType: 'book',
     media: {
-      id: toAbsUuid(42),
-      libraryItemId: toAbsUuid(42),
+      id: toAudiobookshelfUuid(42),
+      libraryItemId: toAudiobookshelfUuid(42),
       metadata: {
         title: 'A Book',
         titleIgnorePrefix: 'A Book',
         subtitle: null,
-        authors: [{ id: toAbsUuid(8), name: 'An Author' }],
+        authors: [{ id: toAudiobookshelfUuid(8), name: 'An Author' }],
         narrators: ['A Narrator'],
         series: [],
         genres: ['Fiction'],
@@ -160,10 +165,10 @@ describe('AudiobookshelfPlaybackService', () => {
     });
 
     expect(result).toMatchObject({
-      id: toAbsCompositeUuid(7, 42),
-      userId: toAbsUuid(7),
-      libraryId: toAbsUuid(3),
-      libraryItemId: toAbsUuid(42),
+      id: toAudiobookshelfCompositeUuid(7, 42),
+      userId: toAudiobookshelfUuid(7),
+      libraryId: toAudiobookshelfUuid(3),
+      libraryItemId: toAudiobookshelfUuid(42),
       mediaType: 'book',
       displayTitle: 'A Book',
       displayAuthor: 'An Author',
@@ -172,7 +177,7 @@ describe('AudiobookshelfPlaybackService', () => {
       mediaPlayer: 'AVPlayer',
       startTime: 37,
       currentTime: 37,
-      audioTracks: [{ contentUrl: `/abs/api/items/${toAbsUuid(42)}/file/${toAbsUuid(900)}`, duration: 120 }],
+      audioTracks: [{ contentUrl: `/abs/api/items/${toAudiobookshelfUuid(42)}/file/${toAudiobookshelfUuid(900)}`, duration: 120 }],
     });
     expect(result.deviceInfo).toEqual({ deviceId: 'phone-1', clientName: 'Prologue', clientVersion: '1.0' });
     expect(result.libraryItem.path).toBe('Book/chapter-1.mp3');
@@ -223,7 +228,7 @@ describe('AudiobookshelfPlaybackService', () => {
     );
     const currentUser = user();
 
-    await service.sync(currentUser, toAbsCompositeUuid(7, 42), {
+    await service.sync(currentUser, toAudiobookshelfCompositeUuid(7, 42), {
       currentTime: 123.5,
       duration: 3600,
       lastUpdate: 200,
@@ -242,7 +247,7 @@ describe('AudiobookshelfPlaybackService', () => {
     });
   });
 
-  it.each(['not-a-session', toAbsCompositeUuid(8, 42)])('rejects invalid or foreign session %s', async (sessionId) => {
+  it.each(['not-a-session', toAudiobookshelfCompositeUuid(8, 42)])('rejects invalid or foreign session %s', async (sessionId) => {
     const progressService = { updateMediaProgress: vi.fn() };
     const service = new AudiobookshelfPlaybackService({} as never, progressService as never, sessionsService() as never, openSessions() as never);
 
@@ -260,7 +265,7 @@ describe('AudiobookshelfPlaybackService', () => {
       openSessions() as never,
     );
 
-    await expect(service.close(user(), toAbsCompositeUuid(7, 42), {})).resolves.toBeUndefined();
+    await expect(service.close(user(), toAudiobookshelfCompositeUuid(7, 42), {})).resolves.toBeUndefined();
 
     expect(itemsService.requireExposedBook).toHaveBeenCalledWith(user(), 42);
     expect(progressService.updateMediaProgress).not.toHaveBeenCalled();
@@ -277,7 +282,7 @@ describe('AudiobookshelfPlaybackService', () => {
     );
     const currentUser = user();
 
-    await service.close(currentUser, toAbsCompositeUuid(7, 42), { currentTime: 123.5, duration: 3600 });
+    await service.close(currentUser, toAudiobookshelfCompositeUuid(7, 42), { currentTime: 123.5, duration: 3600 });
 
     expect(progressService.updateMediaProgress).toHaveBeenCalledWith(currentUser, 42, {
       currentTime: 123.5,
@@ -290,7 +295,7 @@ describe('AudiobookshelfPlaybackService', () => {
     expect(itemsService.requireExposedBook).not.toHaveBeenCalled();
   });
 
-  it.each(['not-a-session', toAbsCompositeUuid(8, 42)])('rejects invalid or foreign close session %s', async (sessionId) => {
+  it.each(['not-a-session', toAudiobookshelfCompositeUuid(8, 42)])('rejects invalid or foreign close session %s', async (sessionId) => {
     const itemsService = { requireExposedBook: vi.fn() };
     const progressService = { updateMediaProgress: vi.fn() };
     const service = new AudiobookshelfPlaybackService(
@@ -315,7 +320,7 @@ describe('AudiobookshelfPlaybackService', () => {
       openSessions() as never,
     );
 
-    await expect(service.close(user(), toAbsCompositeUuid(7, 42), { timeListened: 10 })).resolves.toBeUndefined();
+    await expect(service.close(user(), toAudiobookshelfCompositeUuid(7, 42), { timeListened: 10 })).resolves.toBeUndefined();
     expect(progressService.updateMediaProgress).not.toHaveBeenCalled();
   });
 
@@ -323,7 +328,7 @@ describe('AudiobookshelfPlaybackService', () => {
     const progressService = { updateMediaProgress: vi.fn() };
     const service = new AudiobookshelfPlaybackService({} as never, progressService as never, sessionsService() as never, openSessions() as never);
 
-    await expect(service.sync(user(), toAbsCompositeUuid(7, 42), {})).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.sync(user(), toAudiobookshelfCompositeUuid(7, 42), {})).rejects.toBeInstanceOf(BadRequestException);
     expect(progressService.updateMediaProgress).not.toHaveBeenCalled();
   });
 
@@ -351,13 +356,13 @@ describe('AudiobookshelfPlaybackService', () => {
     const service = new AudiobookshelfPlaybackService(itemsService as never, progressService as never, sessions as never, open as never);
 
     await service.play(user(), 42, {});
-    expect(open.open).toHaveBeenCalledWith(toAbsCompositeUuid(7, 42), { userId: 7, bookId: 42, isSuperuser: false });
+    expect(open.open).toHaveBeenCalledWith(toAudiobookshelfCompositeUuid(7, 42), { userId: 7, bookId: 42, isSuperuser: false });
 
-    await service.sync(user(), toAbsCompositeUuid(7, 42), { currentTime: 10, timeListened: 5 });
-    expect(open.touch).toHaveBeenCalledWith(toAbsCompositeUuid(7, 42));
+    await service.sync(user(), toAudiobookshelfCompositeUuid(7, 42), { currentTime: 10, timeListened: 5 });
+    expect(open.touch).toHaveBeenCalledWith(toAudiobookshelfCompositeUuid(7, 42));
 
-    await service.close(user(), toAbsCompositeUuid(7, 42), { currentTime: 20 });
-    expect(open.close).toHaveBeenCalledWith(toAbsCompositeUuid(7, 42));
+    await service.close(user(), toAudiobookshelfCompositeUuid(7, 42), { currentTime: 20 });
+    expect(open.close).toHaveBeenCalledWith(toAudiobookshelfCompositeUuid(7, 42));
   });
 
   it('accumulates listening time on sync without breaking the response when persistence fails', async () => {
@@ -366,7 +371,7 @@ describe('AudiobookshelfPlaybackService', () => {
     sessions.recordPlaybackSync.mockRejectedValue(new Error('db unavailable'));
     const service = new AudiobookshelfPlaybackService({} as never, progressService as never, sessions as never, openSessions() as never);
 
-    await expect(service.sync(user(), toAbsCompositeUuid(7, 42), { currentTime: 10, timeListened: 5 })).resolves.toBeUndefined();
+    await expect(service.sync(user(), toAudiobookshelfCompositeUuid(7, 42), { currentTime: 10, timeListened: 5 })).resolves.toBeUndefined();
 
     expect(sessions.recordPlaybackSync).toHaveBeenCalledWith(7, 42, expect.objectContaining({ timeListeningDelta: 5, currentTime: 10 }));
   });
@@ -376,7 +381,7 @@ describe('AudiobookshelfPlaybackService', () => {
     const sessions = sessionsService();
     const service = new AudiobookshelfPlaybackService({} as never, progressService as never, sessions as never, openSessions() as never);
 
-    await expect(service.sync(user(), toAbsCompositeUuid(7, 42), { currentTime: -5, timeListened: 10 })).resolves.toBeUndefined();
+    await expect(service.sync(user(), toAudiobookshelfCompositeUuid(7, 42), { currentTime: -5, timeListened: 10 })).resolves.toBeUndefined();
 
     expect(sessions.recordPlaybackSync).toHaveBeenCalledWith(7, 42, expect.objectContaining({ timeListeningDelta: 10, currentTime: 0 }));
   });
@@ -399,6 +404,6 @@ describe('AudiobookshelfPlaybackService', () => {
     sessions.recordPlaybackSync.mockRejectedValue(new Error('db unavailable'));
     const service = new AudiobookshelfPlaybackService(itemsService as never, progressService as never, sessions as never, openSessions() as never);
 
-    await expect(service.close(user(), toAbsCompositeUuid(7, 42), {})).resolves.toBeUndefined();
+    await expect(service.close(user(), toAudiobookshelfCompositeUuid(7, 42), {})).resolves.toBeUndefined();
   });
 });

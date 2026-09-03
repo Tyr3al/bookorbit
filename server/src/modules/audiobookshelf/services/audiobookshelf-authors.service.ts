@@ -1,11 +1,16 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 
-import { AudiobookshelfRepository, type AbsAuthorSort } from '../audiobookshelf.repository';
+import { AudiobookshelfRepository, type AudiobookshelfAuthorSort } from '../audiobookshelf.repository';
 import { AudiobookshelfItemsService } from './audiobookshelf-items.service';
 import { AudiobookshelfLibrariesService } from './audiobookshelf-libraries.service';
-import type { AbsAuthor, AbsAuthorExpanded, AbsLibraryItemMinified, AbsPaginatedAuthors } from '../audiobookshelf.types';
+import type {
+  AudiobookshelfAuthor,
+  AudiobookshelfAuthorExpanded,
+  AudiobookshelfLibraryItemMinified,
+  AudiobookshelfPaginatedAuthors,
+} from '../audiobookshelf.types';
 import type { RequestUser } from '../../../common/types/request-user';
-import { toAbsSeriesUuid, toAbsUuid, fromAbsUuid } from '../../../common/utils/abs-id.utils';
+import { toAudiobookshelfSeriesUuid, toAudiobookshelfUuid, fromAudiobookshelfUuid } from '../../../common/utils/audiobookshelf-id.utils';
 import { AuthorsService } from '../../authors/authors.service';
 
 @Injectable()
@@ -35,25 +40,25 @@ export class AudiobookshelfAuthorsService {
     libraryId: number,
     limit?: number,
     page?: number,
-    sort: AbsAuthorSort = 'name',
+    sort: AudiobookshelfAuthorSort = 'name',
     sortDesc = false,
     filter?: string,
     minified = false,
     include?: string,
-  ): Promise<{ authors: AbsAuthor[] } | AbsPaginatedAuthors> {
+  ): Promise<{ authors: AudiobookshelfAuthor[] } | AudiobookshelfPaginatedAuthors> {
     await this.librariesService.requireExposedLibrary(user, libraryId);
     const contentFilters = user.isSuperuser ? undefined : user.contentFilters;
 
     if (limit === undefined) {
       const rows = await this.repository.findAuthorsWithCountsByLibraries([libraryId], contentFilters);
-      const authors = rows.map((row) => this.toAuthor(row, toAbsUuid(libraryId), row.numBooks));
+      const authors = rows.map((row) => this.toAuthor(row, toAudiobookshelfUuid(libraryId), row.numBooks));
       return { authors };
     }
 
     const effectivePage = page ?? 0;
     const offset = effectivePage * limit;
     const pageResult = await this.repository.findAuthorsWithCountsByLibrariesPage([libraryId], contentFilters, limit, offset, sort, sortDesc);
-    const authors = pageResult.rows.map((row) => this.toAuthor(row, toAbsUuid(libraryId), row.numBooks));
+    const authors = pageResult.rows.map((row) => this.toAuthor(row, toAudiobookshelfUuid(libraryId), row.numBooks));
     return {
       results: authors,
       total: pageResult.total,
@@ -68,7 +73,12 @@ export class AudiobookshelfAuthorsService {
   }
 
   /** GET /api/authors/:id and /api/libraries/:libraryId/authors/:id. */
-  async getAuthor(user: RequestUser, authorId: number, include?: string, libraryId?: number): Promise<AbsAuthorExpanded | AbsAuthor> {
+  async getAuthor(
+    user: RequestUser,
+    authorId: number,
+    include?: string,
+    libraryId?: number,
+  ): Promise<AudiobookshelfAuthorExpanded | AudiobookshelfAuthor> {
     const [author] = await this.repository.findAuthorsByIds([authorId]);
     if (!author) throw new NotFoundException(`Author ${authorId} not found`);
 
@@ -84,7 +94,7 @@ export class AudiobookshelfAuthorsService {
 
     const wantsItems = include?.split(',').includes('items') ?? false;
     const wantsSeries = include?.split(',').includes('series') ?? false;
-    const responseLibraryId = libraryId !== undefined ? toAbsUuid(libraryId) : await this.resolveAuthorLibraryId(bookIds);
+    const responseLibraryId = libraryId !== undefined ? toAudiobookshelfUuid(libraryId) : await this.resolveAuthorLibraryId(bookIds);
     if (!wantsItems && !wantsSeries) {
       return this.toAuthor(authorWithStats, responseLibraryId);
     }
@@ -92,7 +102,7 @@ export class AudiobookshelfAuthorsService {
     const items = await this.itemsService.getMinifiedItemsByIds(bookIds);
     const expandedLibraryId = items[0]?.libraryId ?? responseLibraryId;
 
-    const result: AbsAuthorExpanded = {
+    const result: AudiobookshelfAuthorExpanded = {
       ...this.toAuthor(authorWithStats, expandedLibraryId),
       libraryItems: items,
       series: wantsSeries ? await this.groupItemsBySeries(items, bookIds) : [],
@@ -103,7 +113,7 @@ export class AudiobookshelfAuthorsService {
   private async resolveAuthorLibraryId(bookIds: number[]): Promise<string | undefined> {
     if (bookIds.length > 0) {
       const [book] = await this.repository.findBooksByIds([bookIds[0]]);
-      if (book) return toAbsUuid(book.libraryId);
+      if (book) return toAudiobookshelfUuid(book.libraryId);
     }
     return undefined;
   }
@@ -120,12 +130,12 @@ export class AudiobookshelfAuthorsService {
     },
     libraryId?: string,
     numBooks?: number,
-  ): AbsAuthor {
+  ): AudiobookshelfAuthor {
     // Real ABS only includes lastFirst (and numBooks) on the library-scoped list shape, not on
     // the single-author detail fetch - keyed off numBooks since both are set together there.
     const isListContext = numBooks !== undefined;
     return {
-      id: toAbsUuid(author.id),
+      id: toAudiobookshelfUuid(author.id),
       asin: null,
       name: author.name,
       description: author.description,
@@ -143,17 +153,17 @@ export class AudiobookshelfAuthorsService {
   /** Minified items don't carry per-series ids (only a flattened seriesName), so series
    * membership is looked up separately rather than parsed off the mapped item. */
   private async groupItemsBySeries(
-    items: AbsLibraryItemMinified[],
+    items: AudiobookshelfLibraryItemMinified[],
     bookIds: number[],
-  ): Promise<{ id: string; name: string; items: AbsLibraryItemMinified[] }[]> {
+  ): Promise<{ id: string; name: string; items: AudiobookshelfLibraryItemMinified[] }[]> {
     const memberships = await this.repository.findSeriesByBookIds(bookIds);
-    const itemsByBookId = new Map(items.map((item) => [fromAbsUuid(item.id), item] as const));
+    const itemsByBookId = new Map(items.map((item) => [fromAudiobookshelfUuid(item.id), item] as const));
 
-    const seriesMap = new Map<string, { id: string; name: string; items: AbsLibraryItemMinified[] }>();
+    const seriesMap = new Map<string, { id: string; name: string; items: AudiobookshelfLibraryItemMinified[] }>();
     for (const membership of memberships) {
       const item = itemsByBookId.get(membership.bookId);
       if (!item) continue;
-      const seriesId = toAbsSeriesUuid(membership.id);
+      const seriesId = toAudiobookshelfSeriesUuid(membership.id);
       let entry = seriesMap.get(seriesId);
       if (!entry) {
         entry = { id: seriesId, name: membership.name, items: [] };

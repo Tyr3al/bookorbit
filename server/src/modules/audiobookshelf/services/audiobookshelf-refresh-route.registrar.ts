@@ -3,7 +3,7 @@ import { HttpAdapterHost } from '@nestjs/core';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 
 import { AudiobookshelfAuthService } from './audiobookshelf-auth.service';
-import { ABS_BASE_PATH } from '../audiobookshelf.constants';
+import { AUDIOBOOKSHELF_BASE_PATH } from '../audiobookshelf.constants';
 import { AppSettingsService } from '../../app-settings/app-settings.service';
 
 /**
@@ -14,7 +14,7 @@ import { AppSettingsService } from '../../app-settings/app-settings.service';
  * endpoint with the `x-refresh-token` header to rotate its token pair.
  */
 @Injectable()
-export class AbsRefreshRouteRegistrar implements OnApplicationBootstrap {
+export class AudiobookshelfRefreshRouteRegistrar implements OnApplicationBootstrap {
   constructor(
     private readonly authService: AudiobookshelfAuthService,
     private readonly appSettingsService: AppSettingsService,
@@ -23,7 +23,7 @@ export class AbsRefreshRouteRegistrar implements OnApplicationBootstrap {
 
   onApplicationBootstrap() {
     const fastify = this.httpAdapterHost.httpAdapter.getInstance() as FastifyInstance;
-    fastify.post(`${ABS_BASE_PATH}/auth/refresh`, async (request, reply) => {
+    fastify.post(`${AUDIOBOOKSHELF_BASE_PATH}/auth/refresh`, async (request, reply) => {
       // Bypasses Nest's guard pipeline (it's a raw route, not a controller), so the master
       // enable/disable switch is enforced here explicitly instead.
       if (!(await this.appSettingsService.isAudiobookshelfEnabled())) {

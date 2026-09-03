@@ -15,7 +15,7 @@ const MAX_FLOWS = 1000;
  * refuses to grow beyond MAX_FLOWS, so a client cannot exhaust memory.
  */
 @Injectable()
-export class AbsOAuthStateStore {
+export class AudiobookshelfOAuthStateStore {
   private readonly flows = new Map<string, OAuthPendingFlow>();
 
   create(redirectUri: string): string {

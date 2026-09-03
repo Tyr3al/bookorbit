@@ -4,7 +4,7 @@ import { IsBoolean, IsNumber, IsOptional, IsString, Max, Min } from 'class-valid
  * Body of ABS `PATCH /api/me/progress/:libraryItemId`. Field names follow the ABS
  * MediaProgress payload. Unknown fields are rejected by the global ValidationPipe.
  */
-export class UpdateAbsProgressDto {
+export class UpdateAudiobookshelfProgressDto {
   @IsOptional()
   @IsNumber()
   @Min(0)

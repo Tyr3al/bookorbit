@@ -162,7 +162,7 @@ import { AudiobookshelfModule } from './modules/audiobookshelf/audiobookshelf.mo
     BrowseCountsModule,
     AudiobookshelfModule,
     // Mounts every AudiobookshelfModule route under /abs, the same way an OPDS feed lives at its
-    // own subpath - see ABS_BASE_PATH.
+    // own subpath - see AUDIOBOOKSHELF_BASE_PATH.
     RouterModule.register([{ path: 'abs', module: AudiobookshelfModule }]),
   ],
   providers: [

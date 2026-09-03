@@ -7,13 +7,13 @@ import { AudiobookshelfAuthorsService } from '../services/audiobookshelf-authors
 import { AudiobookshelfSeriesService } from '../services/audiobookshelf-series.service';
 import { AudiobookshelfCollectionsService } from '../services/audiobookshelf-collections.service';
 import { AudiobookshelfNarratorsService } from '../services/audiobookshelf-narrators.service';
-import { parseAbsId, parseAbsSeriesId } from '../pipes/abs-id.pipe';
+import { parseAudiobookshelfId, parseAudiobookshelfSeriesId } from '../pipes/audiobookshelf-id.pipe';
 import { AudiobookshelfEnabledGuard } from '../audiobookshelf-enabled.guard';
-import type { AbsSeriesSort } from '../audiobookshelf.types';
+import type { AudiobookshelfSeriesSort } from '../audiobookshelf.types';
 
 @Controller('api/libraries')
 @UseGuards(AudiobookshelfEnabledGuard)
-export class LibrariesController {
+export class AudiobookshelfLibrariesController {
   constructor(
     private readonly librariesService: AudiobookshelfLibrariesService,
     private readonly authorsService: AudiobookshelfAuthorsService,
@@ -29,7 +29,7 @@ export class LibrariesController {
 
   @Get(':id')
   detail(@CurrentUser() user: RequestUser, @Param('id') idParam: string, @Query('include') include?: string) {
-    return this.librariesService.getLibrary(user, parseAbsId(idParam), include);
+    return this.librariesService.getLibrary(user, parseAudiobookshelfId(idParam), include);
   }
 
   @Get(':id/items')
@@ -46,7 +46,7 @@ export class LibrariesController {
     @Query('minified') minified?: string,
     @Query('collapseseries') collapseseries?: string,
   ) {
-    return this.librariesService.getItemsPage(user, parseAbsId(idParam), {
+    return this.librariesService.getItemsPage(user, parseAudiobookshelfId(idParam), {
       limit: parseOptionalInt(limit),
       page: parseOptionalInt(page),
       sort,
@@ -61,7 +61,7 @@ export class LibrariesController {
 
   @Get(':id/personalized')
   personalized(@CurrentUser() user: RequestUser, @Param('id') idParam: string, @Query('limit') limit?: string) {
-    return this.librariesService.getPersonalized(user, parseAbsId(idParam), parseOptionalInt(limit));
+    return this.librariesService.getPersonalized(user, parseAudiobookshelfId(idParam), parseOptionalInt(limit));
   }
 
   @Get(':id/authors')
@@ -79,7 +79,7 @@ export class LibrariesController {
     const authorSort = sort === 'numBooks' || sort === 'lastFirst' ? sort : 'name';
     return this.authorsService.listLibraryAuthors(
       user,
-      parseAbsId(idParam),
+      parseAudiobookshelfId(idParam),
       parseOptionalInt(limit),
       parseOptionalInt(page),
       authorSort,
@@ -97,7 +97,7 @@ export class LibrariesController {
     @Param('authorId') authorIdParam: string,
     @Query('include') include?: string,
   ) {
-    return this.authorsService.getAuthor(user, parseAbsId(authorIdParam), include, parseAbsId(idParam));
+    return this.authorsService.getAuthor(user, parseAudiobookshelfId(authorIdParam), include, parseAudiobookshelfId(idParam));
   }
 
   @Get(':id/series')
@@ -111,7 +111,7 @@ export class LibrariesController {
   ) {
     return this.seriesService.listLibrarySeries(
       user,
-      parseAbsId(idParam),
+      parseAudiobookshelfId(idParam),
       parseOptionalInt(limit) ?? 5,
       parseOptionalInt(page) ?? 0,
       parseSeriesSort(sort),
@@ -121,7 +121,7 @@ export class LibrariesController {
 
   @Get(':id/series/:seriesId')
   seriesDetail(@CurrentUser() user: RequestUser, @Param('id') idParam: string, @Param('seriesId') seriesIdParam: string) {
-    return this.seriesService.getSeries(user, parseAbsSeriesId(seriesIdParam), parseAbsId(idParam));
+    return this.seriesService.getSeries(user, parseAudiobookshelfSeriesId(seriesIdParam), parseAudiobookshelfId(idParam));
   }
 
   @Get(':id/search')
@@ -129,22 +129,27 @@ export class LibrariesController {
     if (typeof q !== 'string' || q.trim().length === 0) {
       throw new BadRequestException('Invalid request. Query param "q" must be a string');
     }
-    return this.librariesService.searchLibrary(user, parseAbsId(idParam), q.trim(), parseOptionalInt(limit) ?? 12);
+    return this.librariesService.searchLibrary(user, parseAudiobookshelfId(idParam), q.trim(), parseOptionalInt(limit) ?? 12);
   }
 
   @Get(':id/collections')
   collections(@CurrentUser() user: RequestUser, @Param('id') idParam: string, @Query('limit') limit?: string, @Query('page') page?: string) {
-    return this.collectionsService.listLibraryCollections(user, parseAbsId(idParam), parseOptionalInt(limit) ?? 5, parseOptionalInt(page) ?? 0);
+    return this.collectionsService.listLibraryCollections(
+      user,
+      parseAudiobookshelfId(idParam),
+      parseOptionalInt(limit) ?? 5,
+      parseOptionalInt(page) ?? 0,
+    );
   }
 
   @Get(':id/narrators')
   narrators(@CurrentUser() user: RequestUser, @Param('id') idParam: string) {
-    return this.narratorsService.listLibraryNarrators(user, parseAbsId(idParam));
+    return this.narratorsService.listLibraryNarrators(user, parseAudiobookshelfId(idParam));
   }
 
   @Get(':id/filterdata')
   filterData(@CurrentUser() user: RequestUser, @Param('id') idParam: string) {
-    return this.librariesService.getFilterData(user, parseAbsId(idParam));
+    return this.librariesService.getFilterData(user, parseAudiobookshelfId(idParam));
   }
 }
 
@@ -154,7 +159,7 @@ function parseOptionalInt(value: string | undefined): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function parseSeriesSort(value: string | undefined): AbsSeriesSort {
+function parseSeriesSort(value: string | undefined): AudiobookshelfSeriesSort {
   switch (value) {
     case 'addedAt':
     case 'updatedAt':

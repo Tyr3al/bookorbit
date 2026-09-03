@@ -1,15 +1,15 @@
 import { Injectable } from '@nestjs/common';
 
-import { toAbsUuid } from '../../../common/utils/abs-id.utils';
+import { toAudiobookshelfUuid } from '../../../common/utils/audiobookshelf-id.utils';
 import type { RequestUser } from '../../../common/types/request-user';
-import type { AbsListeningSessionRow, NewAbsListeningSession } from '../../../db/schema';
+import type { AudiobookshelfListeningSessionRow, NewAudiobookshelfListeningSession } from '../../../db/schema';
 import {
-  ABS_DEFAULT_SESSIONS_PAGE_SIZE,
-  ABS_MAX_SESSIONS_PAGE_SIZE,
-  ABS_RECENT_SESSIONS_LIMIT,
-  ABS_SERVER_VERSION,
+  AUDIOBOOKSHELF_DEFAULT_SESSIONS_PAGE_SIZE,
+  AUDIOBOOKSHELF_MAX_SESSIONS_PAGE_SIZE,
+  AUDIOBOOKSHELF_RECENT_SESSIONS_LIMIT,
+  AUDIOBOOKSHELF_SERVER_VERSION,
 } from '../audiobookshelf.constants';
-import type { AbsListeningSessionsEnvelope, AbsListeningStats, AbsPlaybackSession } from '../audiobookshelf.types';
+import type { AudiobookshelfListeningSessionsEnvelope, AudiobookshelfListeningStats, AudiobookshelfPlaybackSession } from '../audiobookshelf.types';
 import { AudiobookshelfItemsService } from './audiobookshelf-items.service';
 import { AudiobookshelfSessionsRepository } from './audiobookshelf-sessions.repository';
 
@@ -49,7 +49,7 @@ export interface RecordLocalSessionInput {
 
 /** Persists and reads Audiobookshelf-compatible listening-session history. Separate from the
  * stateless live playback handshake in AudiobookshelfPlaybackService - see that service and
- * AbsListeningSessionRow for the split between the deterministic live handle and this table's
+ * AudiobookshelfListeningSessionRow for the split between the deterministic live handle and this table's
  * 'live'/'local' rows. Write methods here can throw; callers (playback/progress services) are
  * responsible for logging and swallowing failures so a session-persistence error never breaks
  * playback or progress sync for the client. */
@@ -72,7 +72,7 @@ export class AudiobookshelfSessionsService {
       mediaPlayer: input.mediaPlayer,
       deviceInfo: input.deviceInfo,
       mediaMetadata: input.mediaMetadata,
-      serverVersion: ABS_SERVER_VERSION,
+      serverVersion: AUDIOBOOKSHELF_SERVER_VERSION,
       date,
       dayOfWeek,
       currentTime: input.currentTime,
@@ -86,7 +86,7 @@ export class AudiobookshelfSessionsService {
 
   async recordLocalSessions(userId: number, entries: RecordLocalSessionInput[]): Promise<void> {
     if (entries.length === 0) return;
-    const rows: NewAbsListeningSession[] = entries.map((entry) => {
+    const rows: NewAudiobookshelfListeningSession[] = entries.map((entry) => {
       const { date, dayOfWeek } = deriveDateFields(entry.updatedAt);
       // currentTime/startTime/timeListening all back the CHECK constraints on the table, so clamp
       // at this persistence boundary too - not just in the callers - so a hostile or buggy client
@@ -104,7 +104,7 @@ export class AudiobookshelfSessionsService {
         mediaPlayer: entry.mediaPlayer,
         deviceInfo: entry.deviceInfo,
         mediaMetadata: {},
-        serverVersion: ABS_SERVER_VERSION,
+        serverVersion: AUDIOBOOKSHELF_SERVER_VERSION,
         date,
         dayOfWeek,
         timeListening: Math.max(0, Math.round(entry.timeListening)),
@@ -118,7 +118,7 @@ export class AudiobookshelfSessionsService {
   }
 
   /** ABS GET /api/me/listening-sessions. */
-  async getSessionsPage(user: RequestUser, page: number, itemsPerPage: number): Promise<AbsListeningSessionsEnvelope> {
+  async getSessionsPage(user: RequestUser, page: number, itemsPerPage: number): Promise<AudiobookshelfListeningSessionsEnvelope> {
     const bounded = boundPagination(page, itemsPerPage);
     const { rows, total } = await this.repository.findPage(user.id, bounded.limit, bounded.offset);
     return toEnvelope(rows, total, bounded);
@@ -126,7 +126,7 @@ export class AudiobookshelfSessionsService {
 
   /** ABS GET /api/me/item/listening-sessions/:libraryItemId - 404s via requireExposedBook when
    * the item does not exist or the user cannot access it. */
-  async getItemSessionsPage(user: RequestUser, bookId: number, page: number, itemsPerPage: number): Promise<AbsListeningSessionsEnvelope> {
+  async getItemSessionsPage(user: RequestUser, bookId: number, page: number, itemsPerPage: number): Promise<AudiobookshelfListeningSessionsEnvelope> {
     await this.itemsService.requireExposedBook(user, bookId);
     const bounded = boundPagination(page, itemsPerPage);
     const { rows, total } = await this.repository.findPageForBook(user.id, bookId, bounded.limit, bounded.offset);
@@ -134,19 +134,19 @@ export class AudiobookshelfSessionsService {
   }
 
   /** ABS GET /api/me/listening-stats. totalTime/days/dayOfWeek/items are grouped SQL aggregates;
-   * only recentSessions loads full rows, bounded to ABS_RECENT_SESSIONS_LIMIT. */
-  async getListeningStats(user: RequestUser): Promise<AbsListeningStats> {
+   * only recentSessions loads full rows, bounded to AUDIOBOOKSHELF_RECENT_SESSIONS_LIMIT. */
+  async getListeningStats(user: RequestUser): Promise<AudiobookshelfListeningStats> {
     const today = deriveDateFields(new Date()).date;
     const [aggregate, recentRows] = await Promise.all([
       this.repository.findStatsAggregate(user.id, today),
-      this.repository.findRecent(user.id, ABS_RECENT_SESSIONS_LIMIT),
+      this.repository.findRecent(user.id, AUDIOBOOKSHELF_RECENT_SESSIONS_LIMIT),
     ]);
 
     const mediaMetadataByBookId = new Map(aggregate.itemMediaMetadata.map((row) => [row.bookId, row.mediaMetadata]));
-    const items: AbsListeningStats['items'] = {};
+    const items: AudiobookshelfListeningStats['items'] = {};
     for (const row of aggregate.items) {
-      items[toAbsUuid(row.bookId)] = {
-        id: toAbsUuid(row.bookId),
+      items[toAudiobookshelfUuid(row.bookId)] = {
+        id: toAudiobookshelfUuid(row.bookId),
         timeListening: row.timeListening,
         mediaMetadata: mediaMetadataByBookId.get(row.bookId) ?? {},
         lastUpdate: row.lastUpdate.getTime(),
@@ -165,13 +165,13 @@ export class AudiobookshelfSessionsService {
       days,
       dayOfWeek,
       today: aggregate.totals.today,
-      recentSessions: recentRows.map(toAbsPlaybackSession),
+      recentSessions: recentRows.map(toAudiobookshelfPlaybackSession),
     };
   }
 }
 
 function boundPagination(page: number, itemsPerPage: number): { page: number; itemsPerPage: number; limit: number; offset: number } {
-  const boundedItemsPerPage = clampInt(itemsPerPage, 1, ABS_MAX_SESSIONS_PAGE_SIZE, ABS_DEFAULT_SESSIONS_PAGE_SIZE);
+  const boundedItemsPerPage = clampInt(itemsPerPage, 1, AUDIOBOOKSHELF_MAX_SESSIONS_PAGE_SIZE, AUDIOBOOKSHELF_DEFAULT_SESSIONS_PAGE_SIZE);
   const boundedPage = Number.isFinite(page) && page >= 0 ? Math.floor(page) : 0;
   return { page: boundedPage, itemsPerPage: boundedItemsPerPage, limit: boundedItemsPerPage, offset: boundedPage * boundedItemsPerPage };
 }
@@ -181,23 +181,27 @@ function clampInt(value: number, min: number, max: number, fallback: number): nu
   return Math.min(Math.floor(value), max);
 }
 
-function toEnvelope(rows: AbsListeningSessionRow[], total: number, bounded: { page: number; itemsPerPage: number }): AbsListeningSessionsEnvelope {
+function toEnvelope(
+  rows: AudiobookshelfListeningSessionRow[],
+  total: number,
+  bounded: { page: number; itemsPerPage: number },
+): AudiobookshelfListeningSessionsEnvelope {
   return {
     total,
     numPages: bounded.itemsPerPage > 0 ? Math.ceil(total / bounded.itemsPerPage) : 0,
     page: bounded.page,
     itemsPerPage: bounded.itemsPerPage,
-    sessions: rows.map(toAbsPlaybackSession),
+    sessions: rows.map(toAudiobookshelfPlaybackSession),
   };
 }
 
-function toAbsPlaybackSession(row: AbsListeningSessionRow): AbsPlaybackSession {
+function toAudiobookshelfPlaybackSession(row: AudiobookshelfListeningSessionRow): AudiobookshelfPlaybackSession {
   return {
-    id: toAbsUuid(row.id),
-    userId: toAbsUuid(row.userId),
-    libraryId: toAbsUuid(row.libraryId),
-    libraryItemId: toAbsUuid(row.bookId),
-    bookId: toAbsUuid(row.bookId),
+    id: toAudiobookshelfUuid(row.id),
+    userId: toAudiobookshelfUuid(row.userId),
+    libraryId: toAudiobookshelfUuid(row.libraryId),
+    libraryItemId: toAudiobookshelfUuid(row.bookId),
+    bookId: toAudiobookshelfUuid(row.bookId),
     episodeId: null,
     mediaType: 'book',
     mediaMetadata: row.mediaMetadata ?? {},

@@ -1,12 +1,12 @@
 /** Real ABS list-endpoint filters arrive as `filter=<category>.<base64(value)>` - every
  * category (including `missing`/`progress`) base64-encodes its value, e.g.
  * `missing.authors` is sent as `filter=missing.YXV0aG9ycw==`. */
-export interface AbsItemFilter {
+export interface AudiobookshelfItemFilter {
   category: string;
   value: string;
 }
 
-export function parseAbsItemFilter(filter: string | undefined): AbsItemFilter | null {
+export function parseAudiobookshelfItemFilter(filter: string | undefined): AudiobookshelfItemFilter | null {
   if (!filter) return null;
   const separatorIndex = filter.indexOf('.');
   if (separatorIndex === -1) return null;

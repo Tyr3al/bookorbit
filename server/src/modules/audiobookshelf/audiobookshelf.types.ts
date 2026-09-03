@@ -5,7 +5,7 @@
  * audiobookshelf module rather than in packages/types.
  */
 
-export interface AbsFileMetadata {
+export interface AudiobookshelfFileMetadata {
   filename: string;
   ext: string;
   path: string;
@@ -16,17 +16,17 @@ export interface AbsFileMetadata {
   birthtimeMs: number;
 }
 
-export interface AbsChapter {
+export interface AudiobookshelfChapter {
   id: number;
   start: number;
   end: number;
   title: string;
 }
 
-export interface AbsAudioFile {
+export interface AudiobookshelfAudioFile {
   index: number;
   ino: string;
-  metadata: AbsFileMetadata;
+  metadata: AudiobookshelfFileMetadata;
   addedAt: number;
   updatedAt: number;
   trackNumFromMeta: number | null;
@@ -44,30 +44,30 @@ export interface AbsAudioFile {
   timeBase: string;
   channels: number;
   channelLayout: string;
-  chapters: AbsChapter[];
+  chapters: AudiobookshelfChapter[];
   embeddedCoverArt: string | null;
   metaTags: Record<string, unknown>;
   mimeType: string;
 }
 
-/** Real ABS's track objects carry every AbsAudioFile field plus playback-specific ones - not
+/** Real ABS's track objects carry every AudiobookshelfAudioFile field plus playback-specific ones - not
  * the leaner shape we originally guessed. */
-export interface AbsTrack extends AbsAudioFile {
+export interface AudiobookshelfTrack extends AudiobookshelfAudioFile {
   title: string;
   startOffset: number;
   contentUrl: string;
 }
 
-export interface AbsLibraryFile {
+export interface AudiobookshelfLibraryFile {
   ino: string;
-  metadata: AbsFileMetadata;
+  metadata: AudiobookshelfFileMetadata;
   addedAt: number;
   updatedAt: number;
   fileType: 'audio' | 'image' | 'ebook' | 'metadata' | 'text' | 'unknown';
   isSupplementary: boolean | null;
 }
 
-export interface AbsBookMetadata {
+export interface AudiobookshelfBookMetadata {
   title: string;
   titleIgnorePrefix: string;
   subtitle: string | null;
@@ -91,25 +91,25 @@ export interface AbsBookMetadata {
   seriesName: string;
 }
 
-export interface AbsBookMedia {
+export interface AudiobookshelfBookMedia {
   id: string;
   libraryItemId: string;
-  metadata: AbsBookMetadata;
+  metadata: AudiobookshelfBookMetadata;
   coverPath: string | null;
   tags: string[];
-  audioFiles: AbsAudioFile[];
-  chapters: AbsChapter[];
+  audioFiles: AudiobookshelfAudioFile[];
+  chapters: AudiobookshelfChapter[];
   numTracks: number;
   numAudioFiles: number;
   numChapters: number;
   duration: number | null;
   size: number;
-  tracks: AbsTrack[];
+  tracks: AudiobookshelfTrack[];
   ebookFile: null;
 }
 
 /** Real ABS's book metadata as returned inside a minified (list/search) library item. */
-export interface AbsBookMetadataMinified {
+export interface AudiobookshelfBookMetadataMinified {
   title: string;
   titleIgnorePrefix: string;
   subtitle: string | null;
@@ -131,9 +131,9 @@ export interface AbsBookMetadataMinified {
 
 /** Real ABS's book media as returned inside a minified (list/search) library item - no
  * per-file/track/chapter detail, no author/narrator/series id lists. */
-export interface AbsBookMediaMinified {
+export interface AudiobookshelfBookMediaMinified {
   id: string;
-  metadata: AbsBookMetadataMinified;
+  metadata: AudiobookshelfBookMetadataMinified;
   coverPath: string | null;
   tags: string[];
   numTracks: number;
@@ -144,8 +144,8 @@ export interface AbsBookMediaMinified {
 }
 
 /** Real ABS's minified LibraryItem shape, used for paginated list/search results. The full
- * AbsLibraryItem (with audioFiles/tracks/chapters) is reserved for `GET /api/items/:id`. */
-export interface AbsLibraryItemMinified {
+ * AudiobookshelfLibraryItem (with audioFiles/tracks/chapters) is reserved for `GET /api/items/:id`. */
+export interface AudiobookshelfLibraryItemMinified {
   id: string;
   ino: string;
   oldLibraryItemId: string | null;
@@ -162,12 +162,12 @@ export interface AbsLibraryItemMinified {
   isMissing: boolean;
   isInvalid: boolean;
   mediaType: 'book';
-  media: AbsBookMediaMinified;
+  media: AudiobookshelfBookMediaMinified;
   numFiles: number;
   size: number;
 }
 
-export interface AbsLibraryItem {
+export interface AudiobookshelfLibraryItem {
   id: string;
   ino: string;
   oldLibraryItemId: string | null;
@@ -186,25 +186,25 @@ export interface AbsLibraryItem {
   isMissing: boolean;
   isInvalid: boolean;
   mediaType: 'book';
-  media: AbsBookMedia;
-  libraryFiles: AbsLibraryFile[];
+  media: AudiobookshelfBookMedia;
+  libraryFiles: AudiobookshelfLibraryFile[];
   numFiles: number;
   size: number;
   /** Present (and populated) only when the request includes `include=progress`. */
-  userMediaProgress?: AbsMediaProgress | null;
+  userMediaProgress?: AudiobookshelfMediaProgress | null;
 }
 
-export interface AbsLibraryFolder {
+export interface AudiobookshelfLibraryFolder {
   id: string;
   fullPath: string;
   libraryId: string;
   addedAt: number;
 }
 
-export interface AbsLibrary {
+export interface AudiobookshelfLibrary {
   id: string;
   name: string;
-  folders: AbsLibraryFolder[];
+  folders: AudiobookshelfLibraryFolder[];
   displayOrder: number;
   icon: string | null;
   mediaType: 'book';
@@ -229,7 +229,7 @@ export interface AbsLibrary {
   lastUpdate: number;
 }
 
-export interface AbsMediaProgress {
+export interface AudiobookshelfMediaProgress {
   id: string;
   userId?: string | null;
   libraryItemId: string;
@@ -250,7 +250,7 @@ export interface AbsMediaProgress {
   ebookProgress: number | null;
 }
 
-export interface AbsPermissions {
+export interface AudiobookshelfPermissions {
   download: boolean;
   update: boolean;
   delete: boolean;
@@ -262,7 +262,7 @@ export interface AbsPermissions {
   selectedTagsNotAccessible: boolean;
 }
 
-export interface AbsUser {
+export interface AudiobookshelfUser {
   id: string;
   username: string;
   email: string;
@@ -270,10 +270,10 @@ export interface AbsUser {
   token: string;
   accessToken: string;
   refreshToken: string | null;
-  mediaProgress: AbsMediaProgress[];
+  mediaProgress: AudiobookshelfMediaProgress[];
   seriesHideFromContinueListening: unknown[];
   bookmarks: unknown[];
-  permissions: AbsPermissions;
+  permissions: AudiobookshelfPermissions;
   isActive: boolean;
   isLocked: boolean;
   lastSeen: number | null;
@@ -283,15 +283,15 @@ export interface AbsUser {
   hasOpenIDLink: boolean;
 }
 
-export interface AbsLoginResponse {
-  user: AbsUser;
+export interface AudiobookshelfLoginResponse {
+  user: AudiobookshelfUser;
   userDefaultLibraryId: string | null;
   serverSettings: Record<string, unknown>;
   ereaderDevices?: unknown[];
   Source?: string;
 }
 
-export interface AbsAuthor {
+export interface AudiobookshelfAuthor {
   id: string;
   asin: string | null;
   name: string;
@@ -304,15 +304,15 @@ export interface AbsAuthor {
   lastFirst?: string | null;
 }
 
-export interface AbsAuthorExpanded extends AbsAuthor {
-  libraryItems: AbsLibraryItemMinified[];
-  series: { id: string; name: string; items: AbsLibraryItemMinified[] }[];
+export interface AudiobookshelfAuthorExpanded extends AudiobookshelfAuthor {
+  libraryItems: AudiobookshelfLibraryItemMinified[];
+  series: { id: string; name: string; items: AudiobookshelfLibraryItemMinified[] }[];
 }
 
 // Sort values accepted by the library-scoped series list (GET /api/libraries/:id/series).
-export type AbsSeriesSort = 'name' | 'addedAt' | 'updatedAt' | 'numBooks' | 'lastBookUpdated';
+export type AudiobookshelfSeriesSort = 'name' | 'addedAt' | 'updatedAt' | 'numBooks' | 'lastBookUpdated';
 
-export interface AbsSeries {
+export interface AudiobookshelfSeries {
   id: string;
   name: string;
   nameIgnorePrefix: string;
@@ -324,27 +324,26 @@ export interface AbsSeries {
 
 // Real ABS's single-series detail fetch (GET /api/series/:id and
 // GET /api/libraries/:id/series/:seriesId) never embeds books, even with `include=items` - it's
-// just AbsSeries. Only the library-scoped series *list* embeds books (see AbsSeriesListItem).
-
-// The library-scoped series list embeds each series' minified books directly in the row.
-export interface AbsSeriesListItem extends AbsSeries {
-  books: AbsLibraryItemMinified[];
+// just AudiobookshelfSeries. Only the library-scoped series *list* embeds books; each row below
+// carries its series' minified books directly in `books`.
+export interface AudiobookshelfSeriesListItem extends AudiobookshelfSeries {
+  books: AudiobookshelfLibraryItemMinified[];
 }
 
-export interface AbsCollection {
+export interface AudiobookshelfCollection {
   id: string;
   libraryId: string;
   name: string;
   description: string | null;
   // Real ABS collections carry full expanded items here (audioFiles/tracks/chapters and all),
   // unlike the minified shape used by list/search endpoints.
-  books: AbsLibraryItem[];
+  books: AudiobookshelfLibraryItem[];
   lastUpdate: number;
   createdAt: number;
 }
 
-export interface AbsPaginatedItems {
-  results: AbsLibraryItemMinified[];
+export interface AudiobookshelfPaginatedItems {
+  results: AudiobookshelfLibraryItemMinified[];
   total: number;
   limit: number;
   page: number;
@@ -358,17 +357,17 @@ export interface AbsPaginatedItems {
   offset: number;
 }
 
-export interface AbsPersonalizedShelf {
+export interface AudiobookshelfPersonalizedShelf {
   id: string;
   label: string;
   labelStringKey: 'LabelContinueListening' | 'LabelRecentlyAdded';
   type: 'book';
-  entities: (AbsLibraryItemMinified & { progressLastUpdate?: number })[];
+  entities: (AudiobookshelfLibraryItemMinified & { progressLastUpdate?: number })[];
   total: number;
 }
 
-export interface AbsPaginatedAuthors {
-  results: AbsAuthor[];
+export interface AudiobookshelfPaginatedAuthors {
+  results: AudiobookshelfAuthor[];
   total: number;
   limit: number;
   page: number;
@@ -381,21 +380,21 @@ export interface AbsPaginatedAuthors {
 
 // Narrators aren't real entities in ABS - id is the base64-encoded, URI-encoded name, present
 // only so a client can drop it straight into filter=narrators.<id>.
-export interface AbsNarrator {
+export interface AudiobookshelfNarrator {
   id: string;
   name: string;
   numBooks: number;
 }
 
-export interface AbsLibraryNarrators {
-  narrators: AbsNarrator[];
+export interface AudiobookshelfLibraryNarrators {
+  narrators: AudiobookshelfNarrator[];
 }
 
 // GET /api/libraries/:id/filterdata - a library's capability summary. Some ABS clients
 // (confirmed with Prologue) check this before deciding what to sync/display persistently, so an
 // unimplemented endpoint here can make a library look empty of series/genres/etc. even though
 // the dedicated list endpoints work fine standalone.
-export interface AbsLibraryFilterData {
+export interface AudiobookshelfLibraryFilterData {
   authors: { id: string; name: string }[];
   genres: string[];
   tags: string[];
@@ -412,8 +411,8 @@ export interface AbsLibraryFilterData {
   loadedAt: number;
 }
 
-export interface AbsPaginatedSeries {
-  results: AbsSeriesListItem[];
+export interface AudiobookshelfPaginatedSeries {
+  results: AudiobookshelfSeriesListItem[];
   total: number;
   limit: number;
   page: number;
@@ -423,8 +422,8 @@ export interface AbsPaginatedSeries {
   include: string;
 }
 
-export interface AbsPaginatedCollections {
-  results: AbsCollection[];
+export interface AudiobookshelfPaginatedCollections {
+  results: AudiobookshelfCollection[];
   total: number;
   limit: number;
   page: number;
@@ -433,7 +432,7 @@ export interface AbsPaginatedCollections {
   include: string;
 }
 
-export interface AbsListeningSessions {
+export interface AudiobookshelfListeningSessions {
   total: number;
   numPages: number;
   page: number;
@@ -442,7 +441,7 @@ export interface AbsListeningSessions {
 }
 
 /** Expanded response returned when a client starts direct playback for a book. */
-export interface AbsPlaybackSessionExpanded {
+export interface AudiobookshelfPlaybackSessionExpanded {
   id: string;
   userId: string;
   libraryId: string;
@@ -451,7 +450,7 @@ export interface AbsPlaybackSessionExpanded {
   episodeId: null;
   mediaType: 'book';
   mediaMetadata: Record<string, unknown>;
-  chapters: AbsChapter[];
+  chapters: AudiobookshelfChapter[];
   displayTitle: string;
   displayAuthor: string;
   coverPath: string | null;
@@ -467,12 +466,12 @@ export interface AbsPlaybackSessionExpanded {
   currentTime: number;
   startedAt: number;
   updatedAt: number;
-  audioTracks: AbsPlaybackAudioTrack[];
-  libraryItem: AbsLibraryItem;
+  audioTracks: AudiobookshelfPlaybackAudioTrack[];
+  libraryItem: AudiobookshelfLibraryItem;
 }
 
 /** Playback tracks intentionally omit server-only audio-file fields and paths. */
-export interface AbsPlaybackAudioTrack {
+export interface AudiobookshelfPlaybackAudioTrack {
   index: number;
   startOffset: number;
   duration: number | null;
@@ -480,13 +479,13 @@ export interface AbsPlaybackAudioTrack {
   contentUrl: string;
   mimeType: string;
   codec: string;
-  metadata: AbsFileMetadata;
+  metadata: AudiobookshelfFileMetadata;
 }
 
 /** A historical listening-session record, returned by the listening-sessions and
- * listening-stats read paths. Unlike AbsPlaybackSessionExpanded, this is never the live
+ * listening-stats read paths. Unlike AudiobookshelfPlaybackSessionExpanded, this is never the live
  * playback handle - see AudiobookshelfSessionsService. */
-export interface AbsPlaybackSession {
+export interface AudiobookshelfPlaybackSession {
   id: string;
   userId: string;
   libraryId: string;
@@ -513,26 +512,26 @@ export interface AbsPlaybackSession {
   updatedAt: number;
 }
 
-export interface AbsListeningSessionsEnvelope {
+export interface AudiobookshelfListeningSessionsEnvelope {
   total: number;
   numPages: number;
   page: number;
   itemsPerPage: number;
-  sessions: AbsPlaybackSession[];
+  sessions: AudiobookshelfPlaybackSession[];
 }
 
-export interface AbsListeningStatsItem {
+export interface AudiobookshelfListeningStatsItem {
   id: string;
   timeListening: number;
   mediaMetadata: Record<string, unknown>;
   lastUpdate: number;
 }
 
-export interface AbsListeningStats {
+export interface AudiobookshelfListeningStats {
   totalTime: number;
-  items: Record<string, AbsListeningStatsItem>;
+  items: Record<string, AudiobookshelfListeningStatsItem>;
   days: Record<string, number>;
   dayOfWeek: Record<string, number>;
   today: number;
-  recentSessions: AbsPlaybackSession[];
+  recentSessions: AudiobookshelfPlaybackSession[];
 }

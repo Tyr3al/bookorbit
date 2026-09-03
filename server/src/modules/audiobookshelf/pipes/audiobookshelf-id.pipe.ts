@@ -1,23 +1,23 @@
 import { BadRequestException } from '@nestjs/common';
 
-import { fromAbsSeriesUuid, fromAbsUuid } from '../../../common/utils/abs-id.utils';
+import { fromAudiobookshelfSeriesUuid, fromAudiobookshelfUuid } from '../../../common/utils/audiobookshelf-id.utils';
 
 /**
  * ABS clients (Prologue) echo back the UUID-shaped ids BookOrbit hands out in list/login
  * responses, so `:id` route params on the Audiobookshelf-compatible API arrive as those UUIDs,
- * not plain integers. Reverses `toAbsUuid()` back to the real numeric primary key.
+ * not plain integers. Reverses `toAudiobookshelfUuid()` back to the real numeric primary key.
  *
  * A plain function rather than a NestJS PipeTransform: Nest/Fastify apply implicit numeric
  * coercion to `@Param()` values reflected as `number` before a param-level pipe ever sees them,
  * which mangles a UUID string into NaN. Taking the param as a raw string and converting inline
  * sidesteps that entirely.
  */
-export function parseAbsId(value: string): number {
-  return parseWith(value, fromAbsUuid);
+export function parseAudiobookshelfId(value: string): number {
+  return parseWith(value, fromAudiobookshelfUuid);
 }
 
-export function parseAbsSeriesId(value: string): number {
-  return parseWith(value, fromAbsSeriesUuid);
+export function parseAudiobookshelfSeriesId(value: string): number {
+  return parseWith(value, fromAudiobookshelfSeriesUuid);
 }
 
 function parseWith(value: string, decodeUuid: (uuid: string) => number | null): number {

@@ -3,8 +3,8 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import { Public } from '../../../common/decorators/public.decorator';
 import { AuthService } from '../../../modules/auth/auth.service';
-import { AbsOAuthStateStore } from '../services/abs-oauth-state.store';
-import { ABS_BASE_PATH } from '../audiobookshelf.constants';
+import { AudiobookshelfOAuthStateStore } from '../services/audiobookshelf-oauth-state.store';
+import { AUDIOBOOKSHELF_BASE_PATH } from '../audiobookshelf.constants';
 import { AudiobookshelfEnabledGuard } from '../audiobookshelf-enabled.guard';
 
 const BLOCKED_SCHEMES = new Set(['http', 'https', 'javascript', 'data', 'file', 'vbscript']);
@@ -24,9 +24,9 @@ const STATE_PATTERN = /^[a-zA-Z0-9_-]{8,512}$/;
 @Controller('auth/openid')
 @Public()
 @UseGuards(AudiobookshelfEnabledGuard)
-export class AbsOAuthController {
+export class AudiobookshelfOAuthController {
   constructor(
-    private readonly stateStore: AbsOAuthStateStore,
+    private readonly stateStore: AudiobookshelfOAuthStateStore,
     private readonly authService: AuthService,
   ) {}
 
@@ -47,11 +47,11 @@ export class AbsOAuthController {
 
     const effectiveState = state !== undefined && STATE_PATTERN.test(state) ? state : this.stateStore.create(redirectUri);
     if (state === undefined || !STATE_PATTERN.test(state)) {
-      return reply.code(302).redirect(`${ABS_BASE_PATH}/auth/openid/login?state=${encodeURIComponent(effectiveState)}`);
+      return reply.code(302).redirect(`${AUDIOBOOKSHELF_BASE_PATH}/auth/openid/login?state=${encodeURIComponent(effectiveState)}`);
     }
     // Prologue supplied its own state: register it so mobile-redirect can validate it.
     this.stateStore.register(effectiveState, redirectUri);
-    return reply.code(302).redirect(`${ABS_BASE_PATH}/auth/openid/login?state=${encodeURIComponent(effectiveState)}`);
+    return reply.code(302).redirect(`${AUDIOBOOKSHELF_BASE_PATH}/auth/openid/login?state=${encodeURIComponent(effectiveState)}`);
   }
 
   /** GET /auth/openid/login - the login form shown inside Prologue's webview. */
@@ -80,7 +80,9 @@ export class AbsOAuthController {
       const { accessToken } = await this.authService.loginForAudiobookshelf({ username: body.username, password: body.password }, reply, req.ip);
       return reply
         .code(302)
-        .redirect(`${ABS_BASE_PATH}/auth/openid/mobile-redirect?code=${encodeURIComponent(accessToken)}&state=${encodeURIComponent(state)}`);
+        .redirect(
+          `${AUDIOBOOKSHELF_BASE_PATH}/auth/openid/mobile-redirect?code=${encodeURIComponent(accessToken)}&state=${encodeURIComponent(state)}`,
+        );
     } catch {
       reply.type('text/html').header('Cache-Control', 'no-store');
       return reply.send(renderLoginPage(state, 'Invalid username or password.'));
@@ -130,7 +132,7 @@ function renderLoginPage(state: string, error: string): string {
 </style>
 </head>
 <body>
-  <form method="post" action="${ABS_BASE_PATH}/auth/openid/login">
+  <form method="post" action="${AUDIOBOOKSHELF_BASE_PATH}/auth/openid/login">
     <h1>BookOrbit sign in</h1>
     <input type="hidden" name="state" value="${escapeHtml(state)}">
     <input name="username" placeholder="Username" autocomplete="username" autocapitalize="none" required>

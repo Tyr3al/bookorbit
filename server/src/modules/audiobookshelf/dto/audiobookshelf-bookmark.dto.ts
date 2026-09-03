@@ -1,6 +1,6 @@
 import { IsNotEmpty, IsNumber, IsString, MaxLength, Min } from 'class-validator';
 
-export class CreateAbsBookmarkDto {
+export class CreateAudiobookshelfBookmarkDto {
   @IsNumber({ allowInfinity: false, allowNaN: false })
   @Min(0)
   time!: number;
@@ -11,7 +11,7 @@ export class CreateAbsBookmarkDto {
   title!: string;
 }
 
-export class UpdateAbsBookmarkDto {
+export class UpdateAudiobookshelfBookmarkDto {
   @IsNumber({ allowInfinity: false, allowNaN: false })
   @Min(0)
   time!: number;

@@ -28,7 +28,7 @@ import * as schema from '../../db/schema';
 import { AUDIT_EVENT, AuditEventsService } from '../audit/audit-events.service';
 import type { RequestUser } from '../../common/types/request-user';
 import { sanitizeLogValue } from '../../common/utils/log-sanitize.utils';
-import { toAbsUuid } from '../../common/utils/abs-id.utils';
+import { toAudiobookshelfUuid } from '../../common/utils/audiobookshelf-id.utils';
 import { resolveUserAvatarUrl } from '../../common/utils/user-avatar-url';
 import { SystemMailService } from '../email/system-mail.service';
 import { UserService } from '../user/user.service';
@@ -252,7 +252,7 @@ export class AuthService {
    */
   async loginForAudiobookshelf(dto: LoginDto, reply: FastifyReply, ip?: string, returnTokens?: boolean) {
     const fullUser = await this.authenticateCredentials(dto, ip);
-    const pair = this.createAbsTokenPair(fullUser.id, fullUser.tokenVersion, fullUser.username);
+    const pair = this.createAudiobookshelfTokenPair(fullUser.id, fullUser.tokenVersion, fullUser.username);
     const authenticatedAt = new Date();
     await this.db.transaction(async (tx) => {
       await tx.insert(schema.refreshTokens).values({ userId: fullUser.id, tokenHash: pair.refreshTokenHash, expiresAt: pair.refreshExpiresAt });
@@ -387,7 +387,9 @@ export class AuthService {
    */
   async refreshForAudiobookshelf(rawToken: string, reply: FastifyReply) {
     if (!rawToken) throw new UnauthorizedException();
-    return this.rotateRefreshSession(rawToken, reply, (userId, tokenVersion, username) => this.createAbsTokenPair(userId, tokenVersion, username));
+    return this.rotateRefreshSession(rawToken, reply, (userId, tokenVersion, username) =>
+      this.createAudiobookshelfTokenPair(userId, tokenVersion, username),
+    );
   }
 
   private async rotateRefreshSession(
@@ -789,12 +791,12 @@ export class AuthService {
    * and read userId/username/jti/type claims, and treat the refresh token as a JWT too, so both
    * tokens carry the ABS claim set. The refresh token is stored hashed like the web token.
    */
-  private createAbsTokenPair(userId: number, tokenVersion: number, username: string) {
+  private createAudiobookshelfTokenPair(userId: number, tokenVersion: number, username: string) {
     const accessToken = this.jwtService.sign(
       {
         sub: userId,
         ver: tokenVersion,
-        userId: toAbsUuid(userId),
+        userId: toAudiobookshelfUuid(userId),
         username,
         jti: randomUUID(),
         type: 'access',
@@ -803,7 +805,7 @@ export class AuthService {
     );
     const rawRefreshToken = this.jwtService.sign(
       {
-        userId: toAbsUuid(userId),
+        userId: toAudiobookshelfUuid(userId),
         username,
         jti: randomUUID(),
         type: 'refresh',
@@ -815,7 +817,10 @@ export class AuthService {
     // Real Audiobookshelf's legacy `user.token` carries only {userId, username, iat}, no
     // expiry - unlike `accessToken`. Mirror that minimal, non-expiring shape for ABS clients
     // that read this field, while still keeping `sub`/`ver` so it validates as a bearer token.
-    const legacyToken = this.jwtService.sign({ sub: userId, ver: tokenVersion, userId: toAbsUuid(userId), username }, { expiresIn: '100y' });
+    const legacyToken = this.jwtService.sign(
+      { sub: userId, ver: tokenVersion, userId: toAudiobookshelfUuid(userId), username },
+      { expiresIn: '100y' },
+    );
 
     return { accessToken, rawRefreshToken, legacyToken, refreshExpiresAt: expiresAt, refreshTokenHash: tokenHash };
   }

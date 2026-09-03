@@ -3,12 +3,21 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import type { Book, BookFile } from '../../../db/schema';
 import { BookService } from '../../book/book.service';
 import { AudiobookshelfRepository } from '../audiobookshelf.repository';
-import { ABS_DEFAULT_IN_PROGRESS_LIMIT, ABS_FINISHED_PROGRESS, ABS_MAX_IN_PROGRESS_LIMIT } from '../audiobookshelf.constants';
-import type { AbsLibraryItemMinified, AbsMediaProgress } from '../audiobookshelf.types';
+import {
+  AUDIOBOOKSHELF_DEFAULT_IN_PROGRESS_LIMIT,
+  AUDIOBOOKSHELF_FINISHED_PROGRESS,
+  AUDIOBOOKSHELF_MAX_IN_PROGRESS_LIMIT,
+} from '../audiobookshelf.constants';
+import type { AudiobookshelfLibraryItemMinified, AudiobookshelfMediaProgress } from '../audiobookshelf.types';
 import type { RequestUser } from '../../../common/types/request-user';
 import { AudiobookshelfItemsService } from './audiobookshelf-items.service';
 import { AudiobookshelfSessionsService, type RecordLocalSessionInput } from './audiobookshelf-sessions.service';
-import { toAbsUuid, toAbsCompositeUuid, fromAbsCompositeUuid, fromAbsUuid } from '../../../common/utils/abs-id.utils';
+import {
+  toAudiobookshelfUuid,
+  toAudiobookshelfCompositeUuid,
+  fromAudiobookshelfCompositeUuid,
+  fromAudiobookshelfUuid,
+} from '../../../common/utils/audiobookshelf-id.utils';
 import { sanitizeLogValue } from '../../../common/utils/log-sanitize.utils';
 
 export interface UpdateProgressInput {
@@ -60,7 +69,7 @@ export class AudiobookshelfProgressService {
   async getMediaProgressForUser(
     user: Pick<RequestUser, 'id' | 'isSuperuser'> & Partial<Pick<RequestUser, 'contentFilters'>>,
     bookIds?: number[],
-  ): Promise<AbsMediaProgress[]> {
+  ): Promise<AudiobookshelfMediaProgress[]> {
     const rows = bookIds
       ? await this.repository.findProgressByUserIdAndBookIds(user.id, bookIds)
       : await this.repository.findProgressForAudiobookshelfUser(user);
@@ -82,7 +91,7 @@ export class AudiobookshelfProgressService {
   async getItemsInProgress(
     user: Pick<RequestUser, 'id' | 'isSuperuser'> & Partial<Pick<RequestUser, 'contentFilters'>>,
     requestedLimit?: number,
-  ): Promise<{ libraryItems: (AbsLibraryItemMinified & { progressLastUpdate: number })[] }> {
+  ): Promise<{ libraryItems: (AudiobookshelfLibraryItemMinified & { progressLastUpdate: number })[] }> {
     const limit = clampInProgressLimit(requestedLimit);
     const progressRows = await this.repository.findItemsInProgressForAudiobookshelfUser(user, limit);
     if (progressRows.length === 0) return { libraryItems: [] };
@@ -91,14 +100,14 @@ export class AudiobookshelfProgressService {
     const itemsById = new Map(items.map((item) => [item.id, item]));
     return {
       libraryItems: progressRows.flatMap((row) => {
-        const item = itemsById.get(toAbsUuid(row.bookId));
+        const item = itemsById.get(toAudiobookshelfUuid(row.bookId));
         return item ? [{ ...item, progressLastUpdate: row.progressLastUpdate.getTime() }] : [];
       }),
     };
   }
 
   /** Read a single item's progress (ABS GET /api/me/progress/:libraryItemId). */
-  async getMediaProgress(user: RequestUser, libraryItemId: number): Promise<AbsMediaProgress | null> {
+  async getMediaProgress(user: RequestUser, libraryItemId: number): Promise<AudiobookshelfMediaProgress | null> {
     const book = await this.requireExposedBook(user, libraryItemId);
     const rows = await this.repository.findProgressByUserIdAndBookIds(user.id, [book.id]);
     if (rows.length === 0) return null;
@@ -108,7 +117,7 @@ export class AudiobookshelfProgressService {
 
   /** ABS DELETE /api/me/progress/:id, where id identifies the user and library item. */
   async deleteMediaProgress(user: RequestUser, progressId: string): Promise<void> {
-    const composite = fromAbsCompositeUuid(progressId);
+    const composite = fromAudiobookshelfCompositeUuid(progressId);
     if (!composite || composite.a !== user.id) throw new NotFoundException('Progress not found');
 
     await this.requireExposedBook(user, composite.b);
@@ -117,7 +126,7 @@ export class AudiobookshelfProgressService {
   }
 
   /** ABS PATCH /api/me/progress/:libraryItemId - maps the payload onto audiobook_progress. */
-  async updateMediaProgress(user: RequestUser, libraryItemId: number, input: UpdateProgressInput): Promise<AbsMediaProgress> {
+  async updateMediaProgress(user: RequestUser, libraryItemId: number, input: UpdateProgressInput): Promise<AudiobookshelfMediaProgress> {
     const book = await this.requireExposedBook(user, libraryItemId);
     const files = await this.repository.findAudioFilesByBookId(book.id);
     if (files.length === 0) throw new NotFoundException(`Book ${book.id} has no audio files`);
@@ -160,7 +169,7 @@ export class AudiobookshelfProgressService {
     try {
       const entries = items.flatMap((item) => {
         if (!item.libraryItemId) return [];
-        const bookId = fromAbsUuid(item.libraryItemId);
+        const bookId = fromAudiobookshelfUuid(item.libraryItemId);
         return bookId === null ? [] : [{ bookId, input: item }];
       });
       const outcome = await this.applyProgressBatch(user, entries);
@@ -257,7 +266,7 @@ export class AudiobookshelfProgressService {
   toMediaProgress(
     row: { userId: number; bookId: number; percentage: number; currentFileId: number; positionSeconds: number; updatedAt: Date },
     files: BookFile[],
-  ): AbsMediaProgress {
+  ): AudiobookshelfMediaProgress {
     const orderedFiles = [...files].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.id - b.id);
     const duration = orderedFiles.reduce((sum, file) => sum + (file.durationSeconds ?? 0), 0) || null;
     const currentTime = this.absolutePosition(orderedFiles, row.currentFileId, row.positionSeconds);
@@ -265,16 +274,16 @@ export class AudiobookshelfProgressService {
     const updatedAt = row.updatedAt.getTime();
 
     return {
-      id: toAbsCompositeUuid(row.userId, row.bookId),
-      userId: toAbsUuid(row.userId),
-      libraryItemId: toAbsUuid(row.bookId),
+      id: toAudiobookshelfCompositeUuid(row.userId, row.bookId),
+      userId: toAudiobookshelfUuid(row.userId),
+      libraryItemId: toAudiobookshelfUuid(row.bookId),
       episodeId: null,
-      mediaItemId: toAbsUuid(row.bookId),
+      mediaItemId: toAudiobookshelfUuid(row.bookId),
       mediaItemType: 'book',
       duration,
       progress,
       currentTime,
-      isFinished: progress >= ABS_FINISHED_PROGRESS,
+      isFinished: progress >= AUDIOBOOKSHELF_FINISHED_PROGRESS,
       hideFromContinueListening: false,
       startedAt: updatedAt,
       lastUpdate: updatedAt,
@@ -438,8 +447,8 @@ export class AudiobookshelfProgressService {
 }
 
 function clampInProgressLimit(value: number | undefined): number {
-  if (value == null || !Number.isFinite(value) || value < 1) return ABS_DEFAULT_IN_PROGRESS_LIMIT;
-  return Math.min(Math.floor(value), ABS_MAX_IN_PROGRESS_LIMIT);
+  if (value == null || !Number.isFinite(value) || value < 1) return AUDIOBOOKSHELF_DEFAULT_IN_PROGRESS_LIMIT;
+  return Math.min(Math.floor(value), AUDIOBOOKSHELF_MAX_IN_PROGRESS_LIMIT);
 }
 
 function roundPercentage(value: number): number {
@@ -457,7 +466,7 @@ function parseLocalSession(raw: unknown): ParsedLocalSession | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const session = raw as Record<string, unknown>;
   if (typeof session.libraryItemId !== 'string') return null;
-  const bookId = fromAbsUuid(session.libraryItemId);
+  const bookId = fromAudiobookshelfUuid(session.libraryItemId);
   if (bookId === null) return null;
   const currentTime = finiteNumber(session.currentTime);
   const progress = finiteNumber(session.progress);

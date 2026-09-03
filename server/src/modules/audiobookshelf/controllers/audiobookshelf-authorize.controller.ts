@@ -8,7 +8,7 @@ import { AudiobookshelfEnabledGuard } from '../audiobookshelf-enabled.guard';
 
 @Controller('api/authorize')
 @UseGuards(AudiobookshelfEnabledGuard)
-export class AuthorizeController {
+export class AudiobookshelfAuthorizeController {
   constructor(private readonly authService: AudiobookshelfAuthService) {}
 
   @Get()

@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { toAbsCompositeUuid } from '../../../common/utils/abs-id.utils';
+import { toAudiobookshelfCompositeUuid } from '../../../common/utils/audiobookshelf-id.utils';
 import type { RequestUser } from '../../../common/types/request-user';
 import type { AudiobookshelfProgressService } from '../services/audiobookshelf-progress.service';
 import type { AudiobookshelfPlaybackService } from '../services/audiobookshelf-playback.service';
-import { SessionController } from './session.controller';
+import { AudiobookshelfSessionController } from './audiobookshelf-session.controller';
 
 function user(id = 7): RequestUser {
   return { id } as RequestUser;
@@ -17,10 +17,10 @@ function makeController() {
     sync: vi.fn().mockResolvedValue(undefined),
     close: vi.fn().mockResolvedValue(undefined),
   } as unknown as AudiobookshelfPlaybackService;
-  return { controller: new SessionController(progressService, playbackService), playbackService, progressService };
+  return { controller: new AudiobookshelfSessionController(progressService, playbackService), playbackService, progressService };
 }
 
-describe('SessionController.syncLocalSession', () => {
+describe('AudiobookshelfSessionController.syncLocalSession', () => {
   it('records one local session and returns plain OK', async () => {
     const { controller, progressService } = makeController();
     const currentUser = user();
@@ -31,13 +31,13 @@ describe('SessionController.syncLocalSession', () => {
   });
 });
 
-describe('SessionController.syncSession', () => {
+describe('AudiobookshelfSessionController.syncSession', () => {
   it('syncs playback fields through the progress service and returns plain OK', async () => {
     const { controller, playbackService } = makeController();
     const currentUser = user();
 
     await expect(
-      controller.syncSession(currentUser, toAbsCompositeUuid(7, 42), {
+      controller.syncSession(currentUser, toAudiobookshelfCompositeUuid(7, 42), {
         currentTime: 123.5,
         duration: 3600,
         timeListened: 45,
@@ -47,15 +47,19 @@ describe('SessionController.syncSession', () => {
       }),
     ).resolves.toBe('OK');
 
-    expect(playbackService.sync).toHaveBeenCalledWith(currentUser, toAbsCompositeUuid(7, 42), expect.objectContaining({ currentTime: 123.5 }));
+    expect(playbackService.sync).toHaveBeenCalledWith(
+      currentUser,
+      toAudiobookshelfCompositeUuid(7, 42),
+      expect.objectContaining({ currentTime: 123.5 }),
+    );
   });
 });
 
-describe('SessionController.closeSession', () => {
+describe('AudiobookshelfSessionController.closeSession', () => {
   it('closes a playback session and returns plain OK', async () => {
     const { controller, playbackService } = makeController();
     const currentUser = user();
-    const sessionId = toAbsCompositeUuid(7, 42);
+    const sessionId = toAudiobookshelfCompositeUuid(7, 42);
 
     await expect(controller.closeSession(currentUser, sessionId, { currentTime: 123.5 })).resolves.toBe('OK');
 

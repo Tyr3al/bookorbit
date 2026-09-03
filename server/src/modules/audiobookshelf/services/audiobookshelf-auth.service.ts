@@ -7,13 +7,13 @@ import { AudiobookshelfProgressService } from './audiobookshelf-progress.service
 import { AudiobookshelfLibrariesService } from './audiobookshelf-libraries.service';
 import { AudiobookshelfBookmarksService } from './audiobookshelf-bookmarks.service';
 import { UserService } from '../../user/user.service';
-import type { AbsLoginResponse, AbsPermissions, AbsUser } from '../audiobookshelf.types';
+import type { AudiobookshelfLoginResponse, AudiobookshelfPermissions, AudiobookshelfUser } from '../audiobookshelf.types';
 import type { RequestUser } from '../../../common/types/request-user';
-import { toAbsUuid } from '../../../common/utils/abs-id.utils';
-import { ABS_SERVER_VERSION } from '../audiobookshelf.constants';
+import { toAudiobookshelfUuid } from '../../../common/utils/audiobookshelf-id.utils';
+import { AUDIOBOOKSHELF_SERVER_VERSION } from '../audiobookshelf.constants';
 
 /** The subset of user data the ABS payloads need; satisfied by RequestUser and by AuthService responses. */
-type AbsUserSource = Pick<RequestUser, 'id' | 'username' | 'email' | 'isSuperuser' | 'active'> & {
+type AudiobookshelfUserSource = Pick<RequestUser, 'id' | 'username' | 'email' | 'isSuperuser' | 'active'> & {
   settings: unknown;
   permissions: readonly string[];
   contentFilters?: RequestUser['contentFilters'];
@@ -30,17 +30,17 @@ export class AudiobookshelfAuthService {
   ) {}
 
   /** POST /login: password login returning an ABS-shaped user with the long-lived token. */
-  async login(dto: LoginDto, reply: FastifyReply, ip?: string, source?: string, returnTokens?: boolean): Promise<AbsLoginResponse> {
+  async login(dto: LoginDto, reply: FastifyReply, ip?: string, source?: string, returnTokens?: boolean): Promise<AudiobookshelfLoginResponse> {
     const { accessToken, rawRefreshToken, legacyToken, user } = await this.authService.loginForAudiobookshelf(dto, reply, ip, returnTokens);
     return this.buildLoginResponse(user, accessToken, rawRefreshToken, source, legacyToken);
   }
 
   /** POST /auth/refresh: rotate the refresh token and return a fresh token pair. */
-  async refresh(rawRefreshToken: string | undefined, reply: FastifyReply): Promise<AbsLoginResponse> {
+  async refresh(rawRefreshToken: string | undefined, reply: FastifyReply): Promise<AudiobookshelfLoginResponse> {
     const { accessToken, rawRefreshToken: nextRefreshToken, userId } = await this.authService.refreshForAudiobookshelf(rawRefreshToken ?? '', reply);
     const user = await this.userService.findByIdWithPermissions(userId);
     if (!user) throw new UnauthorizedException();
-    const userSource: AbsUserSource = {
+    const userSource: AudiobookshelfUserSource = {
       id: user.id,
       username: user.username,
       email: user.email,
@@ -54,30 +54,30 @@ export class AudiobookshelfAuthService {
   }
 
   /** GET /api/authorize: re-validate the presented token and return the user payload. */
-  async authorize(user: RequestUser, token?: string): Promise<AbsLoginResponse> {
+  async authorize(user: RequestUser, token?: string): Promise<AudiobookshelfLoginResponse> {
     return this.buildLoginResponse(user, token);
   }
 
   /** GET /api/me: the user payload without a fresh token. */
-  async me(user: RequestUser, token?: string): Promise<AbsUser> {
+  async me(user: RequestUser, token?: string): Promise<AudiobookshelfUser> {
     const response = await this.buildLoginResponse(user, token);
     return response.user;
   }
 
   private async buildLoginResponse(
-    user: AbsUserSource,
+    user: AudiobookshelfUserSource,
     accessToken?: string,
     refreshToken?: string | null,
     source?: string,
     legacyToken?: string,
-  ): Promise<AbsLoginResponse> {
+  ): Promise<AudiobookshelfLoginResponse> {
     const mediaProgress = await this.progressService.getMediaProgressForUser(user);
     const [{ libraries }, { bookmarks }] = await Promise.all([this.librariesService.findLibraries(user), this.bookmarksService.getBookmarks(user)]);
     const isSuperuser = user.isSuperuser;
     const permissions = this.buildPermissions(user);
 
-    const absUser: AbsUser = {
-      id: toAbsUuid(user.id),
+    const absUser: AudiobookshelfUser = {
+      id: toAudiobookshelfUuid(user.id),
       username: user.username,
       email: user.email ?? '',
       type: isSuperuser ? 'root' : 'user',
@@ -132,7 +132,7 @@ export class AudiobookshelfAuthService {
         language: 'en-us',
         allowedOrigins: [],
         logLevel: 2,
-        version: ABS_SERVER_VERSION,
+        version: AUDIOBOOKSHELF_SERVER_VERSION,
         buildNumber: 1,
         authLoginCustomMessage: null,
         authActiveAuthMethods: ['local'],
@@ -154,7 +154,7 @@ export class AudiobookshelfAuthService {
     };
   }
 
-  private buildPermissions(user: AbsUserSource): AbsPermissions {
+  private buildPermissions(user: AudiobookshelfUserSource): AudiobookshelfPermissions {
     if (user.isSuperuser) {
       return {
         download: true,

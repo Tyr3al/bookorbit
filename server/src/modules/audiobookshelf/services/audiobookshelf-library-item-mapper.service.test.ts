@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { LibraryItemMapperService } from './library-item-mapper.service';
-import type { MapLibraryItemInput, MapperAuthorRow, MapperNarratorRow, MapperSeriesRow } from './library-item-mapper.service';
+import { AudiobookshelfLibraryItemMapperService } from './audiobookshelf-library-item-mapper.service';
+import type { MapLibraryItemInput, MapperAuthorRow, MapperNarratorRow, MapperSeriesRow } from './audiobookshelf-library-item-mapper.service';
 import type { Book, BookFile, BookMetadata } from '../../db/schema';
-import { toAbsSeriesUuid, toAbsUuid } from '../../../common/utils/abs-id.utils';
+import { toAudiobookshelfSeriesUuid, toAudiobookshelfUuid } from '../../../common/utils/audiobookshelf-id.utils';
 
-const mapper = new LibraryItemMapperService();
+const mapper = new AudiobookshelfLibraryItemMapperService();
 
 function book(overrides: Partial<Book> = {}): Book {
   return {
@@ -155,13 +155,13 @@ function input(overrides: Partial<MapLibraryItemInput> = {}): MapLibraryItemInpu
   };
 }
 
-describe('LibraryItemMapperService', () => {
+describe('AudiobookshelfLibraryItemMapperService', () => {
   it('maps identity, timestamps, and file-level fields', () => {
     const item = mapper.toLibraryItem(input());
 
-    expect(item.id).toBe(toAbsUuid(7));
-    expect(item.libraryId).toBe(toAbsUuid(2));
-    expect(item.folderId).toBe(toAbsUuid(5));
+    expect(item.id).toBe(toAudiobookshelfUuid(7));
+    expect(item.libraryId).toBe(toAudiobookshelfUuid(2));
+    expect(item.folderId).toBe(toAudiobookshelfUuid(5));
     expect(item.mediaType).toBe('book');
     expect(item.path).toBe('/books/A Collection/Book One');
     expect(item.isFile).toBe(false);
@@ -189,10 +189,14 @@ describe('LibraryItemMapperService', () => {
     expect(tracks[0]).toMatchObject({
       index: 0,
       startOffset: 0,
-      contentUrl: `/abs/api/items/${toAbsUuid(7)}/file/${toAbsUuid(11)}`,
+      contentUrl: `/abs/api/items/${toAudiobookshelfUuid(7)}/file/${toAudiobookshelfUuid(11)}`,
       mimeType: 'audio/mpeg',
     });
-    expect(tracks[1]).toMatchObject({ index: 1, startOffset: 60, contentUrl: `/abs/api/items/${toAbsUuid(7)}/file/${toAbsUuid(12)}` });
+    expect(tracks[1]).toMatchObject({
+      index: 1,
+      startOffset: 60,
+      contentUrl: `/abs/api/items/${toAudiobookshelfUuid(7)}/file/${toAudiobookshelfUuid(12)}`,
+    });
   });
 
   it('maps audioFiles with metadata and per-file duration', () => {
@@ -217,12 +221,12 @@ describe('LibraryItemMapperService', () => {
     expect(media.metadata.publisher).toBe('ACME');
     expect(media.metadata.publishedYear).toBe('2024');
     expect(media.metadata.isbn).toBe('9781234567897');
-    expect(media.metadata.authors).toEqual([{ id: toAbsUuid(1), name: 'Jane Doe' }]);
+    expect(media.metadata.authors).toEqual([{ id: toAudiobookshelfUuid(1), name: 'Jane Doe' }]);
     expect(media.metadata.authorName).toBe('Jane Doe');
     expect(media.metadata.authorNameLF).toBe('Doe, Jane');
     expect(media.metadata.narrators).toEqual(['Narrator One']);
     expect(media.metadata.narratorName).toBe('Narrator One');
-    expect(media.metadata.series).toEqual([{ id: toAbsSeriesUuid(3), name: 'A Collection', sequence: '1' }]);
+    expect(media.metadata.series).toEqual([{ id: toAudiobookshelfSeriesUuid(3), name: 'A Collection', sequence: '1' }]);
     expect(media.metadata.seriesName).toBe('A Collection #1');
     expect(media.metadata.genres).toEqual(['Fantasy']);
     expect(media.duration).toBe(120);

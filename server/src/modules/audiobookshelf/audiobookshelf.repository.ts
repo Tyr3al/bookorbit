@@ -5,29 +5,29 @@ import type { PgColumn } from 'drizzle-orm/pg-core';
 import type { ContentFilterRules } from '@bookorbit/types';
 
 import { buildContentFilterClauses } from '../../common/utils/content-filter-sql.utils';
-import { parseAbsItemFilter } from '../../common/utils/abs-filter.utils';
-import { fromAbsSeriesUuid, fromAbsUuid } from '../../common/utils/abs-id.utils';
+import { parseAudiobookshelfItemFilter } from '../../common/utils/audiobookshelf-filter.utils';
+import { fromAudiobookshelfSeriesUuid, fromAudiobookshelfUuid } from '../../common/utils/audiobookshelf-id.utils';
 import { DB } from '../../db';
 import * as schema from '../../db/schema';
-import { ABS_AUDIO_FORMATS, ABS_FINISHED_PROGRESS } from './audiobookshelf.constants';
-import type { AbsSeriesSort } from './audiobookshelf.types';
+import { AUDIOBOOKSHELF_AUDIO_FORMATS, AUDIOBOOKSHELF_FINISHED_PROGRESS } from './audiobookshelf.constants';
+import type { AudiobookshelfSeriesSort } from './audiobookshelf.types';
 
 type Db = NodePgDatabase<typeof schema>;
 
-export type AbsItemSort = 'title' | 'author' | 'addedAt' | 'updatedAt' | 'duration' | 'size' | 'publishedYear';
+export type AudiobookshelfItemSort = 'title' | 'author' | 'addedAt' | 'updatedAt' | 'duration' | 'size' | 'publishedYear';
 
-export interface AbsItemPageQuery {
+export interface AudiobookshelfItemPageQuery {
   limit: number;
   offset: number;
-  sort: AbsItemSort;
+  sort: AudiobookshelfItemSort;
   desc?: boolean;
   search?: string;
   filter?: string;
 }
 
-export type AbsAuthorSort = 'name' | 'lastFirst' | 'numBooks';
+export type AudiobookshelfAuthorSort = 'name' | 'lastFirst' | 'numBooks';
 
-const AUDIO_FORMAT_WHERE = inArray(schema.bookFiles.format, ABS_AUDIO_FORMATS);
+const AUDIO_FORMAT_WHERE = inArray(schema.bookFiles.format, AUDIOBOOKSHELF_AUDIO_FORMATS);
 const BOOK_VISIBLE_WHERE = sql`${schema.books.status} <> 'processing'`;
 
 @Injectable()
@@ -142,7 +142,7 @@ export class AudiobookshelfRepository {
   }
 
   /** Audio book ids in one library, paginated. */
-  async findAudioBookIds(libraryId: number, query: AbsItemPageQuery, contentFilters?: ContentFilterRules): Promise<number[]> {
+  async findAudioBookIds(libraryId: number, query: AudiobookshelfItemPageQuery, contentFilters?: ContentFilterRules): Promise<number[]> {
     const orderBy = this.buildItemOrder(query.sort, query.desc ?? false);
     const filterClauses = contentFilters ? buildContentFilterClauses(contentFilters, this.db) : [];
     const rows = await this.db
@@ -155,7 +155,7 @@ export class AudiobookshelfRepository {
           BOOK_VISIBLE_WHERE,
           this.hasAudioFile(),
           ...filterClauses,
-          this.buildAbsFilterClause(query.filter),
+          this.buildAudiobookshelfFilterClause(query.filter),
           query.search ? this.buildTitleSearch(query.search) : undefined,
         ),
       )
@@ -194,7 +194,7 @@ export class AudiobookshelfRepository {
           BOOK_VISIBLE_WHERE,
           this.hasAudioFile(),
           ...filterClauses,
-          this.buildAbsFilterClause(filter),
+          this.buildAudiobookshelfFilterClause(filter),
           search ? this.buildTitleSearch(search) : undefined,
         ),
       );
@@ -422,7 +422,7 @@ export class AudiobookshelfRepository {
           ...filterClauses,
           or(gt(schema.audiobookProgress.percentage, 0), gt(schema.audiobookProgress.positionSeconds, 0)),
           not(hasReadStatus),
-          or(lt(schema.audiobookProgress.percentage, ABS_FINISHED_PROGRESS * 100), hasExplicitReadingStatus),
+          or(lt(schema.audiobookProgress.percentage, AUDIOBOOKSHELF_FINISHED_PROGRESS * 100), hasExplicitReadingStatus),
         ),
       );
     return rows[0]?.count ?? 0;
@@ -487,7 +487,7 @@ export class AudiobookshelfRepository {
           ...filterClauses,
           or(gt(schema.audiobookProgress.percentage, 0), gt(schema.audiobookProgress.positionSeconds, 0)),
           not(hasReadStatus),
-          or(lt(schema.audiobookProgress.percentage, ABS_FINISHED_PROGRESS * 100), hasExplicitReadingStatus),
+          or(lt(schema.audiobookProgress.percentage, AUDIOBOOKSHELF_FINISHED_PROGRESS * 100), hasExplicitReadingStatus),
         ),
       )
       .orderBy(desc(schema.audiobookProgress.updatedAt), desc(schema.audiobookProgress.bookId))
@@ -549,7 +549,7 @@ export class AudiobookshelfRepository {
     contentFilters: ContentFilterRules | undefined,
     limit: number,
     offset: number,
-    sort: AbsAuthorSort = 'name',
+    sort: AudiobookshelfAuthorSort = 'name',
     sortDesc = false,
     nameFilter?: string,
   ): Promise<{ rows: (schema.Author & { numBooks: number; addedAt: Date; updatedAt: Date })[]; total: number }> {
@@ -601,8 +601,6 @@ export class AudiobookshelfRepository {
   /**
    * Narrators that have audio books in the given libraries, with the count of exposed books.
    * Counts books (not files), so a multi-file audiobook counts once.
-   */
-  /**
    * @param nameFilter Optional case-insensitive substring match on the narrator name (used by
    * GET /api/libraries/:id/search).
    * @param limit Optional bound applied in SQL. Omitted by the unbounded filterdata/narrators-list
@@ -849,7 +847,7 @@ export class AudiobookshelfRepository {
     contentFilters: ContentFilterRules | undefined,
     limit: number,
     offset: number,
-    sort: AbsSeriesSort = 'name',
+    sort: AudiobookshelfSeriesSort = 'name',
     sortDesc = false,
     nameFilter?: string,
   ) {
@@ -1094,14 +1092,14 @@ export class AudiobookshelfRepository {
   /** Translates real ABS's `filter=<category>.<value>` item-list filter into a SQL clause
    * scoped to `schema.books.id`. Unrecognized categories/values fall back to no filtering
    * (matches ABS's tolerant behavior better than hiding everything). */
-  private buildAbsFilterClause(filter?: string): SQL | undefined {
-    const parsed = parseAbsItemFilter(filter);
+  private buildAudiobookshelfFilterClause(filter?: string): SQL | undefined {
+    const parsed = parseAudiobookshelfItemFilter(filter);
     if (!parsed) return undefined;
     const { category, value } = parsed;
 
     switch (category) {
       case 'authors': {
-        const authorId = fromAbsUuid(value);
+        const authorId = fromAudiobookshelfUuid(value);
         if (authorId === null) return sql`false`;
         return exists(
           this.db
@@ -1111,7 +1109,7 @@ export class AudiobookshelfRepository {
         );
       }
       case 'series': {
-        const seriesId = fromAbsSeriesUuid(value);
+        const seriesId = fromAudiobookshelfSeriesUuid(value);
         if (seriesId === null) return sql`false`;
         return exists(
           this.db
@@ -1212,7 +1210,7 @@ export class AudiobookshelfRepository {
     );
   }
 
-  private buildItemOrder(sort: AbsItemSort, descending = false): SQL[] {
+  private buildItemOrder(sort: AudiobookshelfItemSort, descending = false): SQL[] {
     const titleOrder = descending
       ? desc(sql`lower(coalesce(${schema.bookMetadata.title}, ''))`)
       : asc(sql`lower(coalesce(${schema.bookMetadata.title}, ''))`);

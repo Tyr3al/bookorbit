@@ -21,7 +21,7 @@ import { users } from './auth';
  * match upstream's per-play rows. 'local' rows are inserts by design (no dedup on re-upload), so
  * a client retry of the same offline session adds a duplicate row.
  */
-export const absListeningSessions = pgTable(
+export const audiobookshelfListeningSessions = pgTable(
   'abs_listening_sessions',
   {
     id: serial('id').primaryKey(),
@@ -71,5 +71,5 @@ export const absListeningSessions = pgTable(
   ],
 );
 
-export type AbsListeningSessionRow = typeof absListeningSessions.$inferSelect;
-export type NewAbsListeningSession = typeof absListeningSessions.$inferInsert;
+export type AudiobookshelfListeningSessionRow = typeof audiobookshelfListeningSessions.$inferSelect;
+export type NewAudiobookshelfListeningSession = typeof audiobookshelfListeningSessions.$inferInsert;

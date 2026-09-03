@@ -7,7 +7,7 @@ import type { AudiobookshelfItemsService } from './audiobookshelf-items.service'
 import type { BookService } from '../book/book.service';
 import type { BookFile } from '../../db/schema';
 import type { RequestUser } from '../../common/types/request-user';
-import { toAbsCompositeUuid, toAbsUuid } from '../../../common/utils/abs-id.utils';
+import { toAudiobookshelfCompositeUuid, toAudiobookshelfUuid } from '../../../common/utils/audiobookshelf-id.utils';
 
 function audioFile(overrides: Partial<BookFile> = {}): BookFile {
   return {
@@ -66,7 +66,7 @@ function makeService(overrides: { files?: BookFile[] } = {}) {
   } as unknown as AudiobookshelfRepository;
   const itemsService = {
     requireExposedBook: vi.fn().mockResolvedValue({ id: 7, libraryId: 3 }),
-    getMinifiedItemsByIds: vi.fn().mockResolvedValue([{ id: toAbsUuid(7) }]),
+    getMinifiedItemsByIds: vi.fn().mockResolvedValue([{ id: toAudiobookshelfUuid(7) }]),
   } as unknown as AudiobookshelfItemsService;
   const bookService = { saveAudioProgress: vi.fn().mockResolvedValue(undefined) } as unknown as BookService;
   const sessionsService = { recordLocalSessions: vi.fn().mockResolvedValue(undefined) };
@@ -89,7 +89,7 @@ describe('AudiobookshelfProgressService.getItemsInProgress', () => {
     const { service, repository, itemsService } = makeService();
 
     await expect(service.getItemsInProgress(user())).resolves.toEqual({
-      libraryItems: [{ id: toAbsUuid(7), progressLastUpdate: Date.parse('2024-01-02T00:00:00Z') }],
+      libraryItems: [{ id: toAudiobookshelfUuid(7), progressLastUpdate: Date.parse('2024-01-02T00:00:00Z') }],
     });
     expect(repository.findItemsInProgressForAudiobookshelfUser).toHaveBeenCalledWith(user(), 25);
     expect(itemsService.getMinifiedItemsByIds).toHaveBeenCalledWith([7]);
@@ -114,7 +114,7 @@ describe('AudiobookshelfProgressService.toMediaProgress', () => {
     expect(progress.currentTime).toBe(70);
     expect(progress.duration).toBe(120);
     expect(progress.isFinished).toBe(false);
-    expect(progress.libraryItemId).toBe(toAbsUuid(7));
+    expect(progress.libraryItemId).toBe(toAudiobookshelfUuid(7));
     expect(progress.mediaItemType).toBe('book');
   });
 
@@ -223,7 +223,7 @@ describe('AudiobookshelfProgressService.updateMediaProgress', () => {
   it('preserves explicit finish state for locally synced sessions', async () => {
     const { service, bookService } = makeService();
 
-    await service.syncLocalSessions(user(), [{ libraryItemId: toAbsUuid(7), currentTime: 120, isFinished: true }]);
+    await service.syncLocalSessions(user(), [{ libraryItemId: toAudiobookshelfUuid(7), currentTime: 120, isFinished: true }]);
 
     expect(bookService.saveAudioProgress).toHaveBeenCalledWith(
       1,
@@ -238,7 +238,7 @@ describe('AudiobookshelfProgressService.updateMediaProgress', () => {
   it('records one local session using the shared progress update path', async () => {
     const { service, bookService } = makeService();
 
-    await service.syncLocalSession(user(), { libraryItemId: toAbsUuid(7), currentTime: 30, isFinished: false, extra: 'ignored' });
+    await service.syncLocalSession(user(), { libraryItemId: toAudiobookshelfUuid(7), currentTime: 30, isFinished: false, extra: 'ignored' });
 
     expect(bookService.saveAudioProgress).toHaveBeenCalledWith(
       1,
@@ -253,7 +253,7 @@ describe('AudiobookshelfProgressService.updateMediaProgress', () => {
   it('persists a session row for a single local session', async () => {
     const { service, sessionsService } = makeService();
 
-    await service.syncLocalSession(user(), { libraryItemId: toAbsUuid(7), currentTime: 30, timeListening: 15, displayTitle: 'A Book' });
+    await service.syncLocalSession(user(), { libraryItemId: toAudiobookshelfUuid(7), currentTime: 30, timeListening: 15, displayTitle: 'A Book' });
 
     expect(sessionsService.recordLocalSessions).toHaveBeenCalledWith(1, [
       expect.objectContaining({ bookId: 7, libraryId: 3, currentTime: 30, timeListening: 15, displayTitle: 'A Book' }),
@@ -264,7 +264,7 @@ describe('AudiobookshelfProgressService.updateMediaProgress', () => {
     const { service, sessionsService, bookService } = makeService();
     sessionsService.recordLocalSessions.mockRejectedValue(new Error('db unavailable'));
 
-    await expect(service.syncLocalSession(user(), { libraryItemId: toAbsUuid(7), currentTime: 30 })).resolves.toBeUndefined();
+    await expect(service.syncLocalSession(user(), { libraryItemId: toAudiobookshelfUuid(7), currentTime: 30 })).resolves.toBeUndefined();
     expect(bookService.saveAudioProgress).toHaveBeenCalled();
   });
 
@@ -272,7 +272,7 @@ describe('AudiobookshelfProgressService.updateMediaProgress', () => {
     const { service } = makeService();
 
     await expect(service.syncLocalSession(user(), { currentTime: 30 })).rejects.toBeInstanceOf(BadRequestException);
-    await expect(service.syncLocalSession(user(), { libraryItemId: toAbsUuid(7) })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.syncLocalSession(user(), { libraryItemId: toAudiobookshelfUuid(7) })).rejects.toBeInstanceOf(BadRequestException);
   });
 });
 
@@ -283,8 +283,8 @@ describe('AudiobookshelfProgressService.batchUpdateMediaProgress', () => {
     vi.mocked(repository.findProgressByUserIdAndBookIds).mockResolvedValue([]);
 
     await service.batchUpdateMediaProgress(user(), [
-      { libraryItemId: toAbsUuid(7), currentTime: 30 },
-      { libraryItemId: toAbsUuid(99), currentTime: 10 },
+      { libraryItemId: toAudiobookshelfUuid(7), currentTime: 30 },
+      { libraryItemId: toAudiobookshelfUuid(99), currentTime: 10 },
     ]);
 
     expect(bookService.saveAudioProgress).toHaveBeenCalledTimes(1);
@@ -299,7 +299,7 @@ describe('AudiobookshelfProgressService.batchUpdateMediaProgress', () => {
     ] as never);
 
     await service.batchUpdateMediaProgress(user(), [
-      { libraryItemId: toAbsUuid(7), currentTime: 30, lastUpdate: Date.parse('2023-01-01T00:00:00Z') },
+      { libraryItemId: toAudiobookshelfUuid(7), currentTime: 30, lastUpdate: Date.parse('2023-01-01T00:00:00Z') },
     ]);
 
     expect(bookService.saveAudioProgress).not.toHaveBeenCalled();
@@ -311,9 +311,9 @@ describe('AudiobookshelfProgressService.batchUpdateMediaProgress', () => {
     vi.mocked(repository.findProgressByUserIdAndBookIds).mockResolvedValue([]);
 
     await service.batchUpdateMediaProgress(user(), [
-      { libraryItemId: toAbsUuid(7), currentTime: 10 },
-      { libraryItemId: toAbsUuid(8), currentTime: 20 },
-      { libraryItemId: toAbsUuid(7), currentTime: 15 },
+      { libraryItemId: toAudiobookshelfUuid(7), currentTime: 10 },
+      { libraryItemId: toAudiobookshelfUuid(8), currentTime: 20 },
+      { libraryItemId: toAudiobookshelfUuid(7), currentTime: 15 },
     ]);
 
     expect(repository.findExposedAudioBooksByIds).toHaveBeenCalledTimes(1);
@@ -330,9 +330,9 @@ describe('AudiobookshelfProgressService.batchUpdateMediaProgress', () => {
     vi.mocked(repository.findProgressByUserIdAndBookIds).mockResolvedValue([]);
 
     await service.batchUpdateMediaProgress(user(), [
-      { libraryItemId: toAbsUuid(7), currentTime: 10 },
-      { libraryItemId: toAbsUuid(8), currentTime: 20 },
-      { libraryItemId: toAbsUuid(7), currentTime: 15 },
+      { libraryItemId: toAudiobookshelfUuid(7), currentTime: 10 },
+      { libraryItemId: toAudiobookshelfUuid(8), currentTime: 20 },
+      { libraryItemId: toAudiobookshelfUuid(7), currentTime: 15 },
     ]);
 
     const positionsForBook7 = vi
@@ -348,8 +348,8 @@ describe('AudiobookshelfProgressService.batchUpdateMediaProgress', () => {
     vi.mocked(repository.findProgressByUserIdAndBookIds).mockResolvedValue([]);
 
     await service.batchUpdateMediaProgress(user(), [
-      { libraryItemId: toAbsUuid(7), currentTime: 30, lastUpdate: Date.parse('2025-06-01T00:00:00Z') },
-      { libraryItemId: toAbsUuid(7), currentTime: 10, lastUpdate: Date.parse('2025-01-01T00:00:00Z') },
+      { libraryItemId: toAudiobookshelfUuid(7), currentTime: 30, lastUpdate: Date.parse('2025-06-01T00:00:00Z') },
+      { libraryItemId: toAudiobookshelfUuid(7), currentTime: 10, lastUpdate: Date.parse('2025-01-01T00:00:00Z') },
     ]);
 
     expect(bookService.saveAudioProgress).toHaveBeenCalledTimes(1);
@@ -379,8 +379,8 @@ describe('AudiobookshelfProgressService.syncLocalSessions', () => {
     vi.mocked(repository.findProgressByUserIdAndBookIds).mockResolvedValue([]);
 
     const result = await service.syncLocalSessions(user(), [
-      { libraryItemId: toAbsUuid(7), currentTime: 40 },
-      { libraryItemId: toAbsUuid(42), currentTime: 5 },
+      { libraryItemId: toAudiobookshelfUuid(7), currentTime: 40 },
+      { libraryItemId: toAudiobookshelfUuid(42), currentTime: 5 },
     ]);
 
     expect(result).toEqual({ results: [] });
@@ -394,7 +394,7 @@ describe('AudiobookshelfProgressService.syncLocalSessions', () => {
     vi.mocked(repository.findExposedAudioBooksByIds).mockResolvedValue([{ id: 7 }] as never);
     vi.mocked(repository.findAudioFilesByBookIds).mockResolvedValue([]);
 
-    await expect(service.syncLocalSessions(user(), [{ libraryItemId: toAbsUuid(7), currentTime: 40 }])).resolves.toEqual({ results: [] });
+    await expect(service.syncLocalSessions(user(), [{ libraryItemId: toAudiobookshelfUuid(7), currentTime: 40 }])).resolves.toEqual({ results: [] });
     expect(bookService.saveAudioProgress).not.toHaveBeenCalled();
   });
 
@@ -405,7 +405,7 @@ describe('AudiobookshelfProgressService.syncLocalSessions', () => {
 
     await service.syncLocalSessions(user(), [
       {
-        libraryItemId: toAbsUuid(7),
+        libraryItemId: toAudiobookshelfUuid(7),
         currentTime: 40,
         timeListening: 90,
         displayTitle: 'A Book',
@@ -438,8 +438,8 @@ describe('AudiobookshelfProgressService.syncLocalSessions', () => {
     const { service, sessionsService } = makeService();
 
     await service.syncLocalSessions(user(), [
-      { libraryItemId: toAbsUuid(7), currentTime: -12, timeListening: 30 },
-      { libraryItemId: toAbsUuid(8), currentTime: 20, timeListening: 40 },
+      { libraryItemId: toAudiobookshelfUuid(7), currentTime: -12, timeListening: 30 },
+      { libraryItemId: toAudiobookshelfUuid(8), currentTime: 20, timeListening: 40 },
     ]);
 
     expect(sessionsService.recordLocalSessions).toHaveBeenCalledTimes(1);
@@ -455,7 +455,9 @@ describe('AudiobookshelfProgressService.syncLocalSessions', () => {
     vi.mocked(repository.findProgressByUserIdAndBookIds).mockResolvedValue([]);
     sessionsService.recordLocalSessions.mockRejectedValue(new Error('db unavailable'));
 
-    await expect(service.syncLocalSessions(user(), [{ libraryItemId: toAbsUuid(7), currentTime: 40, timeListening: 10 }])).resolves.toEqual({
+    await expect(
+      service.syncLocalSessions(user(), [{ libraryItemId: toAudiobookshelfUuid(7), currentTime: 40, timeListening: 10 }]),
+    ).resolves.toEqual({
       results: [],
     });
   });
@@ -465,7 +467,7 @@ describe('AudiobookshelfProgressService.deleteMediaProgress', () => {
   it('deletes progress only for the user encoded in the composite id', async () => {
     const { service, repository, itemsService } = makeService();
 
-    await expect(service.deleteMediaProgress(user(), toAbsCompositeUuid(1, 7))).resolves.toBeUndefined();
+    await expect(service.deleteMediaProgress(user(), toAudiobookshelfCompositeUuid(1, 7))).resolves.toBeUndefined();
 
     expect(itemsService.requireExposedBook).toHaveBeenCalledWith(user(), 7);
     expect(repository.deleteProgressByUserIdAndBookId).toHaveBeenCalledWith(1, 7);
@@ -474,7 +476,7 @@ describe('AudiobookshelfProgressService.deleteMediaProgress', () => {
   it('rejects a composite id belonging to another user without touching progress', async () => {
     const { service, repository, itemsService } = makeService();
 
-    await expect(service.deleteMediaProgress(user(), toAbsCompositeUuid(2, 7))).rejects.toThrow('Progress not found');
+    await expect(service.deleteMediaProgress(user(), toAudiobookshelfCompositeUuid(2, 7))).rejects.toThrow('Progress not found');
 
     expect(itemsService.requireExposedBook).not.toHaveBeenCalled();
     expect(repository.deleteProgressByUserIdAndBookId).not.toHaveBeenCalled();
@@ -484,6 +486,6 @@ describe('AudiobookshelfProgressService.deleteMediaProgress', () => {
     const { service, repository } = makeService();
     vi.mocked(repository.deleteProgressByUserIdAndBookId).mockResolvedValue(false);
 
-    await expect(service.deleteMediaProgress(user(), toAbsCompositeUuid(1, 7))).rejects.toThrow('Progress not found');
+    await expect(service.deleteMediaProgress(user(), toAudiobookshelfCompositeUuid(1, 7))).rejects.toThrow('Progress not found');
   });
 });

@@ -8,7 +8,7 @@ import { AudiobookshelfEnabledGuard } from '../audiobookshelf-enabled.guard';
 
 @Controller('api/session')
 @UseGuards(AudiobookshelfEnabledGuard)
-export class SessionController {
+export class AudiobookshelfSessionController {
   constructor(
     private readonly progressService: AudiobookshelfProgressService,
     private readonly playbackService: AudiobookshelfPlaybackService,

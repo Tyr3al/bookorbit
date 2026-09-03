@@ -15,7 +15,7 @@ import fastifyCompress from '@fastify/compress';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { appConfig } from './config/config';
 import { setupSwaggerDocs } from './swagger';
-import { ABS_BASE_PATH } from './modules/audiobookshelf/audiobookshelf.constants';
+import { AUDIOBOOKSHELF_BASE_PATH } from './modules/audiobookshelf/audiobookshelf.constants';
 import {
   parseBooleanEnv,
   parseTrustProxy,
@@ -104,7 +104,7 @@ async function bootstrap() {
 
   await app.register(fastifyHelmet as never, buildHelmetOptions({ allowCloudflareInsights }));
   registerConditionalHsts(standardFastify);
-  registerAbsConditionalGet(standardFastify, ABS_BASE_PATH);
+  registerAbsConditionalGet(standardFastify, AUDIOBOOKSHELF_BASE_PATH);
 
   await app.register(fastifyCompress as never, { encodings: ['gzip', 'br'] });
 
@@ -123,13 +123,13 @@ async function bootstrap() {
   const adapterAny = adapter as any;
   adapterAny.setNotFoundHandler = (nestHandler: (req: unknown, res: unknown) => void) => {
     fastify.setNotFoundHandler(async (request, reply) => {
-      if (request.url.startsWith('/api') || isAbsApiPath(request.url, ABS_BASE_PATH)) {
+      if (request.url.startsWith('/api') || isAbsApiPath(request.url, AUDIOBOOKSHELF_BASE_PATH)) {
         return nestHandler(request, reply);
       }
       if (!shouldServeSpaFallback(request.url)) {
         return reply.status(404).send({ statusCode: 404, message: 'Not Found', path: request.url });
       }
-      if (request.url.startsWith(ABS_BASE_PATH)) {
+      if (request.url.startsWith(AUDIOBOOKSHELF_BASE_PATH)) {
         // A real Audiobookshelf server answers its own web app at its root, and ABS clients
         // (Prologue) probe the configured server address for these markers before starting the
         // OAuth flow - so an otherwise-unmatched path under /abs gets the same marker page,

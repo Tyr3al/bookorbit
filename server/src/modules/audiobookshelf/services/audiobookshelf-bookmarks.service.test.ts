@@ -2,7 +2,7 @@ import { NotFoundException } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { RequestUser } from '../../../common/types/request-user';
-import { toAbsUuid } from '../../../common/utils/abs-id.utils';
+import { toAudiobookshelfUuid } from '../../../common/utils/audiobookshelf-id.utils';
 import { AudiobookshelfBookmarksService } from './audiobookshelf-bookmarks.service';
 
 const user = { id: 7, isSuperuser: false } as RequestUser;
@@ -43,7 +43,7 @@ describe('AudiobookshelfBookmarksService', () => {
     audiobookshelfRepository.findBookmarksForAudiobookshelfUser.mockResolvedValue([row()]);
 
     await expect(service.getBookmarks(user)).resolves.toEqual({
-      bookmarks: [{ libraryItemId: toAbsUuid(42), title: 'Chapter 1', time: 12.5, createdAt: Date.parse('2026-01-01T00:00:00Z') }],
+      bookmarks: [{ libraryItemId: toAudiobookshelfUuid(42), title: 'Chapter 1', time: 12.5, createdAt: Date.parse('2026-01-01T00:00:00Z') }],
     });
     expect(audiobookshelfRepository.findBookmarksForAudiobookshelfUser).toHaveBeenCalledWith(user);
   });

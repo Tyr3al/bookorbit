@@ -1,14 +1,24 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 
 import { sanitizeLogValue } from '../../../common/utils/log-sanitize.utils';
-import { fromAbsCompositeUuid, fromAbsUuid, toAbsCompositeUuid, toAbsUuid } from '../../../common/utils/abs-id.utils';
+import {
+  fromAudiobookshelfCompositeUuid,
+  fromAudiobookshelfUuid,
+  toAudiobookshelfCompositeUuid,
+  toAudiobookshelfUuid,
+} from '../../../common/utils/audiobookshelf-id.utils';
 import type { RequestUser } from '../../../common/types/request-user';
-import { ABS_SERVER_VERSION } from '../audiobookshelf.constants';
-import type { AbsFileMetadata, AbsLibraryItem, AbsPlaybackAudioTrack, AbsPlaybackSessionExpanded } from '../audiobookshelf.types';
+import { AUDIOBOOKSHELF_SERVER_VERSION } from '../audiobookshelf.constants';
+import type {
+  AudiobookshelfFileMetadata,
+  AudiobookshelfLibraryItem,
+  AudiobookshelfPlaybackAudioTrack,
+  AudiobookshelfPlaybackSessionExpanded,
+} from '../audiobookshelf.types';
 import { AudiobookshelfItemsService } from './audiobookshelf-items.service';
 import { AudiobookshelfProgressService, type UpdateProgressInput } from './audiobookshelf-progress.service';
 import { AudiobookshelfSessionsService } from './audiobookshelf-sessions.service';
-import { AbsOpenSessionStore } from './abs-open-session.store';
+import { AudiobookshelfOpenSessionStore } from './audiobookshelf-open-session.store';
 
 /** Builds the expanded direct-play session returned by ABS's play endpoint. */
 @Injectable()
@@ -19,10 +29,10 @@ export class AudiobookshelfPlaybackService {
     private readonly itemsService: AudiobookshelfItemsService,
     private readonly progressService: AudiobookshelfProgressService,
     private readonly sessionsService: AudiobookshelfSessionsService,
-    private readonly openSessions: AbsOpenSessionStore,
+    private readonly openSessions: AudiobookshelfOpenSessionStore,
   ) {}
 
-  async play(user: RequestUser, bookId: number, request: unknown): Promise<AbsPlaybackSessionExpanded> {
+  async play(user: RequestUser, bookId: number, request: unknown): Promise<AudiobookshelfPlaybackSessionExpanded> {
     const startedAt = Date.now();
     const event = 'audiobookshelf.playback';
     this.logger.log(`[${event}] [start] userId=${user.id} bookId=${bookId} - playback session start requested`);
@@ -72,7 +82,7 @@ export class AudiobookshelfPlaybackService {
   }
 
   private requireOwnedSession(user: RequestUser, sessionId: string): number {
-    const session = fromAbsCompositeUuid(sessionId);
+    const session = fromAudiobookshelfCompositeUuid(sessionId);
     if (!session || session.a !== user.id) throw new NotFoundException('Session not found');
     return session.b;
   }
@@ -82,8 +92,8 @@ export class AudiobookshelfPlaybackService {
   private async persistLiveSessionStart(
     user: RequestUser,
     bookId: number,
-    item: AbsLibraryItem,
-    session: AbsPlaybackSessionExpanded,
+    item: AudiobookshelfLibraryItem,
+    session: AudiobookshelfPlaybackSessionExpanded,
     currentTime: number,
     now: Date,
   ): Promise<void> {
@@ -92,7 +102,7 @@ export class AudiobookshelfPlaybackService {
     try {
       await this.sessionsService.recordPlaybackStart(user.id, {
         bookId,
-        libraryId: fromAbsUuid(item.libraryId) ?? 0,
+        libraryId: fromAudiobookshelfUuid(item.libraryId) ?? 0,
         displayTitle: session.displayTitle,
         displayAuthor: session.displayAuthor,
         coverPath: session.coverPath,
@@ -136,11 +146,11 @@ export class AudiobookshelfPlaybackService {
   private buildSession(
     user: RequestUser,
     bookId: number,
-    sourceItem: AbsLibraryItem,
+    sourceItem: AudiobookshelfLibraryItem,
     request: unknown,
     currentTime: number,
     now: number,
-  ): AbsPlaybackSessionExpanded {
+  ): AudiobookshelfPlaybackSessionExpanded {
     const item = sanitizeLibraryItem(sourceItem);
     const metadata = sourceItem.media.metadata;
     const deviceInfo = sanitizeDeviceInfo(request);
@@ -150,8 +160,8 @@ export class AudiobookshelfPlaybackService {
     const duration = sourceItem.media.duration;
 
     return {
-      id: toAbsCompositeUuid(user.id, bookId),
-      userId: toAbsUuid(user.id),
+      id: toAudiobookshelfCompositeUuid(user.id, bookId),
+      userId: toAudiobookshelfUuid(user.id),
       libraryId: sourceItem.libraryId,
       libraryItemId: sourceItem.id,
       bookId: sourceItem.media.id,
@@ -180,7 +190,7 @@ export class AudiobookshelfPlaybackService {
       playMethod: 0,
       mediaPlayer,
       deviceInfo,
-      serverVersion: ABS_SERVER_VERSION,
+      serverVersion: AUDIOBOOKSHELF_SERVER_VERSION,
       date: date.toISOString().slice(0, 10),
       dayOfWeek: new Intl.DateTimeFormat('en-US', { weekday: 'long' }).format(date),
       timeListening: 0,
@@ -194,7 +204,7 @@ export class AudiobookshelfPlaybackService {
   }
 }
 
-function toPlaybackTrack(track: AbsLibraryItem['media']['tracks'][number]): AbsPlaybackAudioTrack {
+function toPlaybackTrack(track: AudiobookshelfLibraryItem['media']['tracks'][number]): AudiobookshelfPlaybackAudioTrack {
   return {
     index: track.index,
     startOffset: track.startOffset,
@@ -207,7 +217,7 @@ function toPlaybackTrack(track: AbsLibraryItem['media']['tracks'][number]): AbsP
   };
 }
 
-function sanitizeLibraryItem(item: AbsLibraryItem): AbsLibraryItem {
+function sanitizeLibraryItem(item: AudiobookshelfLibraryItem): AudiobookshelfLibraryItem {
   return {
     ...item,
     path: item.relPath,
@@ -220,7 +230,7 @@ function sanitizeLibraryItem(item: AbsLibraryItem): AbsLibraryItem {
   };
 }
 
-function sanitizeFileMetadata(metadata: AbsFileMetadata): AbsFileMetadata {
+function sanitizeFileMetadata(metadata: AudiobookshelfFileMetadata): AudiobookshelfFileMetadata {
   return { ...metadata, path: metadata.relPath };
 }
 

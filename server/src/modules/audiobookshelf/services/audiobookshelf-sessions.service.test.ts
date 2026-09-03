@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { toAbsUuid } from '../../../common/utils/abs-id.utils';
+import { toAudiobookshelfUuid } from '../../../common/utils/audiobookshelf-id.utils';
 import type { RequestUser } from '../../../common/types/request-user';
-import type { AbsListeningSessionRow } from '../../../db/schema';
+import type { AudiobookshelfListeningSessionRow } from '../../../db/schema';
 import { AudiobookshelfSessionsService, type RecordLocalSessionInput } from './audiobookshelf-sessions.service';
 import type { AudiobookshelfSessionsRepository } from './audiobookshelf-sessions.repository';
 
@@ -40,8 +40,8 @@ function user(): RequestUser {
   };
 }
 
-function sessionRow(overrides: Partial<AbsListeningSessionRow> = {}): AbsListeningSessionRow {
-  const base: AbsListeningSessionRow = {
+function sessionRow(overrides: Partial<AudiobookshelfListeningSessionRow> = {}): AudiobookshelfListeningSessionRow {
+  const base: AudiobookshelfListeningSessionRow = {
     id: 11,
     userId: 7,
     bookId: 42,
@@ -129,9 +129,9 @@ describe('AudiobookshelfSessionsService.getSessionsPage', () => {
       itemsPerPage: 100,
       sessions: [
         expect.objectContaining({
-          id: toAbsUuid(11),
-          libraryItemId: toAbsUuid(42),
-          bookId: toAbsUuid(42),
+          id: toAudiobookshelfUuid(11),
+          libraryItemId: toAudiobookshelfUuid(42),
+          bookId: toAudiobookshelfUuid(42),
           displayTitle: 'A Book',
           timeListening: 90,
           startedAt: Date.parse('2026-09-01T09:00:00Z'),
@@ -170,8 +170,8 @@ describe('AudiobookshelfSessionsService.getListeningStats', () => {
     expect(stats.today).toBe(75);
     expect(stats.days).toEqual({ '2026-09-01': 125 });
     expect(stats.dayOfWeek).toEqual({ Tuesday: 125 });
-    expect(stats.items[toAbsUuid(42)]).toEqual({
-      id: toAbsUuid(42),
+    expect(stats.items[toAudiobookshelfUuid(42)]).toEqual({
+      id: toAudiobookshelfUuid(42),
       timeListening: 125,
       mediaMetadata: { title: 'A Book' },
       lastUpdate: Date.parse('2026-09-01T10:00:00Z'),

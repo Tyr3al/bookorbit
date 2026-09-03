@@ -19,20 +19,20 @@ import type { FastifyRequest } from 'fastify';
 
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
 import type { RequestUser } from '../../../common/types/request-user';
-import { UpdateAbsProgressDto } from '../dto/update-abs-progress.dto';
-import { ABS_DEFAULT_SESSIONS_PAGE_SIZE } from '../audiobookshelf.constants';
+import { UpdateAudiobookshelfProgressDto } from '../dto/update-audiobookshelf-progress.dto';
+import { AUDIOBOOKSHELF_DEFAULT_SESSIONS_PAGE_SIZE } from '../audiobookshelf.constants';
 import { AudiobookshelfAuthService } from '../services/audiobookshelf-auth.service';
 import { AudiobookshelfProgressService } from '../services/audiobookshelf-progress.service';
 import { AudiobookshelfBookmarksService } from '../services/audiobookshelf-bookmarks.service';
 import { AudiobookshelfSessionsService } from '../services/audiobookshelf-sessions.service';
-import { CreateAbsBookmarkDto, UpdateAbsBookmarkDto } from '../dto/abs-bookmark.dto';
-import { extractBearerToken } from './authorize.controller';
-import { parseAbsId } from '../pipes/abs-id.pipe';
+import { CreateAudiobookshelfBookmarkDto, UpdateAudiobookshelfBookmarkDto } from '../dto/audiobookshelf-bookmark.dto';
+import { extractBearerToken } from './audiobookshelf-authorize.controller';
+import { parseAudiobookshelfId } from '../pipes/audiobookshelf-id.pipe';
 import { AudiobookshelfEnabledGuard } from '../audiobookshelf-enabled.guard';
 
 @Controller('api/me')
 @UseGuards(AudiobookshelfEnabledGuard)
-export class MeController {
+export class AudiobookshelfMeController {
   constructor(
     private readonly authService: AudiobookshelfAuthService,
     private readonly progressService: AudiobookshelfProgressService,
@@ -47,7 +47,11 @@ export class MeController {
 
   @Get('listening-sessions')
   listeningSessions(@CurrentUser() user: RequestUser, @Query('page') page?: string, @Query('itemsPerPage') itemsPerPage?: string) {
-    return this.sessionsService.getSessionsPage(user, parseOptionalInt(page) ?? 0, parseOptionalInt(itemsPerPage) ?? ABS_DEFAULT_SESSIONS_PAGE_SIZE);
+    return this.sessionsService.getSessionsPage(
+      user,
+      parseOptionalInt(page) ?? 0,
+      parseOptionalInt(itemsPerPage) ?? AUDIOBOOKSHELF_DEFAULT_SESSIONS_PAGE_SIZE,
+    );
   }
 
   @Get('listening-stats')
@@ -64,15 +68,18 @@ export class MeController {
   ) {
     return this.sessionsService.getItemSessionsPage(
       user,
-      parseAbsId(libraryItemId),
+      parseAudiobookshelfId(libraryItemId),
       parseOptionalInt(page) ?? 0,
-      parseOptionalInt(itemsPerPage) ?? ABS_DEFAULT_SESSIONS_PAGE_SIZE,
+      parseOptionalInt(itemsPerPage) ?? AUDIOBOOKSHELF_DEFAULT_SESSIONS_PAGE_SIZE,
     );
   }
 
   @Patch('progress/batch/update')
   @HttpCode(HttpStatus.OK)
-  batchUpdateProgress(@CurrentUser() user: RequestUser, @Body(new ParseArrayPipe({ items: UpdateAbsProgressDto })) items: UpdateAbsProgressDto[]) {
+  batchUpdateProgress(
+    @CurrentUser() user: RequestUser,
+    @Body(new ParseArrayPipe({ items: UpdateAudiobookshelfProgressDto })) items: UpdateAudiobookshelfProgressDto[],
+  ) {
     return this.progressService.batchUpdateMediaProgress(user, items);
   }
 
@@ -93,36 +100,36 @@ export class MeController {
 
   @Get('bookmarks/:libraryItemId')
   getItemBookmarks(@CurrentUser() user: RequestUser, @Param('libraryItemId') libraryItemId: string) {
-    return this.bookmarksService.getBookmarksForItem(user, parseAbsId(libraryItemId));
+    return this.bookmarksService.getBookmarksForItem(user, parseAudiobookshelfId(libraryItemId));
   }
 
   @Post('item/:libraryItemId/bookmark')
-  createBookmark(@CurrentUser() user: RequestUser, @Param('libraryItemId') libraryItemId: string, @Body() dto: CreateAbsBookmarkDto) {
-    return this.bookmarksService.createBookmark(user, parseAbsId(libraryItemId), dto.time, dto.title);
+  createBookmark(@CurrentUser() user: RequestUser, @Param('libraryItemId') libraryItemId: string, @Body() dto: CreateAudiobookshelfBookmarkDto) {
+    return this.bookmarksService.createBookmark(user, parseAudiobookshelfId(libraryItemId), dto.time, dto.title);
   }
 
   @Patch('item/:libraryItemId/bookmark')
-  updateBookmark(@CurrentUser() user: RequestUser, @Param('libraryItemId') libraryItemId: string, @Body() dto: UpdateAbsBookmarkDto) {
-    return this.bookmarksService.updateBookmark(user, parseAbsId(libraryItemId), dto.time, dto.title);
+  updateBookmark(@CurrentUser() user: RequestUser, @Param('libraryItemId') libraryItemId: string, @Body() dto: UpdateAudiobookshelfBookmarkDto) {
+    return this.bookmarksService.updateBookmark(user, parseAudiobookshelfId(libraryItemId), dto.time, dto.title);
   }
 
   @Delete('item/:libraryItemId/bookmark/:time')
   @HttpCode(HttpStatus.OK)
   @Header('Content-Type', 'text/plain')
   async deleteBookmark(@CurrentUser() user: RequestUser, @Param('libraryItemId') libraryItemId: string, @Param('time') time: string) {
-    await this.bookmarksService.deleteBookmark(user, parseAbsId(libraryItemId), parseBookmarkTime(time));
+    await this.bookmarksService.deleteBookmark(user, parseAudiobookshelfId(libraryItemId), parseBookmarkTime(time));
     return 'OK';
   }
 
   @Get('progress/:libraryItemId/:episodeId?')
   getProgress(@CurrentUser() user: RequestUser, @Param('libraryItemId') libraryItemId: string) {
-    return this.progressService.getMediaProgress(user, parseAbsId(libraryItemId));
+    return this.progressService.getMediaProgress(user, parseAudiobookshelfId(libraryItemId));
   }
 
   @Patch('progress/:libraryItemId/:episodeId?')
   @HttpCode(HttpStatus.OK)
-  updateProgress(@CurrentUser() user: RequestUser, @Param('libraryItemId') libraryItemId: string, @Body() dto: UpdateAbsProgressDto) {
-    return this.progressService.updateMediaProgress(user, parseAbsId(libraryItemId), dto);
+  updateProgress(@CurrentUser() user: RequestUser, @Param('libraryItemId') libraryItemId: string, @Body() dto: UpdateAudiobookshelfProgressDto) {
+    return this.progressService.updateMediaProgress(user, parseAudiobookshelfId(libraryItemId), dto);
   }
 
   @Delete('progress/:id')

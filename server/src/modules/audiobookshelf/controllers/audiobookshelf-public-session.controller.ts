@@ -3,21 +3,21 @@ import type { FastifyReply } from 'fastify';
 
 import { Public } from '../../../common/decorators/public.decorator';
 import { AudiobookshelfEnabledGuard } from '../audiobookshelf-enabled.guard';
-import { AbsOpenSessionStore } from '../services/abs-open-session.store';
+import { AudiobookshelfOpenSessionStore } from '../services/audiobookshelf-open-session.store';
 import { AudiobookshelfStreamService } from '../services/audiobookshelf-stream.service';
 
 /**
  * Public (unauthenticated) ABS media routes, mirroring upstream's PublicRouter. AudioBooth and
  * similar clients stream each track from `{server}/public/session/:id/track/:index` with no auth
  * headers - the session id is the bearer secret. The session must be an *open* playback session
- * (see AbsOpenSessionStore); unknown or closed sessions 404 like upstream.
+ * (see AudiobookshelfOpenSessionStore); unknown or closed sessions 404 like upstream.
  */
 @Controller('public/session')
 @Public()
 @UseGuards(AudiobookshelfEnabledGuard)
-export class PublicSessionController {
+export class AudiobookshelfPublicSessionController {
   constructor(
-    private readonly openSessions: AbsOpenSessionStore,
+    private readonly openSessions: AudiobookshelfOpenSessionStore,
     private readonly streamService: AudiobookshelfStreamService,
   ) {}
 

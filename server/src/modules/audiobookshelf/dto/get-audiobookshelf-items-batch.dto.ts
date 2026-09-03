@@ -1,6 +1,6 @@
 import { ArrayMaxSize, ArrayNotEmpty, IsArray, IsString } from 'class-validator';
 
-export class GetAbsItemsBatchDto {
+export class GetAudiobookshelfItemsBatchDto {
   @IsArray()
   @ArrayNotEmpty()
   @ArrayMaxSize(100)

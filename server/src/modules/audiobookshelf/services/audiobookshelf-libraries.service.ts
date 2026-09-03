@@ -1,26 +1,31 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import type { ContentFilterRules } from '@bookorbit/types';
 
-import { AudiobookshelfRepository, type AbsItemPageQuery, type AbsItemSort } from '../audiobookshelf.repository';
-import { ABS_DEFAULT_ITEM_LIMIT, ABS_MAX_ITEM_LIMIT, ABS_PROVIDER, ABS_METADATA_PRECEDENCE } from '../audiobookshelf.constants';
+import { AudiobookshelfRepository, type AudiobookshelfItemPageQuery, type AudiobookshelfItemSort } from '../audiobookshelf.repository';
+import {
+  AUDIOBOOKSHELF_DEFAULT_ITEM_LIMIT,
+  AUDIOBOOKSHELF_MAX_ITEM_LIMIT,
+  AUDIOBOOKSHELF_PROVIDER,
+  AUDIOBOOKSHELF_METADATA_PRECEDENCE,
+} from '../audiobookshelf.constants';
 import type {
-  AbsAuthor,
-  AbsLibrary,
-  AbsLibraryFilterData,
-  AbsLibraryItem,
-  AbsLibraryItemMinified,
-  AbsPaginatedItems,
-  AbsPersonalizedShelf,
-  AbsSeries,
+  AudiobookshelfAuthor,
+  AudiobookshelfLibrary,
+  AudiobookshelfLibraryFilterData,
+  AudiobookshelfLibraryItem,
+  AudiobookshelfLibraryItemMinified,
+  AudiobookshelfPaginatedItems,
+  AudiobookshelfPersonalizedShelf,
+  AudiobookshelfSeries,
 } from '../audiobookshelf.types';
 import { AudiobookshelfItemsService } from './audiobookshelf-items.service';
 import type { RequestUser } from '../../../common/types/request-user';
-import { fromAbsUuid, toAbsSeriesUuid, toAbsUuid } from '../../../common/utils/abs-id.utils';
+import { fromAudiobookshelfUuid, toAudiobookshelfSeriesUuid, toAudiobookshelfUuid } from '../../../common/utils/audiobookshelf-id.utils';
 
 /** Minimal user shape the library-scoped ABS queries need. */
-export type AbsLibraryUser = Pick<RequestUser, 'id' | 'isSuperuser'>;
+export type AudiobookshelfLibraryUser = Pick<RequestUser, 'id' | 'isSuperuser'>;
 
-export interface AbsItemsPageInput {
+export interface AudiobookshelfItemsPageInput {
   limit?: number;
   page?: number;
   sort?: string;
@@ -32,9 +37,9 @@ export interface AbsItemsPageInput {
   collapseseries?: string;
 }
 
-export interface AbsLibraryDetailWithFilterData {
-  library: AbsLibrary;
-  filterdata: AbsLibraryFilterData;
+export interface AudiobookshelfLibraryDetailWithFilterData {
+  library: AudiobookshelfLibrary;
+  filterdata: AudiobookshelfLibraryFilterData;
   issues: number;
   numUserPlaylists: number;
 }
@@ -42,13 +47,13 @@ export interface AbsLibraryDetailWithFilterData {
 /** GET /api/libraries/:id/search response shape, matching real ABS's
  * `libraryItemsBookFilters.search()`. `authors` is plural (not `author`), and there is no
  * `podcast`/`episode` key for a book library. */
-export interface AbsLibrarySearchResult {
-  book: { libraryItem: AbsLibraryItem }[];
+export interface AudiobookshelfLibrarySearchResult {
+  book: { libraryItem: AudiobookshelfLibraryItem }[];
   narrators: { name: string; numBooks: number }[];
   tags: { name: string; numItems: number }[];
   genres: { name: string; numItems: number }[];
-  series: { series: AbsSeries; books: AbsLibraryItemMinified[] }[];
-  authors: AbsAuthor[];
+  series: { series: AudiobookshelfSeries; books: AudiobookshelfLibraryItemMinified[] }[];
+  authors: AudiobookshelfAuthor[];
 }
 
 @Injectable()
@@ -59,7 +64,7 @@ export class AudiobookshelfLibrariesService {
   ) {}
 
   /** Libraries the user can see through the ABS API (opted in + accessible). */
-  async findLibraries(user: AbsLibraryUser): Promise<{ libraries: AbsLibrary[] }> {
+  async findLibraries(user: AudiobookshelfLibraryUser): Promise<{ libraries: AudiobookshelfLibrary[] }> {
     const libraries = await this.repository.findOptedInLibraries(user.id, user.isSuperuser);
     if (libraries.length === 0) return { libraries: [] };
 
@@ -77,7 +82,11 @@ export class AudiobookshelfLibrariesService {
   }
 
   /** GET /api/libraries/:id. The filterdata variant mirrors ABS's expanded library envelope. */
-  async getLibrary(user: RequestUser, libraryId: number, include?: string): Promise<AbsLibrary | AbsLibraryDetailWithFilterData> {
+  async getLibrary(
+    user: RequestUser,
+    libraryId: number,
+    include?: string,
+  ): Promise<AudiobookshelfLibrary | AudiobookshelfLibraryDetailWithFilterData> {
     await this.requireExposedLibrary(user, libraryId);
     const library = await this.repository.findLibraryById(libraryId);
     if (!library) throw new NotFoundException(`Library ${libraryId} not found`);
@@ -90,14 +99,14 @@ export class AudiobookshelfLibrariesService {
   }
 
   /** Paginated audio items of one library (Prologue pages through with limit=10). */
-  async getItemsPage(user: RequestUser, libraryId: number, input: AbsItemsPageInput): Promise<AbsPaginatedItems> {
+  async getItemsPage(user: RequestUser, libraryId: number, input: AudiobookshelfItemsPageInput): Promise<AudiobookshelfPaginatedItems> {
     await this.requireExposedLibrary(user, libraryId);
 
     const limit = clampLimit(input.limit);
     const page = clampPage(input.page);
     const sort = normalizeSort(input.sort);
     const contentFilters = user.isSuperuser ? undefined : user.contentFilters;
-    const query: AbsItemPageQuery = {
+    const query: AudiobookshelfItemPageQuery = {
       limit,
       offset: page * limit,
       sort,
@@ -126,7 +135,7 @@ export class AudiobookshelfLibrariesService {
   }
 
   /** GET /api/libraries/:id/personalized. Keep shelf queries bounded and library-scoped. */
-  async getPersonalized(user: RequestUser, libraryId: number, requestedLimit?: number): Promise<AbsPersonalizedShelf[]> {
+  async getPersonalized(user: RequestUser, libraryId: number, requestedLimit?: number): Promise<AudiobookshelfPersonalizedShelf[]> {
     await this.requireExposedLibrary(user, libraryId);
 
     const limit = clampLimit(requestedLimit);
@@ -144,11 +153,11 @@ export class AudiobookshelfLibrariesService {
 
     const progressItemsById = new Map(progressItems.map((item) => [item.id, item]));
     const continueListening = progressRows.flatMap((row) => {
-      const item = progressItemsById.get(toAbsUuid(row.bookId));
+      const item = progressItemsById.get(toAudiobookshelfUuid(row.bookId));
       return item ? [{ ...item, progressLastUpdate: row.progressLastUpdate.getTime() }] : [];
     });
 
-    const shelves: AbsPersonalizedShelf[] = [];
+    const shelves: AudiobookshelfPersonalizedShelf[] = [];
     if (continueListening.length > 0) {
       shelves.push({
         id: 'continue-listening',
@@ -177,11 +186,11 @@ export class AudiobookshelfLibrariesService {
    * their accessible books (series with none are dropped), and authors with book counts. Every
    * category is matched and LIMITed independently in SQL - none of this loads a library's full
    * book/author/series set into memory. */
-  async searchLibrary(user: RequestUser, libraryId: number, q: string, requestedLimit?: number): Promise<AbsLibrarySearchResult> {
+  async searchLibrary(user: RequestUser, libraryId: number, q: string, requestedLimit?: number): Promise<AudiobookshelfLibrarySearchResult> {
     await this.requireExposedLibrary(user, libraryId);
     const limit = clampLimit(requestedLimit);
     const contentFilters = user.isSuperuser ? undefined : user.contentFilters;
-    const absLibraryId = toAbsUuid(libraryId);
+    const absLibraryId = toAudiobookshelfUuid(libraryId);
 
     const [bookIds, seriesPage, authorsPage, narratorRows, genreRows, tagRows] = await Promise.all([
       this.repository.findAudioBookSearchIds(libraryId, q, limit, contentFilters),
@@ -222,7 +231,7 @@ export class AudiobookshelfLibrariesService {
     seriesIds: number[],
     libraryId: number,
     contentFilters?: ContentFilterRules,
-  ): Promise<Map<number, AbsLibraryItemMinified[]>> {
+  ): Promise<Map<number, AudiobookshelfLibraryItemMinified[]>> {
     if (seriesIds.length === 0) return new Map();
     const memberships = await this.repository.findSeriesMembershipBookIdsByLibraries(seriesIds, [libraryId], contentFilters);
     const bookIdsBySeriesId = new Map<number, number[]>();
@@ -232,21 +241,23 @@ export class AudiobookshelfLibrariesService {
       else bookIdsBySeriesId.set(membership.seriesId, [membership.bookId]);
     }
     const allBookIds = [...bookIdsBySeriesId.values()].flat();
-    const itemsByBookId = new Map((await this.itemsService.getMinifiedItemsByIds(allBookIds)).map((item) => [fromAbsUuid(item.id), item] as const));
+    const itemsByBookId = new Map(
+      (await this.itemsService.getMinifiedItemsByIds(allBookIds)).map((item) => [fromAudiobookshelfUuid(item.id), item] as const),
+    );
 
-    const result = new Map<number, AbsLibraryItemMinified[]>();
+    const result = new Map<number, AudiobookshelfLibraryItemMinified[]>();
     for (const [seriesId, bookIds] of bookIdsBySeriesId) {
       result.set(
         seriesId,
-        bookIds.map((bookId) => itemsByBookId.get(bookId)).filter((item): item is AbsLibraryItemMinified => item != null),
+        bookIds.map((bookId) => itemsByBookId.get(bookId)).filter((item): item is AudiobookshelfLibraryItemMinified => item != null),
       );
     }
     return result;
   }
 
-  private toSearchSeries(series: { id: number; name: string; createdAt?: Date; updatedAt?: Date }, libraryId: string): AbsSeries {
+  private toSearchSeries(series: { id: number; name: string; createdAt?: Date; updatedAt?: Date }, libraryId: string): AudiobookshelfSeries {
     return {
-      id: toAbsSeriesUuid(series.id),
+      id: toAudiobookshelfSeriesUuid(series.id),
       name: series.name,
       nameIgnorePrefix: series.name,
       description: null,
@@ -268,9 +279,9 @@ export class AudiobookshelfLibrariesService {
       updatedAt?: Date;
     },
     libraryId: string,
-  ): AbsAuthor {
+  ): AudiobookshelfAuthor {
     return {
-      id: toAbsUuid(author.id),
+      id: toAudiobookshelfUuid(author.id),
       asin: null,
       name: author.name,
       description: author.description,
@@ -290,7 +301,7 @@ export class AudiobookshelfLibrariesService {
    * dedicated series/genre/etc. list endpoints, so an unimplemented (or wrong) response here can
    * make a library look empty of series/genres/etc. persistently, even though those endpoints
    * work fine on their own. */
-  async getFilterData(user: RequestUser, libraryId: number): Promise<AbsLibraryFilterData> {
+  async getFilterData(user: RequestUser, libraryId: number): Promise<AudiobookshelfLibraryFilterData> {
     await this.requireExposedLibrary(user, libraryId);
     const contentFilters = user.isSuperuser ? undefined : user.contentFilters;
 
@@ -305,10 +316,10 @@ export class AudiobookshelfLibrariesService {
     if (!library) throw new NotFoundException(`Library ${libraryId} not found`);
 
     return {
-      authors: authorRows.map((row) => ({ id: toAbsUuid(row.id), name: row.name })),
+      authors: authorRows.map((row) => ({ id: toAudiobookshelfUuid(row.id), name: row.name })),
       genres: aggregates.genres,
       tags: [],
-      series: seriesRows.map((row) => ({ id: toAbsSeriesUuid(row.id), name: row.name })),
+      series: seriesRows.map((row) => ({ id: toAudiobookshelfSeriesUuid(row.id), name: row.name })),
       narrators: narratorRows.map((row) => row.name),
       languages: aggregates.languages,
       publishers: aggregates.publishers,
@@ -323,13 +334,13 @@ export class AudiobookshelfLibrariesService {
   }
 
   /** Ids of all libraries exposed to the user (used by author/series/collection scoping). */
-  async getExposedLibraryIds(user: AbsLibraryUser): Promise<number[]> {
+  async getExposedLibraryIds(user: AudiobookshelfLibraryUser): Promise<number[]> {
     const libraries = await this.repository.findOptedInLibraries(user.id, user.isSuperuser);
     return libraries.map((library) => library.id);
   }
 
   /** 404 unless the library is opted in and the user can access it. */
-  async requireExposedLibrary(user: AbsLibraryUser, libraryId: number): Promise<void> {
+  async requireExposedLibrary(user: AudiobookshelfLibraryUser, libraryId: number): Promise<void> {
     const exposed = await this.repository.isLibraryExposedForUser(libraryId, user.id, user.isSuperuser);
     if (!exposed) throw new NotFoundException(`Library ${libraryId} not found`);
   }
@@ -337,22 +348,22 @@ export class AudiobookshelfLibrariesService {
   private mapLibrary(
     library: Awaited<ReturnType<AudiobookshelfRepository['findLibraryById']>> extends infer T ? Exclude<T, undefined> : never,
     folders: Awaited<ReturnType<AudiobookshelfRepository['findFoldersByLibraryIds']>>,
-  ): AbsLibrary {
+  ): AudiobookshelfLibrary {
     return {
-      id: toAbsUuid(library.id),
+      id: toAudiobookshelfUuid(library.id),
       name: library.name,
       folders: folders
         .filter((folder) => folder.libraryId === library.id)
         .map((folder) => ({
-          id: toAbsUuid(folder.id),
+          id: toAudiobookshelfUuid(folder.id),
           fullPath: folder.path,
-          libraryId: toAbsUuid(library.id),
+          libraryId: toAudiobookshelfUuid(library.id),
           addedAt: folder.createdAt.getTime(),
         })),
       displayOrder: library.displayOrder,
       icon: 'database',
       mediaType: 'book',
-      provider: ABS_PROVIDER,
+      provider: AUDIOBOOKSHELF_PROVIDER,
       settings: {
         coverAspectRatio: 1,
         disableWatcher: !library.watch,
@@ -363,7 +374,7 @@ export class AudiobookshelfLibrariesService {
         epubsAllowScriptedContent: false,
         hideSingleBookSeries: false,
         onlyShowLaterBooksInContinueSeries: false,
-        metadataPrecedence: [...ABS_METADATA_PRECEDENCE],
+        metadataPrecedence: [...AUDIOBOOKSHELF_METADATA_PRECEDENCE],
         markAsFinishedPercentComplete: null,
         markAsFinishedTimeRemaining: 10,
       },
@@ -380,8 +391,8 @@ function hasInclude(value: string | undefined, requested: string): boolean {
 }
 
 function clampLimit(value: number | undefined): number {
-  if (value == null || !Number.isFinite(value) || value < 1) return ABS_DEFAULT_ITEM_LIMIT;
-  return Math.min(Math.floor(value), ABS_MAX_ITEM_LIMIT);
+  if (value == null || !Number.isFinite(value) || value < 1) return AUDIOBOOKSHELF_DEFAULT_ITEM_LIMIT;
+  return Math.min(Math.floor(value), AUDIOBOOKSHELF_MAX_ITEM_LIMIT);
 }
 
 function clampPage(value: number | undefined): number {
@@ -389,7 +400,7 @@ function clampPage(value: number | undefined): number {
   return Math.floor(value);
 }
 
-function normalizeSort(value: string | undefined): AbsItemSort {
+function normalizeSort(value: string | undefined): AudiobookshelfItemSort {
   switch (value) {
     case 'author':
     case 'media.metadata.authorName':

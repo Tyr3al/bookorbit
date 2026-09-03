@@ -9,7 +9,7 @@ import { AudiobookshelfEnabledGuard } from '../audiobookshelf-enabled.guard';
 @Controller('login')
 @Public()
 @UseGuards(AudiobookshelfEnabledGuard)
-export class LoginController {
+export class AudiobookshelfLoginController {
   constructor(private readonly authService: AudiobookshelfAuthService) {}
 
   @Post()
