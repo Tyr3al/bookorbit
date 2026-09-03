@@ -1,10 +1,10 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 
-import { AudiobookshelfRepository, type AbsSeriesSort } from '../audiobookshelf.repository';
+import { AudiobookshelfRepository } from '../audiobookshelf.repository';
 import { AudiobookshelfItemsService } from './audiobookshelf-items.service';
 import { AudiobookshelfLibrariesService } from './audiobookshelf-libraries.service';
 import { ABS_MAX_ITEM_LIMIT } from '../audiobookshelf.constants';
-import type { AbsLibraryItemMinified, AbsPaginatedSeries, AbsSeries, AbsSeriesListItem } from '../audiobookshelf.types';
+import type { AbsLibraryItemMinified, AbsPaginatedSeries, AbsSeries, AbsSeriesListItem, AbsSeriesSort } from '../audiobookshelf.types';
 import type { RequestUser } from '../../../common/types/request-user';
 import { toAbsSeriesUuid, toAbsUuid, fromAbsUuid } from '../../../common/utils/abs-id.utils';
 

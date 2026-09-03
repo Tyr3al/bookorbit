@@ -9,7 +9,7 @@ import { AudiobookshelfCollectionsService } from '../services/audiobookshelf-col
 import { AudiobookshelfNarratorsService } from '../services/audiobookshelf-narrators.service';
 import { parseAbsId, parseAbsSeriesId } from '../pipes/abs-id.pipe';
 import { AudiobookshelfEnabledGuard } from '../audiobookshelf-enabled.guard';
-import type { AbsSeriesSort } from '../audiobookshelf.repository';
+import type { AbsSeriesSort } from '../audiobookshelf.types';
 
 @Controller('api/libraries')
 @UseGuards(AudiobookshelfEnabledGuard)

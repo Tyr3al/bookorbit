@@ -309,6 +309,9 @@ export interface AbsAuthorExpanded extends AbsAuthor {
   series: { id: string; name: string; items: AbsLibraryItemMinified[] }[];
 }
 
+// Sort values accepted by the library-scoped series list (GET /api/libraries/:id/series).
+export type AbsSeriesSort = 'name' | 'addedAt' | 'updatedAt' | 'numBooks' | 'lastBookUpdated';
+
 export interface AbsSeries {
   id: string;
   name: string;

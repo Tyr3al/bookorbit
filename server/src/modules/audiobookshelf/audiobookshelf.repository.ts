@@ -10,6 +10,7 @@ import { fromAbsSeriesUuid, fromAbsUuid } from '../../common/utils/abs-id.utils'
 import { DB } from '../../db';
 import * as schema from '../../db/schema';
 import { ABS_AUDIO_FORMATS, ABS_FINISHED_PROGRESS } from './audiobookshelf.constants';
+import type { AbsSeriesSort } from './audiobookshelf.types';
 
 type Db = NodePgDatabase<typeof schema>;
 
@@ -25,8 +26,6 @@ export interface AbsItemPageQuery {
 }
 
 export type AbsAuthorSort = 'name' | 'lastFirst' | 'numBooks';
-
-export type AbsSeriesSort = 'name' | 'addedAt' | 'updatedAt' | 'numBooks' | 'lastBookUpdated';
 
 const AUDIO_FORMAT_WHERE = inArray(schema.bookFiles.format, ABS_AUDIO_FORMATS);
 const BOOK_VISIBLE_WHERE = sql`${schema.books.status} <> 'processing'`;
