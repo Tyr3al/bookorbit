@@ -1220,6 +1220,7 @@ export const E2E_SUITES = Object.freeze({
     useDedicatedDatabase: true,
     changedPaths: [
       "server/src/modules/audiobookshelf/**",
+      "server/src/modules/reading-session/**",
       "server/src/modules/auth/**",
       "server/src/modules/book/**",
       "server/src/modules/library/**",

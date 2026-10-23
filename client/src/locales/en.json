@@ -4615,6 +4615,7 @@
         "koreader": "KOReader",
         "manual": "Manual",
         "kobo": "Kobo",
+        "abs": "Audiobookshelf",
         "unknown": "Unknown"
       },
       "formats": "Formats",

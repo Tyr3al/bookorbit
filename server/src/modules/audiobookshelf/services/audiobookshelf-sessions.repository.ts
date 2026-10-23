@@ -1,210 +1,138 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, count, desc, eq, sql } from 'drizzle-orm';
+import { and, count, desc, eq, exists, sql, type SQL } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import type { ContentFilterRules, ReadingSessionSource } from '@bookorbit/types';
 
+import { buildContentFilterClauses } from '../../../common/utils/content-filter-sql.utils';
 import { DB } from '../../../db';
 import * as schema from '../../../db/schema';
-import type { AudiobookshelfListeningSessionRow, NewAudiobookshelfListeningSession } from '../../../db/schema';
 
 type Db = NodePgDatabase<typeof schema>;
 
-export interface UpsertLiveSessionInput {
+const { readingSessions, books, libraries, userLibraryAccess } = schema;
+
+export interface AudiobookshelfSessionsScope {
+  id: number;
+  isSuperuser: boolean;
+  contentFilters?: ContentFilterRules;
+}
+
+export interface ListeningSessionRow {
+  id: number;
   bookId: number;
   libraryId: number;
-  displayTitle: string;
-  displayAuthor: string;
-  coverPath: string | null;
-  duration: number | null;
-  mediaPlayer: string;
-  deviceInfo: Record<string, unknown> | null;
-  mediaMetadata: Record<string, unknown>;
-  serverVersion: string;
-  date: string;
-  dayOfWeek: string;
-  currentTime: number;
-  now: Date;
-}
-
-export interface AccumulateLiveSessionInput {
-  timeListeningDelta: number;
-  currentTime?: number;
-  now: Date;
-}
-
-export interface StatsTotals {
-  totalTime: number;
-  today: number;
-}
-
-export interface StatsDayRow {
-  date: string;
-  seconds: number;
-}
-
-export interface StatsDayOfWeekRow {
-  dayOfWeek: string;
-  seconds: number;
-}
-
-export interface StatsItemRow {
-  bookId: number;
-  timeListening: number;
-  lastUpdate: Date;
-}
-
-export interface StatsItemMediaMetadataRow {
-  bookId: number;
-  mediaMetadata: Record<string, unknown>;
+  source: ReadingSessionSource | null;
+  sourceDeviceKey: string | null;
+  startedAt: Date;
+  endedAt: Date;
+  durationSeconds: number;
+  progressDelta: number | null;
+  endProgress: number | null;
 }
 
 export interface StatsAggregate {
-  totals: StatsTotals;
-  days: StatsDayRow[];
-  dayOfWeek: StatsDayOfWeekRow[];
-  items: StatsItemRow[];
-  itemMediaMetadata: StatsItemMediaMetadataRow[];
+  totals: { totalTime: number; today: number };
+  days: { date: string; seconds: number }[];
+  dayOfWeek: { dayOfWeek: string; seconds: number }[];
+  items: { bookId: number; timeListening: number; lastUpdate: Date }[];
 }
 
-const { audiobookshelfListeningSessions } = schema;
+const LISTENING_SESSION_COLUMNS = {
+  id: readingSessions.id,
+  bookId: readingSessions.bookId,
+  libraryId: books.libraryId,
+  source: readingSessions.source,
+  sourceDeviceKey: readingSessions.sourceDeviceKey,
+  startedAt: readingSessions.startedAt,
+  endedAt: readingSessions.endedAt,
+  durationSeconds: readingSessions.durationSeconds,
+  progressDelta: readingSessions.progressDelta,
+  endProgress: readingSessions.endProgress,
+};
 
+/**
+ * Reads the user's audiobook listening history for the ABS listening-session and stats routes.
+ * The history lives in BookOrbit's own reading_sessions (sessionType 'listen'), so listening from
+ * the web player and native apps shows up in ABS clients and ABS listening shows up in BookOrbit.
+ * Scoped like every other ABS read: ABS-exposed libraries the user can access, visible books, and
+ * the user's content filters.
+ */
 @Injectable()
 export class AudiobookshelfSessionsRepository {
   constructor(@Inject(DB) private readonly db: Db) {}
 
-  /** Opens the single 'live' row for this user+book if none exists yet, otherwise refreshes its
-   * snapshot fields in place. The accumulated timeListening total is left untouched here - only
-   * accumulateLiveSession() advances it. Atomic via the partial unique index on (userId, bookId)
-   * where source='live', so concurrent play() calls for the same book cannot double-insert. */
-  async upsertLiveSession(userId: number, input: UpsertLiveSessionInput): Promise<AudiobookshelfListeningSessionRow> {
-    const snapshot = {
-      libraryId: input.libraryId,
-      displayTitle: input.displayTitle,
-      displayAuthor: input.displayAuthor,
-      coverPath: input.coverPath,
-      duration: input.duration,
-      mediaPlayer: input.mediaPlayer,
-      deviceInfo: input.deviceInfo,
-      mediaMetadata: input.mediaMetadata,
-      serverVersion: input.serverVersion,
-      date: input.date,
-      dayOfWeek: input.dayOfWeek,
-      startTime: input.currentTime,
-      currentTime: input.currentTime,
-      updatedAt: input.now,
-    };
-
-    const [row] = await this.db
-      .insert(audiobookshelfListeningSessions)
-      .values({ userId, bookId: input.bookId, source: 'live', timeListening: 0, startedAt: input.now, ...snapshot })
-      .onConflictDoUpdate({
-        target: [audiobookshelfListeningSessions.userId, audiobookshelfListeningSessions.bookId],
-        targetWhere: sql`${audiobookshelfListeningSessions.source} = 'live'`,
-        set: snapshot,
-      })
-      .returning();
-    return row;
-  }
-
-  /** Advances the live row's accumulated listening time and current position. A no-op (0 rows
-   * matched) when no live row exists yet for this user+book - sync/close can be called without a
-   * prior successful play() write. */
-  async accumulateLiveSession(userId: number, bookId: number, input: AccumulateLiveSessionInput): Promise<void> {
-    const setValues: Record<string, unknown> = { updatedAt: input.now };
-    if (input.timeListeningDelta > 0) {
-      setValues.timeListening = sql`${audiobookshelfListeningSessions.timeListening} + ${Math.round(input.timeListeningDelta)}`;
-    }
-    if (input.currentTime !== undefined) setValues.currentTime = input.currentTime;
-
-    await this.db
-      .update(audiobookshelfListeningSessions)
-      .set(setValues)
-      .where(
-        and(
-          eq(audiobookshelfListeningSessions.userId, userId),
-          eq(audiobookshelfListeningSessions.bookId, bookId),
-          eq(audiobookshelfListeningSessions.source, 'live'),
-        ),
-      );
-  }
-
-  /** Bulk-inserts discrete offline sessions uploaded by a client - one write for the whole
-   * batch, never one write per entry. */
-  async insertLocalSessions(rows: NewAudiobookshelfListeningSession[]): Promise<void> {
-    if (rows.length === 0) return;
-    await this.db.insert(audiobookshelfListeningSessions).values(rows);
-  }
-
-  async findPage(userId: number, limit: number, offset: number): Promise<{ rows: AudiobookshelfListeningSessionRow[]; total: number }> {
-    return this.findPageWhere(eq(audiobookshelfListeningSessions.userId, userId), limit, offset);
-  }
-
-  async findPageForBook(
-    userId: number,
-    bookId: number,
+  async findPage(
+    user: AudiobookshelfSessionsScope,
     limit: number,
     offset: number,
-  ): Promise<{ rows: AudiobookshelfListeningSessionRow[]; total: number }> {
-    return this.findPageWhere(
-      and(eq(audiobookshelfListeningSessions.userId, userId), eq(audiobookshelfListeningSessions.bookId, bookId)),
-      limit,
-      offset,
-    );
+    bookId?: number,
+  ): Promise<{ rows: ListeningSessionRow[]; total: number }> {
+    const where = this.scopeWhere(user, bookId);
+    const [rows, totalRows] = await Promise.all([
+      this.db
+        .select(LISTENING_SESSION_COLUMNS)
+        .from(readingSessions)
+        .innerJoin(books, eq(books.id, readingSessions.bookId))
+        .innerJoin(libraries, eq(libraries.id, books.libraryId))
+        .where(where)
+        .orderBy(desc(readingSessions.endedAt), desc(readingSessions.id))
+        .limit(limit)
+        .offset(offset),
+      this.db
+        .select({ total: count() })
+        .from(readingSessions)
+        .innerJoin(books, eq(books.id, readingSessions.bookId))
+        .innerJoin(libraries, eq(libraries.id, books.libraryId))
+        .where(where),
+    ]);
+    return { rows, total: totalRows[0]?.total ?? 0 };
   }
 
-  async findRecent(userId: number, limit: number): Promise<AudiobookshelfListeningSessionRow[]> {
-    return this.db
-      .select()
-      .from(audiobookshelfListeningSessions)
-      .where(eq(audiobookshelfListeningSessions.userId, userId))
-      .orderBy(desc(audiobookshelfListeningSessions.updatedAt), desc(audiobookshelfListeningSessions.id))
-      .limit(limit);
-  }
+  /** Grouped SQL aggregates only; per-row data is bounded to the distinct books/days/weekdays the
+   * user has listened on. Days and weekdays are bucketed in the user's time zone. The local-date
+   * expressions group by ordinal because the bound time zone would otherwise be a different
+   * parameter in the select list and the GROUP BY, which Postgres rejects. */
+  async findStatsAggregate(user: AudiobookshelfSessionsScope, timeZone: string, today: string): Promise<StatsAggregate> {
+    const where = this.scopeWhere(user);
+    const localDate = sql<string>`to_char(${readingSessions.startedAt} at time zone ${timeZone}, 'YYYY-MM-DD')`;
+    const localWeekday = sql<string>`to_char(${readingSessions.startedAt} at time zone ${timeZone}, 'FMDay')`;
+    const seconds = sql<number>`coalesce(sum(${readingSessions.durationSeconds}), 0)::int`;
 
-  /** Grouped SQL aggregates for GET /api/me/listening-stats - never loads per-row data beyond
-   * the bounded set of distinct books/days/weekdays the user has listened to. */
-  async findStatsAggregate(userId: number, today: string): Promise<StatsAggregate> {
-    const whereClause = eq(audiobookshelfListeningSessions.userId, userId);
-    const [totalsRows, dayRows, dayOfWeekRows, itemRows, itemMediaMetadataRows] = await Promise.all([
+    const [totalsRows, dayRows, dayOfWeekRows, itemRows] = await Promise.all([
       this.db
         .select({
-          totalTime: sql<number>`coalesce(sum(${audiobookshelfListeningSessions.timeListening}), 0)::int`,
-          today: sql<number>`coalesce(sum(${audiobookshelfListeningSessions.timeListening}) filter (where ${audiobookshelfListeningSessions.date} = ${today}), 0)::int`,
+          totalTime: seconds,
+          today: sql<number>`coalesce(sum(${readingSessions.durationSeconds}) filter (where ${localDate} = ${today}), 0)::int`,
         })
-        .from(audiobookshelfListeningSessions)
-        .where(whereClause),
+        .from(readingSessions)
+        .innerJoin(books, eq(books.id, readingSessions.bookId))
+        .innerJoin(libraries, eq(libraries.id, books.libraryId))
+        .where(where),
+      this.db
+        .select({ date: localDate, seconds })
+        .from(readingSessions)
+        .innerJoin(books, eq(books.id, readingSessions.bookId))
+        .innerJoin(libraries, eq(libraries.id, books.libraryId))
+        .where(where)
+        .groupBy(sql`1`),
+      this.db
+        .select({ dayOfWeek: localWeekday, seconds })
+        .from(readingSessions)
+        .innerJoin(books, eq(books.id, readingSessions.bookId))
+        .innerJoin(libraries, eq(libraries.id, books.libraryId))
+        .where(where)
+        .groupBy(sql`1`),
       this.db
         .select({
-          date: audiobookshelfListeningSessions.date,
-          seconds: sql<number>`coalesce(sum(${audiobookshelfListeningSessions.timeListening}), 0)::int`,
+          bookId: readingSessions.bookId,
+          timeListening: seconds,
+          lastUpdate: sql<Date>`max(${readingSessions.endedAt})`.mapWith(readingSessions.endedAt),
         })
-        .from(audiobookshelfListeningSessions)
-        .where(whereClause)
-        .groupBy(audiobookshelfListeningSessions.date),
-      this.db
-        .select({
-          dayOfWeek: audiobookshelfListeningSessions.dayOfWeek,
-          seconds: sql<number>`coalesce(sum(${audiobookshelfListeningSessions.timeListening}), 0)::int`,
-        })
-        .from(audiobookshelfListeningSessions)
-        .where(whereClause)
-        .groupBy(audiobookshelfListeningSessions.dayOfWeek),
-      this.db
-        .select({
-          bookId: audiobookshelfListeningSessions.bookId,
-          timeListening: sql<number>`coalesce(sum(${audiobookshelfListeningSessions.timeListening}), 0)::int`,
-          lastUpdate: sql<Date>`max(${audiobookshelfListeningSessions.updatedAt})`.mapWith(audiobookshelfListeningSessions.updatedAt),
-        })
-        .from(audiobookshelfListeningSessions)
-        .where(whereClause)
-        .groupBy(audiobookshelfListeningSessions.bookId),
-      this.db
-        .selectDistinctOn([audiobookshelfListeningSessions.bookId], {
-          bookId: audiobookshelfListeningSessions.bookId,
-          mediaMetadata: audiobookshelfListeningSessions.mediaMetadata,
-        })
-        .from(audiobookshelfListeningSessions)
-        .where(whereClause)
-        .orderBy(audiobookshelfListeningSessions.bookId, desc(audiobookshelfListeningSessions.updatedAt)),
+        .from(readingSessions)
+        .innerJoin(books, eq(books.id, readingSessions.bookId))
+        .innerJoin(libraries, eq(libraries.id, books.libraryId))
+        .where(where)
+        .groupBy(readingSessions.bookId),
     ]);
 
     return {
@@ -212,25 +140,27 @@ export class AudiobookshelfSessionsRepository {
       days: dayRows,
       dayOfWeek: dayOfWeekRows,
       items: itemRows,
-      itemMediaMetadata: itemMediaMetadataRows.map((row) => ({ bookId: row.bookId, mediaMetadata: row.mediaMetadata ?? {} })),
     };
   }
 
-  private async findPageWhere(
-    whereClause: ReturnType<typeof and>,
-    limit: number,
-    offset: number,
-  ): Promise<{ rows: AudiobookshelfListeningSessionRow[]; total: number }> {
-    const [rows, totalRows] = await Promise.all([
-      this.db
-        .select()
-        .from(audiobookshelfListeningSessions)
-        .where(whereClause)
-        .orderBy(desc(audiobookshelfListeningSessions.updatedAt), desc(audiobookshelfListeningSessions.id))
-        .limit(limit)
-        .offset(offset),
-      this.db.select({ total: count() }).from(audiobookshelfListeningSessions).where(whereClause),
-    ]);
-    return { rows, total: totalRows[0]?.total ?? 0 };
+  private scopeWhere(user: AudiobookshelfSessionsScope, bookId?: number): SQL | undefined {
+    const filterClauses = !user.isSuperuser && user.contentFilters ? buildContentFilterClauses(user.contentFilters, this.db) : [];
+    const accessClause = user.isSuperuser
+      ? undefined
+      : exists(
+          this.db
+            .select({ one: sql`1` })
+            .from(userLibraryAccess)
+            .where(and(eq(userLibraryAccess.userId, user.id), eq(userLibraryAccess.libraryId, books.libraryId))),
+        );
+    return and(
+      eq(readingSessions.userId, user.id),
+      eq(readingSessions.sessionType, 'listen'),
+      bookId === undefined ? undefined : eq(readingSessions.bookId, bookId),
+      eq(libraries.enableAudiobookshelfApi, true),
+      sql`${books.status} <> 'processing'`,
+      accessClause,
+      ...filterClauses,
+    );
   }
 }

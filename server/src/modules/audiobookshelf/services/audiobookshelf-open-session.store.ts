@@ -4,6 +4,8 @@ export interface AudiobookshelfOpenSession {
   userId: number;
   bookId: number;
   isSuperuser: boolean;
+  /** The device that opened the session; sync/close bodies do not carry deviceInfo. */
+  deviceKey?: string | null;
 }
 
 /**
@@ -41,7 +43,7 @@ export class AudiobookshelfOpenSessionStore {
       this.sessions.delete(sessionId);
       return null;
     }
-    return { userId: entry.userId, bookId: entry.bookId, isSuperuser: entry.isSuperuser };
+    return { userId: entry.userId, bookId: entry.bookId, isSuperuser: entry.isSuperuser, deviceKey: entry.deviceKey };
   }
 
   close(sessionId: string): void {

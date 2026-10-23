@@ -1,127 +1,172 @@
-import { Injectable } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
+
+import { Injectable, Logger } from '@nestjs/common';
 
 import { toAudiobookshelfUuid } from '../../../common/utils/audiobookshelf-id.utils';
+import { sanitizeLogValue } from '../../../common/utils/log-sanitize.utils';
+import { resolveTimeZone, toDateKeyInTimeZone } from '../../../common/utils/timezone.utils';
 import type { RequestUser } from '../../../common/types/request-user';
-import type { AudiobookshelfListeningSessionRow, NewAudiobookshelfListeningSession } from '../../../db/schema';
+import { ReadingSessionService } from '../../reading-session/reading-session.service';
+import { AudiobookshelfRepository } from '../audiobookshelf.repository';
 import {
   AUDIOBOOKSHELF_DEFAULT_SESSIONS_PAGE_SIZE,
+  AUDIOBOOKSHELF_LIVE_SESSION_GAP_MS,
   AUDIOBOOKSHELF_MAX_SESSIONS_PAGE_SIZE,
   AUDIOBOOKSHELF_RECENT_SESSIONS_LIMIT,
   AUDIOBOOKSHELF_SERVER_VERSION,
 } from '../audiobookshelf.constants';
 import type { AudiobookshelfListeningSessionsEnvelope, AudiobookshelfListeningStats, AudiobookshelfPlaybackSession } from '../audiobookshelf.types';
 import { AudiobookshelfItemsService } from './audiobookshelf-items.service';
-import { AudiobookshelfSessionsRepository } from './audiobookshelf-sessions.repository';
+import { AudiobookshelfSessionsRepository, type ListeningSessionRow } from './audiobookshelf-sessions.repository';
 
-export interface RecordPlaybackStartInput {
+const LIVE_SESSION_ID_PREFIX = 'abs-live:';
+const LOCAL_SESSION_ID_PREFIX = 'abs-local:';
+const DEFAULT_DEVICE_KEY = 'default';
+
+export interface LiveListeningReport {
   bookId: number;
-  libraryId: number;
-  displayTitle: string;
-  displayAuthor: string;
-  coverPath: string | null;
-  duration: number | null;
-  mediaPlayer: string;
-  deviceInfo: Record<string, unknown> | null;
-  mediaMetadata: Record<string, unknown>;
-  currentTime: number;
+  bookFileId: number;
+  /** Seconds the client says it listened since its previous report. */
+  listenedSeconds: number;
+  /** Book percentage (0-100) before and after this report's position was applied. */
+  startProgress: number | null;
+  endProgress: number | null;
+  deviceKey: string | null;
   now: Date;
 }
 
-export interface RecordPlaybackSyncInput {
-  timeListeningDelta: number;
-  currentTime?: number;
-  now: Date;
-}
-
-export interface RecordLocalSessionInput {
+export interface LocalListeningSession {
   bookId: number;
-  libraryId: number;
-  displayTitle: string;
-  displayAuthor: string;
-  duration: number | null;
-  mediaPlayer: string;
-  deviceInfo: Record<string, unknown> | null;
-  timeListening: number;
-  currentTime: number;
+  bookFileId: number;
+  clientSessionId: string | null;
   startedAt: Date;
   updatedAt: Date;
+  timeListening: number;
+  startProgress: number | null;
+  endProgress: number | null;
+  deviceKey: string | null;
 }
 
-/** Persists and reads Audiobookshelf-compatible listening-session history. Separate from the
- * stateless live playback handshake in AudiobookshelfPlaybackService - see that service and
- * AudiobookshelfListeningSessionRow for the split between the deterministic live handle and this table's
- * 'live'/'local' rows. Write methods here can throw; callers (playback/progress services) are
- * responsible for logging and swallowing failures so a session-persistence error never breaks
- * playback or progress sync for the client. */
+interface BookDisplay {
+  title: string;
+  subtitle: string | null;
+  author: string;
+  coverPath: string | null;
+}
+
+/**
+ * Bridges ABS listening into BookOrbit's reading history. Every write lands in reading_sessions
+ * as a 'listen' session with source 'abs', so it feeds the reading log, statistics, daily stats,
+ * achievements and external trackers like any other session. Reads serve the ABS
+ * listening-session and stats routes from the same table.
+ *
+ * Write methods never throw: listening history is a side effect of play/sync, and a failure here
+ * must not fail the progress write the client is waiting on.
+ */
 @Injectable()
 export class AudiobookshelfSessionsService {
+  private readonly logger = new Logger(AudiobookshelfSessionsService.name);
+
   constructor(
     private readonly repository: AudiobookshelfSessionsRepository,
+    private readonly audiobookshelfRepository: AudiobookshelfRepository,
     private readonly itemsService: AudiobookshelfItemsService,
+    private readonly readingSessions: ReadingSessionService,
   ) {}
 
-  async recordPlaybackStart(userId: number, input: RecordPlaybackStartInput): Promise<void> {
-    const { date, dayOfWeek } = deriveDateFields(input.now);
-    await this.repository.upsertLiveSession(userId, {
-      bookId: input.bookId,
-      libraryId: input.libraryId,
-      displayTitle: input.displayTitle,
-      displayAuthor: input.displayAuthor,
-      coverPath: input.coverPath,
-      duration: input.duration,
-      mediaPlayer: input.mediaPlayer,
-      deviceInfo: input.deviceInfo,
-      mediaMetadata: input.mediaMetadata,
-      serverVersion: AUDIOBOOKSHELF_SERVER_VERSION,
-      date,
-      dayOfWeek,
-      currentTime: input.currentTime,
-      now: input.now,
-    });
+  /**
+   * Live play/sync/close reports listening in small deltas. Consecutive reports from one device
+   * grow a single session until the device goes quiet for AUDIOBOOKSHELF_LIVE_SESSION_GAP_MS; the
+   * next report then starts a new one. Looking the open session up in the table rather than in
+   * memory keeps this correct across server restarts.
+   */
+  async recordLiveListening(user: RequestUser, report: LiveListeningReport): Promise<void> {
+    if (!(report.listenedSeconds > 0)) return;
+    const event = 'audiobookshelf.listening_session';
+    const startedAtMs = Date.now();
+    const sourceDeviceKey = toSourceDeviceKey(report.deviceKey);
+    try {
+      const open = await this.readingSessions.findLatestSourceSession({
+        userId: user.id,
+        bookId: report.bookId,
+        source: 'abs',
+        sourceDeviceKey,
+        sessionIdPrefix: LIVE_SESSION_ID_PREFIX,
+        endedAfter: new Date(report.now.getTime() - AUDIOBOOKSHELF_LIVE_SESSION_GAP_MS),
+      });
+      const listened = Math.round(report.listenedSeconds);
+      const startProgress = open ? sessionStartProgress(open.endProgress, open.progressDelta, report.startProgress) : report.startProgress;
+      const result = await this.readingSessions.recordListeningSession({
+        userId: user.id,
+        bookFileId: report.bookFileId,
+        sessionId: open?.sessionId ?? `${LIVE_SESSION_ID_PREFIX}${randomUUID()}`,
+        startedAt: open?.startedAt ?? new Date(report.now.getTime() - listened * 1000),
+        endedAt: report.now,
+        durationSeconds: (open?.durationSeconds ?? 0) + listened,
+        progressDelta: progressDelta(startProgress, report.endProgress),
+        endProgress: report.endProgress,
+        source: 'abs',
+        sourceDeviceKey,
+        timeZone: userTimeZone(user),
+      });
+      if (result.kind === 'saved') {
+        this.logger.log(
+          `[${event}] [end] userId=${user.id} bookId=${report.bookId} durationMs=${Date.now() - startedAtMs} outcome=${result.kind} - listening session started`,
+        );
+      }
+    } catch (error) {
+      this.logFailure(event, user.id, report.bookId, startedAtMs, error);
+    }
   }
 
-  async recordPlaybackSync(userId: number, bookId: number, input: RecordPlaybackSyncInput): Promise<void> {
-    await this.repository.accumulateLiveSession(userId, bookId, input);
-  }
-
-  async recordLocalSessions(userId: number, entries: RecordLocalSessionInput[]): Promise<void> {
-    if (entries.length === 0) return;
-    const rows: NewAudiobookshelfListeningSession[] = entries.map((entry) => {
-      const { date, dayOfWeek } = deriveDateFields(entry.updatedAt);
-      // currentTime/startTime/timeListening all back the CHECK constraints on the table, so clamp
-      // at this persistence boundary too - not just in the callers - so a hostile or buggy client
-      // payload cannot fail the whole batch insert.
-      const currentTime = Math.max(0, entry.currentTime);
-      return {
-        userId,
-        bookId: entry.bookId,
-        libraryId: entry.libraryId,
-        source: 'local',
-        displayTitle: entry.displayTitle,
-        displayAuthor: entry.displayAuthor,
-        coverPath: null,
-        duration: entry.duration,
-        mediaPlayer: entry.mediaPlayer,
-        deviceInfo: entry.deviceInfo,
-        mediaMetadata: {},
-        serverVersion: AUDIOBOOKSHELF_SERVER_VERSION,
-        date,
-        dayOfWeek,
-        timeListening: Math.max(0, Math.round(entry.timeListening)),
-        startTime: currentTime,
-        currentTime,
-        startedAt: entry.startedAt,
-        updatedAt: entry.updatedAt,
-      };
-    });
-    await this.repository.insertLocalSessions(rows);
+  /**
+   * Offline sessions uploaded by a client. The client re-uploads a session with growing totals as
+   * playback continues, so the client's own session id is the idempotency key: a re-upload grows
+   * the stored session and an identical retry is a no-op. Writes run one at a time, bounded by the
+   * batch the client sent.
+   */
+  async recordLocalSessions(user: RequestUser, sessions: LocalListeningSession[]): Promise<void> {
+    if (sessions.length === 0) return;
+    const event = 'audiobookshelf.local_listening_sessions';
+    const startedAtMs = Date.now();
+    const timeZone = userTimeZone(user);
+    let saved = 0;
+    let grown = 0;
+    let skipped = 0;
+    let failed = 0;
+    for (const session of sessions) {
+      try {
+        const result = await this.readingSessions.recordListeningSession({
+          userId: user.id,
+          bookFileId: session.bookFileId,
+          sessionId: localSessionId(session),
+          startedAt: session.startedAt,
+          endedAt: session.updatedAt,
+          durationSeconds: session.timeListening,
+          progressDelta: progressDelta(session.startProgress, session.endProgress),
+          endProgress: session.endProgress,
+          source: 'abs',
+          sourceDeviceKey: toSourceDeviceKey(session.deviceKey),
+          timeZone,
+        });
+        if (result.kind === 'saved') saved++;
+        else if (result.kind === 'superseded') grown++;
+        else skipped++;
+      } catch (error) {
+        failed++;
+        this.logFailure(event, user.id, session.bookId, startedAtMs, error);
+      }
+    }
+    this.logger.log(
+      `[${event}] [end] userId=${user.id} entries=${sessions.length} durationMs=${Date.now() - startedAtMs} saved=${saved} grown=${grown} skipped=${skipped} failed=${failed} - local listening sessions recorded`,
+    );
   }
 
   /** ABS GET /api/me/listening-sessions. */
   async getSessionsPage(user: RequestUser, page: number, itemsPerPage: number): Promise<AudiobookshelfListeningSessionsEnvelope> {
     const bounded = boundPagination(page, itemsPerPage);
-    const { rows, total } = await this.repository.findPage(user.id, bounded.limit, bounded.offset);
-    return toEnvelope(rows, total, bounded);
+    const { rows, total } = await this.repository.findPage(user, bounded.limit, bounded.offset);
+    return this.toEnvelope(user, rows, total, bounded);
   }
 
   /** ABS GET /api/me/item/listening-sessions/:libraryItemId - 404s via requireExposedBook when
@@ -129,33 +174,36 @@ export class AudiobookshelfSessionsService {
   async getItemSessionsPage(user: RequestUser, bookId: number, page: number, itemsPerPage: number): Promise<AudiobookshelfListeningSessionsEnvelope> {
     await this.itemsService.requireExposedBook(user, bookId);
     const bounded = boundPagination(page, itemsPerPage);
-    const { rows, total } = await this.repository.findPageForBook(user.id, bookId, bounded.limit, bounded.offset);
-    return toEnvelope(rows, total, bounded);
+    const { rows, total } = await this.repository.findPage(user, bounded.limit, bounded.offset, bookId);
+    return this.toEnvelope(user, rows, total, bounded);
   }
 
   /** ABS GET /api/me/listening-stats. totalTime/days/dayOfWeek/items are grouped SQL aggregates;
    * only recentSessions loads full rows, bounded to AUDIOBOOKSHELF_RECENT_SESSIONS_LIMIT. */
   async getListeningStats(user: RequestUser): Promise<AudiobookshelfListeningStats> {
-    const today = deriveDateFields(new Date()).date;
-    const [aggregate, recentRows] = await Promise.all([
-      this.repository.findStatsAggregate(user.id, today),
-      this.repository.findRecent(user.id, AUDIOBOOKSHELF_RECENT_SESSIONS_LIMIT),
+    const timeZone = userTimeZone(user);
+    const today = toDateKeyInTimeZone(new Date(), timeZone);
+    const [aggregate, recent] = await Promise.all([
+      this.repository.findStatsAggregate(user, timeZone, today),
+      this.repository.findPage(user, AUDIOBOOKSHELF_RECENT_SESSIONS_LIMIT, 0),
     ]);
 
-    const mediaMetadataByBookId = new Map(aggregate.itemMediaMetadata.map((row) => [row.bookId, row.mediaMetadata]));
+    const displayByBookId = await this.loadBookDisplay([
+      ...new Set([...aggregate.items.map((row) => row.bookId), ...recent.rows.map((row) => row.bookId)]),
+    ]);
     const items: AudiobookshelfListeningStats['items'] = {};
     for (const row of aggregate.items) {
-      items[toAudiobookshelfUuid(row.bookId)] = {
-        id: toAudiobookshelfUuid(row.bookId),
+      const id = toAudiobookshelfUuid(row.bookId);
+      items[id] = {
+        id,
         timeListening: row.timeListening,
-        mediaMetadata: mediaMetadataByBookId.get(row.bookId) ?? {},
+        mediaMetadata: toMediaMetadata(displayByBookId.get(row.bookId)),
         lastUpdate: row.lastUpdate.getTime(),
       };
     }
 
     const days: Record<string, number> = {};
     for (const row of aggregate.days) days[row.date] = row.seconds;
-
     const dayOfWeek: Record<string, number> = {};
     for (const row of aggregate.dayOfWeek) dayOfWeek[row.dayOfWeek] = row.seconds;
 
@@ -165,9 +213,147 @@ export class AudiobookshelfSessionsService {
       days,
       dayOfWeek,
       today: aggregate.totals.today,
-      recentSessions: recentRows.map(toAudiobookshelfPlaybackSession),
+      recentSessions: await this.toPlaybackSessions(user, recent.rows, displayByBookId),
     };
   }
+
+  private async toEnvelope(
+    user: RequestUser,
+    rows: ListeningSessionRow[],
+    total: number,
+    bounded: { page: number; itemsPerPage: number },
+  ): Promise<AudiobookshelfListeningSessionsEnvelope> {
+    return {
+      total,
+      numPages: Math.ceil(total / bounded.itemsPerPage),
+      page: bounded.page,
+      itemsPerPage: bounded.itemsPerPage,
+      sessions: await this.toPlaybackSessions(user, rows),
+    };
+  }
+
+  private async toPlaybackSessions(
+    user: RequestUser,
+    rows: ListeningSessionRow[],
+    knownDisplay?: Map<number, BookDisplay>,
+  ): Promise<AudiobookshelfPlaybackSession[]> {
+    if (rows.length === 0) return [];
+    const bookIds = [...new Set(rows.map((row) => row.bookId))];
+    const [displayByBookId, files] = await Promise.all([
+      knownDisplay ?? this.loadBookDisplay(bookIds),
+      this.audiobookshelfRepository.findAudioFilesByBookIds(bookIds),
+    ]);
+    const durationByBookId = new Map<number, number>();
+    for (const file of files) durationByBookId.set(file.bookId, (durationByBookId.get(file.bookId) ?? 0) + (file.durationSeconds ?? 0));
+    const timeZone = userTimeZone(user);
+    return rows.map((row) => toPlaybackSession(user.id, row, displayByBookId.get(row.bookId), durationByBookId.get(row.bookId) || null, timeZone));
+  }
+
+  /** Title/author for a set of books in two batched queries, without building full library items,
+   * because listening stats can span every audiobook the user has ever played. */
+  private async loadBookDisplay(bookIds: number[]): Promise<Map<number, BookDisplay>> {
+    if (bookIds.length === 0) return new Map();
+    const [metadata, authors] = await Promise.all([
+      this.audiobookshelfRepository.findMetadataByBookIds(bookIds),
+      this.audiobookshelfRepository.findAuthorsByBookIds(bookIds),
+    ]);
+    const authorNames = new Map<number, string[]>();
+    for (const author of authors) {
+      const names = authorNames.get(author.bookId);
+      if (names) names.push(author.name);
+      else authorNames.set(author.bookId, [author.name]);
+    }
+    return new Map(
+      metadata.map((row) => [
+        row.bookId,
+        {
+          title: row.title ?? '',
+          subtitle: row.subtitle ?? null,
+          author: (authorNames.get(row.bookId) ?? []).join(', '),
+          coverPath: row.coverSource ? `/metadata/items/${row.bookId}/cover.jpg` : null,
+        },
+      ]),
+    );
+  }
+
+  private logFailure(event: string, userId: number, bookId: number, startedAtMs: number, error: unknown): void {
+    const errorClass = error instanceof Error ? error.name : 'Error';
+    const errorMessage = sanitizeLogValue(error instanceof Error ? error.message : String(error));
+    this.logger.warn(
+      `[${event}] [fail] userId=${userId} bookId=${bookId} durationMs=${Date.now() - startedAtMs} errorClass=${errorClass} error="${errorMessage}" - listening session persist failed`,
+    );
+  }
+}
+
+/** The client's device id from an ABS deviceInfo payload, used to keep sessions per device. */
+export function readDeviceId(value: unknown): string | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const info = value as Record<string, unknown>;
+  const id = typeof info.deviceId === 'string' && info.deviceId ? info.deviceId : typeof info.id === 'string' && info.id ? info.id : null;
+  return id ? id.slice(0, 120) : null;
+}
+
+function toPlaybackSession(
+  userId: number,
+  row: ListeningSessionRow,
+  display: BookDisplay | undefined,
+  duration: number | null,
+  timeZone: string,
+): AudiobookshelfPlaybackSession {
+  const startPercent = sessionStartProgress(row.endProgress, row.progressDelta, null);
+  const positionAt = (percent: number | null) => (percent !== null && duration ? Math.max(0, (percent / 100) * duration) : 0);
+  const isAbs = row.source === 'abs';
+  return {
+    id: toAudiobookshelfUuid(row.id),
+    userId: toAudiobookshelfUuid(userId),
+    libraryId: toAudiobookshelfUuid(row.libraryId),
+    libraryItemId: toAudiobookshelfUuid(row.bookId),
+    bookId: toAudiobookshelfUuid(row.bookId),
+    episodeId: null,
+    mediaType: 'book',
+    mediaMetadata: toMediaMetadata(display),
+    chapters: null,
+    displayTitle: display?.title ?? '',
+    displayAuthor: display?.author ?? '',
+    coverPath: display?.coverPath ?? null,
+    duration,
+    playMethod: 0,
+    mediaPlayer: isAbs ? 'audiobookshelf' : (row.source ?? 'bookorbit'),
+    deviceInfo: isAbs && row.sourceDeviceKey && row.sourceDeviceKey !== toSourceDeviceKey(null) ? { deviceId: row.sourceDeviceKey.slice(4) } : null,
+    serverVersion: AUDIOBOOKSHELF_SERVER_VERSION,
+    date: toDateKeyInTimeZone(row.startedAt, timeZone),
+    dayOfWeek: new Intl.DateTimeFormat('en-US', { weekday: 'long', timeZone }).format(row.startedAt),
+    timeListening: row.durationSeconds,
+    startTime: positionAt(startPercent),
+    currentTime: positionAt(row.endProgress),
+    startedAt: row.startedAt.getTime(),
+    updatedAt: row.endedAt.getTime(),
+  };
+}
+
+function toMediaMetadata(display: BookDisplay | undefined): Record<string, unknown> {
+  return display ? { title: display.title, subtitle: display.subtitle, author: display.author } : {};
+}
+
+function sessionStartProgress(endProgress: number | null, delta: number | null, fallback: number | null): number | null {
+  return endProgress !== null && delta !== null ? endProgress - delta : fallback;
+}
+
+function progressDelta(start: number | null, end: number | null): number | null {
+  return start !== null && end !== null ? Math.round((end - start) * 100) / 100 : null;
+}
+
+function localSessionId(session: LocalListeningSession): string {
+  const clientId = session.clientSessionId?.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 50);
+  return clientId ? `${LOCAL_SESSION_ID_PREFIX}${clientId}` : `${LOCAL_SESSION_ID_PREFIX}${session.bookId}-${session.startedAt.getTime()}`;
+}
+
+function toSourceDeviceKey(deviceKey: string | null): string {
+  return `abs:${(deviceKey || DEFAULT_DEVICE_KEY).slice(0, 120)}`;
+}
+
+function userTimeZone(user: RequestUser): string {
+  return resolveTimeZone((user.settings as { timezone?: unknown } | undefined)?.timezone, 'UTC');
 }
 
 function boundPagination(page: number, itemsPerPage: number): { page: number; itemsPerPage: number; limit: number; offset: number } {
@@ -179,55 +365,4 @@ function boundPagination(page: number, itemsPerPage: number): { page: number; it
 function clampInt(value: number, min: number, max: number, fallback: number): number {
   if (!Number.isFinite(value) || value < min) return fallback;
   return Math.min(Math.floor(value), max);
-}
-
-function toEnvelope(
-  rows: AudiobookshelfListeningSessionRow[],
-  total: number,
-  bounded: { page: number; itemsPerPage: number },
-): AudiobookshelfListeningSessionsEnvelope {
-  return {
-    total,
-    numPages: bounded.itemsPerPage > 0 ? Math.ceil(total / bounded.itemsPerPage) : 0,
-    page: bounded.page,
-    itemsPerPage: bounded.itemsPerPage,
-    sessions: rows.map(toAudiobookshelfPlaybackSession),
-  };
-}
-
-function toAudiobookshelfPlaybackSession(row: AudiobookshelfListeningSessionRow): AudiobookshelfPlaybackSession {
-  return {
-    id: toAudiobookshelfUuid(row.id),
-    userId: toAudiobookshelfUuid(row.userId),
-    libraryId: toAudiobookshelfUuid(row.libraryId),
-    libraryItemId: toAudiobookshelfUuid(row.bookId),
-    bookId: toAudiobookshelfUuid(row.bookId),
-    episodeId: null,
-    mediaType: 'book',
-    mediaMetadata: row.mediaMetadata ?? {},
-    chapters: null,
-    displayTitle: row.displayTitle,
-    displayAuthor: row.displayAuthor,
-    coverPath: row.coverPath,
-    duration: row.duration,
-    playMethod: row.playMethod,
-    mediaPlayer: row.mediaPlayer,
-    deviceInfo: row.deviceInfo ?? null,
-    serverVersion: row.serverVersion,
-    date: row.date,
-    dayOfWeek: row.dayOfWeek,
-    timeListening: row.timeListening,
-    startTime: row.startTime,
-    currentTime: row.currentTime,
-    startedAt: row.startedAt.getTime(),
-    updatedAt: row.updatedAt.getTime(),
-  };
-}
-
-function deriveDateFields(value: Date): { date: string; dayOfWeek: string } {
-  const year = value.getFullYear();
-  const month = String(value.getMonth() + 1).padStart(2, '0');
-  const day = String(value.getDate()).padStart(2, '0');
-  const dayOfWeek = new Intl.DateTimeFormat('en-US', { weekday: 'long' }).format(value);
-  return { date: `${year}-${month}-${day}`, dayOfWeek };
 }

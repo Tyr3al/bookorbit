@@ -14,10 +14,26 @@ import type { ListBookReadingSessionsDto } from './dto/list-book-reading-session
 import type { SaveReadingSessionDto } from './dto/save-reading-session.dto';
 import {
   ReadingSessionRepository,
+  type GrowingReadingSession,
   type ReadingSessionSyncOptions,
   type RecordCumulativeReadingSessionParams,
   type RecordCumulativeReadingSessionResult,
+  type SaveReadingSessionResult,
 } from './reading-session.repository';
+
+export interface RecordListeningSessionParams {
+  userId: number;
+  bookFileId: number;
+  sessionId: string;
+  startedAt: Date;
+  endedAt: Date;
+  durationSeconds: number;
+  progressDelta: number | null;
+  endProgress: number | null;
+  source: ReadingSessionSource;
+  sourceDeviceKey: string;
+  timeZone: string;
+}
 
 @Injectable()
 export class ReadingSessionService {
@@ -114,6 +130,52 @@ export class ReadingSessionService {
       );
       throw error;
     }
+  }
+
+  /**
+   * Stores listening a sync protocol reported for a book the caller already resolved through the
+   * user's accessible libraries, and whose position and read status the caller already applied.
+   * Not `save()`, which would repeat both. Re-sending a session id with a longer duration grows the
+   * stored session (see `saveSession`), which is how a client that reports in deltas keeps one
+   * session per sitting.
+   */
+  async recordListeningSession(params: RecordListeningSessionParams): Promise<SaveReadingSessionResult> {
+    const wallClockSeconds = Math.max(0, Math.floor((params.endedAt.getTime() - params.startedAt.getTime()) / 1000));
+    const durationSeconds = Math.min(Math.max(0, Math.round(params.durationSeconds)), wallClockSeconds);
+    const result = await this.repo.saveSession(
+      params.userId,
+      params.bookFileId,
+      params.sessionId,
+      params.startedAt,
+      params.endedAt,
+      durationSeconds,
+      params.progressDelta,
+      params.endProgress,
+      params.source,
+      params.timeZone,
+      { sourceDeviceKey: params.sourceDeviceKey },
+      'listen',
+    );
+
+    if (result.kind === 'saved' || result.kind === 'superseded') this.userStatistics.invalidateUser(params.userId);
+    if (result.kind === 'saved') {
+      this.achievementEvents.emit(ACHIEVEMENT_EVENT_READING_SESSION_SAVED, {
+        userId: params.userId,
+        bookFileId: params.bookFileId,
+        durationSeconds,
+        startedAt: params.startedAt,
+        endedAt: params.endedAt,
+        progressDelta: params.progressDelta,
+        endProgress: params.endProgress,
+        timezone: params.timeZone,
+        source: params.source,
+      });
+    }
+    return result;
+  }
+
+  async findLatestSourceSession(params: Parameters<ReadingSessionRepository['findLatestSourceSession']>[0]): Promise<GrowingReadingSession | null> {
+    return this.repo.findLatestSourceSession(params);
   }
 
   async recordCumulativeSyncedSession(params: RecordCumulativeReadingSessionParams): Promise<RecordCumulativeReadingSessionResult> {

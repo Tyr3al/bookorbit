@@ -6,6 +6,7 @@ import { AuthorsModule } from '../authors/authors.module';
 import { AppSettingsModule } from '../app-settings/app-settings.module';
 import { BookmarkModule } from '../bookmark/bookmark.module';
 import { UserModule } from '../user/user.module';
+import { ReadingSessionModule } from '../reading-session/reading-session.module';
 import { AudiobookshelfRepository } from './audiobookshelf.repository';
 import { AudiobookshelfEnabledGuard } from './audiobookshelf-enabled.guard';
 import { AudiobookshelfLoginController } from './controllers/audiobookshelf-login.controller';
@@ -40,7 +41,7 @@ import { AudiobookshelfSessionsRepository } from './services/audiobookshelf-sess
 import { AudiobookshelfSessionsService } from './services/audiobookshelf-sessions.service';
 
 @Module({
-  imports: [AuthModule, UserModule, BookModule, AuthorsModule, AppSettingsModule, BookmarkModule],
+  imports: [AuthModule, UserModule, BookModule, AuthorsModule, AppSettingsModule, BookmarkModule, ReadingSessionModule],
   controllers: [
     AudiobookshelfLoginController,
     AudiobookshelfOAuthController,

@@ -11,7 +11,7 @@ import {
 import type { AudiobookshelfLibraryItemMinified, AudiobookshelfMediaProgress } from '../audiobookshelf.types';
 import type { RequestUser } from '../../../common/types/request-user';
 import { AudiobookshelfItemsService } from './audiobookshelf-items.service';
-import { AudiobookshelfSessionsService, type RecordLocalSessionInput } from './audiobookshelf-sessions.service';
+import { AudiobookshelfSessionsService, readDeviceId, type LocalListeningSession } from './audiobookshelf-sessions.service';
 import {
   toAudiobookshelfUuid,
   toAudiobookshelfCompositeUuid,
@@ -32,14 +32,20 @@ export interface UpdateProgressInput {
 /** Session-only fields carried by an ABS local-sync payload, read defensively alongside the
  * progress fields in UpdateProgressInput - see parseLocalSession. */
 interface LocalSessionSnapshot {
+  id: string | null;
   timeListening: number;
+  startTime: number | undefined;
   startedAt: number | undefined;
   updatedAt: number | undefined;
-  displayTitle: string | undefined;
-  displayAuthor: string | undefined;
-  duration: number | undefined;
-  mediaPlayer: string | undefined;
-  deviceInfo: Record<string, unknown> | null;
+  deviceId: string | null;
+}
+
+export interface AppliedMediaProgress {
+  progress: AudiobookshelfMediaProgress;
+  bookId: number;
+  currentFileId: number;
+  previousPercentage: number | null;
+  percentage: number;
 }
 
 interface ProgressBatchEntry {
@@ -127,6 +133,12 @@ export class AudiobookshelfProgressService {
 
   /** ABS PATCH /api/me/progress/:libraryItemId - maps the payload onto audiobook_progress. */
   async updateMediaProgress(user: RequestUser, libraryItemId: number, input: UpdateProgressInput): Promise<AudiobookshelfMediaProgress> {
+    return (await this.applyMediaProgress(user, libraryItemId, input)).progress;
+  }
+
+  /** updateMediaProgress plus what listening history needs: the file the position resolved to and
+   * the book percentage before and after the write (equal when the stale-write guard skipped it). */
+  async applyMediaProgress(user: RequestUser, libraryItemId: number, input: UpdateProgressInput): Promise<AppliedMediaProgress> {
     const book = await this.requireExposedBook(user, libraryItemId);
     const files = await this.repository.findAudioFilesByBookId(book.id);
     if (files.length === 0) throw new NotFoundException(`Book ${book.id} has no audio files`);
@@ -134,30 +146,26 @@ export class AudiobookshelfProgressService {
     const orderedFiles = [...files].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.id - b.id);
     const existingRows = await this.repository.findProgressByUserIdAndBookIds(user.id, [book.id]);
     const existing = existingRows[0];
-    const incomingUpdatedAt = resolveIncomingUpdatedAt(input);
-    if (existing && incomingUpdatedAt !== null && existing.capturedAt.getTime() > incomingUpdatedAt.getTime()) {
-      return this.toMediaProgress(existing, orderedFiles);
-    }
-    const totalDuration = orderedFiles.reduce((sum, file) => sum + (file.durationSeconds ?? 0), 0);
-
-    const { currentFileId, positionSeconds, percentage } = this.resolvePosition(orderedFiles, totalDuration, input);
-    const progress = { percentage, currentFileId, positionSeconds };
-    if (incomingUpdatedAt !== null) {
-      if (input.isFinished === undefined) {
-        await this.bookService.saveAudioProgress(user.id, book.id, progress, user, incomingUpdatedAt);
-      } else {
-        await this.bookService.saveAudioProgress(user.id, book.id, progress, user, incomingUpdatedAt, input.isFinished);
-      }
-    } else {
-      if (input.isFinished === undefined) {
-        await this.bookService.saveAudioProgress(user.id, book.id, progress, user);
-      } else {
-        await this.bookService.saveAudioProgress(user.id, book.id, progress, user, undefined, input.isFinished);
-      }
+    const previousPercentage = existing?.percentage ?? null;
+    const applied = await this.applyProgressEntry(user, book.id, input, orderedFiles, existing?.capturedAt);
+    if (!applied) {
+      return {
+        progress: this.toMediaProgress(existing!, orderedFiles),
+        bookId: book.id,
+        currentFileId: existing!.currentFileId,
+        previousPercentage,
+        percentage: existing!.percentage,
+      };
     }
 
     const rows = await this.repository.findProgressByUserIdAndBookIds(user.id, [book.id]);
-    return this.toMediaProgress(rows[0], orderedFiles);
+    return {
+      progress: this.toMediaProgress(rows[0], orderedFiles),
+      bookId: book.id,
+      currentFileId: applied.currentFileId,
+      previousPercentage,
+      percentage: applied.percentage,
+    };
   }
 
   /** ABS PATCH /api/me/progress/batch/update - applies each entry, skipping ones that fail
@@ -218,49 +226,8 @@ export class AudiobookshelfProgressService {
   async syncLocalSession(user: RequestUser, raw: unknown): Promise<void> {
     const parsed = parseLocalSession(raw);
     if (!parsed) throw new BadRequestException('Invalid local playback session');
-    await this.updateMediaProgress(user, parsed.bookId, parsed.input);
-    await this.persistLocalSession(user, parsed);
-  }
-
-  /** Persists one offline session row. Never throws - a persistence failure must not surface as
-   * a sync failure to the client, which already got its progress write. */
-  private async persistLocalSession(user: RequestUser, parsed: ParsedLocalSession): Promise<void> {
-    const event = 'abs.local_session_persist';
-    const startedAt = Date.now();
-    try {
-      const book = await this.itemsService.requireExposedBook(user, parsed.bookId);
-      await this.sessionsService.recordLocalSessions(user.id, [
-        toLocalSessionInput(parsed.bookId, parsed.sessionSnapshot, book.libraryId, parsed.input.currentTime),
-      ]);
-    } catch (error: unknown) {
-      const err = error instanceof Error ? error : new Error(String(error));
-      this.logger.warn(
-        `[${event}] [fail] userId=${user.id} bookId=${parsed.bookId} durationMs=${Date.now() - startedAt} errorClass=${err.constructor.name} error="${sanitizeLogValue(err.message)}" - local session persist failed`,
-      );
-    }
-  }
-
-  /** Bulk-inserts the session rows for a batch of accepted local-sync entries - one write for
-   * the whole batch. Never throws - see persistLocalSession. */
-  private async persistLocalSessionsBatch(user: RequestUser, entries: ProgressBatchEntry[], libraryIdByBookId: Map<number, number>): Promise<void> {
-    const rows = entries.flatMap((entry) => {
-      if (!entry.sessionSnapshot) return [];
-      const libraryId = libraryIdByBookId.get(entry.bookId);
-      return libraryId === undefined ? [] : [toLocalSessionInput(entry.bookId, entry.sessionSnapshot, libraryId, entry.input.currentTime)];
-    });
-    if (rows.length === 0) return;
-
-    const event = 'abs.local_session_persist_batch';
-    const startedAt = Date.now();
-    try {
-      await this.sessionsService.recordLocalSessions(user.id, rows);
-      this.logger.log(`[${event}] [end] userId=${user.id} durationMs=${Date.now() - startedAt} rows=${rows.length} - local session rows persisted`);
-    } catch (error: unknown) {
-      const err = error instanceof Error ? error : new Error(String(error));
-      this.logger.warn(
-        `[${event}] [fail] userId=${user.id} durationMs=${Date.now() - startedAt} rows=${rows.length} errorClass=${err.constructor.name} error="${sanitizeLogValue(err.message)}" - local session rows persist failed`,
-      );
-    }
+    await this.requireExposedBook(user, parsed.bookId);
+    await this.applyProgressBatch(user, [parsed]);
   }
 
   toMediaProgress(
@@ -306,7 +273,6 @@ export class AudiobookshelfProgressService {
     const bookIds = [...new Set(entries.map((entry) => entry.bookId))];
     const accessibleBooks = await this.repository.findExposedAudioBooksByIds(bookIds, user);
     const accessibleBookIds = new Set(accessibleBooks.map((book) => book.id));
-    const libraryIdByBookId = new Map(accessibleBooks.map((book) => [book.id, book.libraryId]));
 
     const accessibleEntries = entries.filter((entry) => accessibleBookIds.has(entry.bookId));
     let skipped = entries.length - accessibleEntries.length;
@@ -335,32 +301,35 @@ export class AudiobookshelfProgressService {
 
     let applied = 0;
     let failed = 0;
+    const listeningSessions: LocalListeningSession[] = [];
 
-    await Promise.all([
-      runWithConcurrency([...entriesByBookId.values()], PROGRESS_BATCH_CONCURRENCY, async (group) => {
-        const bookId = group[0].bookId;
-        const orderedFiles = (filesByBookId.get(bookId) ?? []).slice().sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.id - b.id);
-        if (orderedFiles.length === 0) {
-          skipped += group.length;
-          return;
-        }
-        let lastUpdatedAt = progressByBookId.get(bookId)?.capturedAt;
-        for (const entry of group) {
-          try {
-            const wasApplied = await this.applyProgressEntry(user, bookId, entry.input, orderedFiles, lastUpdatedAt);
-            if (!wasApplied) {
-              skipped++;
-              continue;
-            }
-            applied++;
-            lastUpdatedAt = resolveIncomingUpdatedAt(entry.input) ?? lastUpdatedAt;
-          } catch {
-            failed++;
+    await runWithConcurrency([...entriesByBookId.values()], PROGRESS_BATCH_CONCURRENCY, async (group) => {
+      const bookId = group[0].bookId;
+      const orderedFiles = (filesByBookId.get(bookId) ?? []).slice().sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.id - b.id);
+      if (orderedFiles.length === 0) {
+        skipped += group.length;
+        return;
+      }
+      for (const entry of group) {
+        if (entry.sessionSnapshot)
+          listeningSessions.push(this.toLocalListeningSession(entry.bookId, entry.sessionSnapshot, entry.input, orderedFiles));
+      }
+      let lastUpdatedAt = progressByBookId.get(bookId)?.capturedAt;
+      for (const entry of group) {
+        try {
+          const appliedPosition = await this.applyProgressEntry(user, bookId, entry.input, orderedFiles, lastUpdatedAt);
+          if (!appliedPosition) {
+            skipped++;
+            continue;
           }
+          applied++;
+          lastUpdatedAt = resolveIncomingUpdatedAt(entry.input) ?? lastUpdatedAt;
+        } catch {
+          failed++;
         }
-      }),
-      this.persistLocalSessionsBatch(user, accessibleEntries, libraryIdByBookId),
-    ]);
+      }
+    });
+    await this.sessionsService.recordLocalSessions(user, listeningSessions);
 
     return { applied, skipped, failed };
   }
@@ -374,10 +343,10 @@ export class AudiobookshelfProgressService {
     input: UpdateProgressInput,
     orderedFiles: BookFile[],
     existingUpdatedAt: Date | undefined,
-  ): Promise<boolean> {
+  ): Promise<{ currentFileId: number; percentage: number } | null> {
     const incomingUpdatedAt = resolveIncomingUpdatedAt(input);
     if (existingUpdatedAt && incomingUpdatedAt !== null && existingUpdatedAt.getTime() > incomingUpdatedAt.getTime()) {
-      return false;
+      return null;
     }
 
     const totalDuration = orderedFiles.reduce((sum, file) => sum + (file.durationSeconds ?? 0), 0);
@@ -397,7 +366,32 @@ export class AudiobookshelfProgressService {
         await this.bookService.saveAudioProgress(user.id, bookId, progress, user, undefined, input.isFinished);
       }
     }
-    return true;
+    return { currentFileId, percentage };
+  }
+
+  /** Maps an offline session onto the book's files. Positions resolve independently of the
+   * progress write, so listening is recorded even when a newer position already superseded it. */
+  private toLocalListeningSession(
+    bookId: number,
+    snapshot: LocalSessionSnapshot,
+    input: UpdateProgressInput,
+    orderedFiles: BookFile[],
+  ): LocalListeningSession {
+    const totalDuration = orderedFiles.reduce((sum, file) => sum + (file.durationSeconds ?? 0), 0);
+    const end = this.resolvePosition(orderedFiles, totalDuration, input);
+    const start = snapshot.startTime === undefined ? null : this.resolvePosition(orderedFiles, totalDuration, { currentTime: snapshot.startTime });
+    const updatedAtMs = snapshot.updatedAt ?? snapshot.startedAt ?? Date.now();
+    return {
+      bookId,
+      bookFileId: end.currentFileId,
+      clientSessionId: snapshot.id,
+      startedAt: new Date(Math.min(snapshot.startedAt ?? updatedAtMs, updatedAtMs)),
+      updatedAt: new Date(updatedAtMs),
+      timeListening: Math.max(0, snapshot.timeListening),
+      startProgress: start?.percentage ?? null,
+      endProgress: end.percentage,
+      deviceKey: snapshot.deviceId,
+    };
   }
 
   private async requireExposedBook(user: RequestUser, bookId: number): Promise<Book> {
@@ -483,54 +477,13 @@ function parseLocalSession(raw: unknown): ParsedLocalSession | null {
       isFinished: typeof session.isFinished === 'boolean' ? session.isFinished : undefined,
     },
     sessionSnapshot: {
+      id: typeof session.id === 'string' && session.id ? session.id : null,
       timeListening: finiteNumber(session.timeListening) ?? 0,
+      startTime: finiteNumber(session.startTime),
       startedAt: finiteNumber(session.startedAt),
       updatedAt: finiteNumber(session.updatedAt) ?? finiteNumber(session.lastUpdate),
-      displayTitle: typeof session.displayTitle === 'string' ? session.displayTitle.slice(0, 1000) : undefined,
-      displayAuthor: typeof session.displayAuthor === 'string' ? session.displayAuthor.slice(0, 1000) : undefined,
-      duration: finiteNumber(session.duration),
-      mediaPlayer: typeof session.mediaPlayer === 'string' ? session.mediaPlayer.slice(0, 100) : undefined,
-      deviceInfo: sanitizeLocalDeviceInfo(session.deviceInfo),
+      deviceId: readDeviceId(session.deviceInfo),
     },
-  };
-}
-
-function sanitizeLocalDeviceInfo(value: unknown): Record<string, unknown> | null {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
-  const input = value as Record<string, unknown>;
-  const output: Record<string, unknown> = {};
-  for (const key of ['id', 'deviceId', 'clientName', 'clientVersion', 'manufacturer', 'model']) {
-    if (typeof input[key] === 'string') output[key] = (input[key] as string).slice(0, 200);
-  }
-  if (typeof input.sdkVersion === 'number' && Number.isFinite(input.sdkVersion)) output.sdkVersion = input.sdkVersion;
-  return output;
-}
-
-/** Builds the session row for a local-sync entry. currentTime falls back to 0 when the entry
- * only carried a progress fraction, since the absolute position isn't resolved until
- * applyProgressEntry runs against the book's files. Negative positions are clamped so a hostile
- * client cannot trip the CHECK constraints and fail the whole batch insert. */
-function toLocalSessionInput(
-  bookId: number,
-  snapshot: LocalSessionSnapshot,
-  libraryId: number,
-  resolvedCurrentTime: number | undefined,
-): RecordLocalSessionInput {
-  const updatedAtMs = snapshot.updatedAt ?? snapshot.startedAt ?? Date.now();
-  const startedAtMs = snapshot.startedAt ?? updatedAtMs;
-  const currentTime = Math.max(0, resolvedCurrentTime ?? 0);
-  return {
-    bookId,
-    libraryId,
-    displayTitle: snapshot.displayTitle ?? '',
-    displayAuthor: snapshot.displayAuthor ?? '',
-    duration: snapshot.duration ?? null,
-    mediaPlayer: snapshot.mediaPlayer ?? 'unknown',
-    deviceInfo: snapshot.deviceInfo,
-    timeListening: snapshot.timeListening,
-    currentTime,
-    startedAt: new Date(startedAtMs),
-    updatedAt: new Date(updatedAtMs),
   };
 }
 

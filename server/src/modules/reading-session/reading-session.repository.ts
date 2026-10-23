@@ -102,6 +102,15 @@ export type RecordCumulativeReadingSessionResult =
       reason: 'book_file_not_found' | 'duplicate_session_id' | 'measured_session_present';
     };
 
+export interface GrowingReadingSession {
+  sessionId: string;
+  startedAt: Date;
+  endedAt: Date;
+  durationSeconds: number;
+  progressDelta: number | null;
+  endProgress: number | null;
+}
+
 export interface ReadingSessionSyncOptions {
   sourceDeviceKey: string;
   estimateSessionIdPrefix?: string;
@@ -461,6 +470,46 @@ export class ReadingSessionRepository {
       .limit(1);
 
     return row?.endProgress ?? null;
+  }
+
+  /**
+   * The newest session a sync source is still growing for this book, so a client that reports
+   * listening in small deltas (Audiobookshelf apps sync every few seconds) extends one session
+   * instead of creating one per report. Matches only ids carrying the caller's prefix so a session
+   * from another write path is never extended.
+   */
+  async findLatestSourceSession(params: {
+    userId: number;
+    bookId: number;
+    source: ReadingSessionSource;
+    sourceDeviceKey: string;
+    sessionIdPrefix: string;
+    endedAfter: Date;
+  }): Promise<GrowingReadingSession | null> {
+    const [row] = await this.db
+      .select({
+        sessionId: readingSessions.sessionId,
+        startedAt: readingSessions.startedAt,
+        endedAt: readingSessions.endedAt,
+        durationSeconds: readingSessions.durationSeconds,
+        progressDelta: readingSessions.progressDelta,
+        endProgress: readingSessions.endProgress,
+      })
+      .from(readingSessions)
+      .where(
+        and(
+          eq(readingSessions.userId, params.userId),
+          eq(readingSessions.bookId, params.bookId),
+          eq(readingSessions.source, params.source),
+          eq(readingSessions.sourceDeviceKey, params.sourceDeviceKey),
+          like(readingSessions.sessionId, `${params.sessionIdPrefix}%`),
+          gte(readingSessions.endedAt, params.endedAfter),
+        ),
+      )
+      .orderBy(desc(readingSessions.endedAt))
+      .limit(1);
+
+    return row ?? null;
   }
 
   // Deliberately unscoped by the list filters: this feeds the book's progress ring, which

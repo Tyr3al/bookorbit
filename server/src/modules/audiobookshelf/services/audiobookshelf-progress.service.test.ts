@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 
 import { AudiobookshelfProgressService } from './audiobookshelf-progress.service';
 import type { AudiobookshelfRepository } from '../audiobookshelf.repository';
@@ -273,22 +273,44 @@ describe('AudiobookshelfProgressService.updateMediaProgress', () => {
     );
   });
 
-  it('persists a session row for a single local session', async () => {
+  it('records the listening of a single local session against the file its position falls in', async () => {
     const { service, sessionsService } = makeService();
 
-    await service.syncLocalSession(user(), { libraryItemId: toAudiobookshelfUuid(7), currentTime: 30, timeListening: 15, displayTitle: 'A Book' });
+    await service.syncLocalSession(user(), {
+      id: 'local-1',
+      libraryItemId: toAudiobookshelfUuid(7),
+      startTime: 30,
+      currentTime: 90,
+      timeListening: 60,
+      startedAt: Date.parse('2025-01-01T00:00:00Z'),
+      updatedAt: Date.parse('2025-01-01T00:01:05Z'),
+      deviceInfo: { deviceId: 'phone-1' },
+    });
 
-    expect(sessionsService.recordLocalSessions).toHaveBeenCalledWith(1, [
-      expect.objectContaining({ bookId: 7, libraryId: 3, currentTime: 30, timeListening: 15, displayTitle: 'A Book' }),
+    expect(sessionsService.recordLocalSessions).toHaveBeenCalledWith(expect.objectContaining({ id: 1 }), [
+      {
+        bookId: 7,
+        bookFileId: 12,
+        clientSessionId: 'local-1',
+        startedAt: new Date('2025-01-01T00:00:00Z'),
+        updatedAt: new Date('2025-01-01T00:01:05Z'),
+        timeListening: 60,
+        startProgress: 25,
+        endProgress: 75,
+        deviceKey: 'phone-1',
+      },
     ]);
   });
 
-  it('swallows a session persistence failure without breaking the single local sync', async () => {
-    const { service, sessionsService, bookService } = makeService();
-    sessionsService.recordLocalSessions.mockRejectedValue(new Error('db unavailable'));
+  it('404s a single local session for an inaccessible item before writing anything', async () => {
+    const { service, itemsService, bookService, sessionsService } = makeService();
+    vi.mocked(itemsService.requireExposedBook).mockRejectedValue(new NotFoundException());
 
-    await expect(service.syncLocalSession(user(), { libraryItemId: toAudiobookshelfUuid(7), currentTime: 30 })).resolves.toBeUndefined();
-    expect(bookService.saveAudioProgress).toHaveBeenCalled();
+    await expect(service.syncLocalSession(user(), { libraryItemId: toAudiobookshelfUuid(7), currentTime: 30 })).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+    expect(bookService.saveAudioProgress).not.toHaveBeenCalled();
+    expect(sessionsService.recordLocalSessions).not.toHaveBeenCalled();
   });
 
   it('rejects malformed single local sessions', async () => {
@@ -429,68 +451,30 @@ describe('AudiobookshelfProgressService.syncLocalSessions', () => {
     expect(bookService.saveAudioProgress).not.toHaveBeenCalled();
   });
 
-  it('persists local session rows in a single batched call', async () => {
-    const { service, repository, sessionsService } = makeService();
+  it('records listening for every accessible session in one call, including ones whose position is stale', async () => {
+    const { service, repository, sessionsService, bookService } = makeService();
     vi.mocked(repository.findExposedAudioBooksByIds).mockResolvedValue([{ id: 7, libraryId: 3 }] as never);
-    vi.mocked(repository.findProgressByUserIdAndBookIds).mockResolvedValue([]);
 
     await service.syncLocalSessions(user(), [
-      {
-        libraryItemId: toAudiobookshelfUuid(7),
-        currentTime: 40,
-        timeListening: 90,
-        displayTitle: 'A Book',
-        displayAuthor: 'An Author',
-        duration: 3600,
-        mediaPlayer: 'AVPlayer',
-        deviceInfo: { deviceId: 'phone-1' },
-        startedAt: Date.parse('2025-01-01T00:00:00Z'),
-        updatedAt: Date.parse('2025-01-01T01:00:00Z'),
-      },
+      { id: 'old', libraryItemId: toAudiobookshelfUuid(7), currentTime: 40, timeListening: 90, lastUpdate: Date.parse('2023-01-01T00:00:00Z') },
+      { id: 'hidden', libraryItemId: toAudiobookshelfUuid(8), currentTime: 20, timeListening: 40 },
     ]);
 
+    expect(bookService.saveAudioProgress).not.toHaveBeenCalled();
     expect(sessionsService.recordLocalSessions).toHaveBeenCalledTimes(1);
-    expect(sessionsService.recordLocalSessions).toHaveBeenCalledWith(1, [
-      expect.objectContaining({
-        bookId: 7,
-        libraryId: 3,
-        displayTitle: 'A Book',
-        displayAuthor: 'An Author',
-        duration: 3600,
-        mediaPlayer: 'AVPlayer',
-        deviceInfo: { deviceId: 'phone-1' },
-        timeListening: 90,
-        currentTime: 40,
-      }),
+    expect(sessionsService.recordLocalSessions).toHaveBeenCalledWith(expect.objectContaining({ id: 1 }), [
+      expect.objectContaining({ bookId: 7, bookFileId: 11, clientSessionId: 'old', timeListening: 90, startProgress: null, endProgress: 33.33 }),
     ]);
   });
 
-  it('clamps negative positions in local sessions before persisting', async () => {
+  it('clamps negative positions and listening time in local sessions', async () => {
     const { service, sessionsService } = makeService();
 
-    await service.syncLocalSessions(user(), [
-      { libraryItemId: toAudiobookshelfUuid(7), currentTime: -12, timeListening: 30 },
-      { libraryItemId: toAudiobookshelfUuid(8), currentTime: 20, timeListening: 40 },
+    await service.syncLocalSessions(user(), [{ libraryItemId: toAudiobookshelfUuid(7), currentTime: -12, startTime: -3, timeListening: -30 }]);
+
+    expect(sessionsService.recordLocalSessions).toHaveBeenCalledWith(expect.anything(), [
+      expect.objectContaining({ bookId: 7, clientSessionId: null, timeListening: 0, startProgress: 0, endProgress: 0, deviceKey: null }),
     ]);
-
-    expect(sessionsService.recordLocalSessions).toHaveBeenCalledTimes(1);
-    expect(sessionsService.recordLocalSessions).toHaveBeenCalledWith(1, [
-      expect.objectContaining({ bookId: 7, currentTime: 0, timeListening: 30 }),
-      expect.objectContaining({ bookId: 8, currentTime: 20, timeListening: 40 }),
-    ]);
-  });
-
-  it('swallows a session persistence failure without failing the local sync', async () => {
-    const { service, repository, sessionsService } = makeService();
-    vi.mocked(repository.findExposedAudioBooksByIds).mockResolvedValue([{ id: 7, libraryId: 3 }] as never);
-    vi.mocked(repository.findProgressByUserIdAndBookIds).mockResolvedValue([]);
-    sessionsService.recordLocalSessions.mockRejectedValue(new Error('db unavailable'));
-
-    await expect(
-      service.syncLocalSessions(user(), [{ libraryItemId: toAudiobookshelfUuid(7), currentTime: 40, timeListening: 10 }]),
-    ).resolves.toEqual({
-      results: [],
-    });
   });
 });
 

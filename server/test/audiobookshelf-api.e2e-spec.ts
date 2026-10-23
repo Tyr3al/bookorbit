@@ -306,7 +306,13 @@ describe('Audiobookshelf-compatible API', () => {
   });
 
   describe('listening sessions and stats', () => {
-    it('records a live session across play/sync/close and reads it back', async () => {
+    function absListenRows(bookId: number) {
+      return ctx.db.query.readingSessions.findMany({
+        where: (rs, { and: andOp, eq: eqOp }) => andOp(eqOp(rs.bookId, bookId), eqOp(rs.source, 'abs')),
+      });
+    }
+
+    it('records play/sync/close as one growing BookOrbit listen session and reads it back', async () => {
       const play = await ctx.app.inject({
         method: 'POST',
         url: `/abs/api/items/${bookOneId}/play`,
@@ -332,72 +338,85 @@ describe('Audiobookshelf-compatible API', () => {
       });
       expect(close.statusCode).toBe(200);
 
+      const rows = await absListenRows(bookOneId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ sessionType: 'listen', sourceDeviceKey: 'abs:e2e-device' });
+      expect([fileOneId, fileTwoId]).toContain(rows[0]!.bookFileId);
+      expect(rows[0]!.sessionId).toMatch(/^abs-live:/);
+      // The first report backdates the session by the 20s it covers; the close arrives
+      // milliseconds later in this test, so its 30s are capped at the elapsed wall clock.
+      expect(rows[0]!.durationSeconds).toBeGreaterThanOrEqual(20);
+      expect(rows[0]!.durationSeconds).toBeLessThan(50);
+
       const list = await ctx.app.inject({ method: 'GET', url: '/abs/api/me/listening-sessions', headers: authorized() });
       expect(list.statusCode).toBe(200);
       const envelope = list.json();
-      expect(envelope).toHaveProperty('total');
-      expect(envelope).toHaveProperty('numPages');
-      expect(envelope).toHaveProperty('page');
-      expect(envelope).toHaveProperty('itemsPerPage');
-      expect(Array.isArray(envelope.sessions)).toBe(true);
+      expect(envelope).toMatchObject({ page: 0, itemsPerPage: 10 });
+      expect(envelope.numPages).toBe(Math.ceil(envelope.total / envelope.itemsPerPage));
 
       const session = envelope.sessions.find((s: { libraryItemId: string }) => s.libraryItemId === toAudiobookshelfUuid(bookOneId));
-      expect(session).toBeDefined();
       expect(session).toMatchObject({
+        id: toAudiobookshelfUuid(rows[0]!.id),
         libraryItemId: toAudiobookshelfUuid(bookOneId),
         bookId: toAudiobookshelfUuid(bookOneId),
+        libraryId: toAudiobookshelfUuid(absLibraryId),
         displayTitle: 'Book One',
         mediaType: 'book',
         episodeId: null,
-        timeListening: 50,
-        currentTime: 50,
+        mediaPlayer: 'audiobookshelf',
+        deviceInfo: { deviceId: 'e2e-device' },
+        timeListening: rows[0]!.durationSeconds,
       });
-      expect(typeof session.id).toBe('string');
       expect(typeof session.startedAt).toBe('number');
       expect(typeof session.updatedAt).toBe('number');
     });
 
-    it('persists offline sessions from /api/session/local-all', async () => {
-      const now = Date.now();
-      const response = await ctx.app.inject({
-        method: 'POST',
-        url: '/abs/api/session/local-all',
-        headers: { ...authorized(), 'content-type': 'application/json' },
-        payload: [
-          {
-            libraryItemId: toAudiobookshelfUuid(bookTwoId),
-            currentTime: 12,
-            duration: 300,
-            timeListening: 75,
-            displayTitle: 'Book Two',
-            displayAuthor: 'An Author',
-            mediaPlayer: 'AVPlayer',
-            deviceInfo: { deviceId: 'e2e-local' },
-            startedAt: now - 60_000,
-            updatedAt: now - 30_000,
-          },
-        ],
-      });
+    it('shows ABS listening in the BookOrbit reading log under the Audiobookshelf source', async () => {
+      const response = await ctx.app.inject({ method: 'GET', url: `/api/v1/books/${bookOneId}/sessions`, headers: authorized() });
       expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(body.items.some((item: { source: string }) => item.source === 'abs')).toBe(true);
+    });
 
-      const list = await ctx.app.inject({ method: 'GET', url: '/abs/api/me/listening-sessions', headers: authorized() });
-      const session = list.json().sessions.find((s: { libraryItemId: string }) => s.libraryItemId === toAudiobookshelfUuid(bookTwoId));
-      expect(session).toBeDefined();
-      expect(session).toMatchObject({
+    it('stores offline sessions keyed by the client id so a re-upload grows the session instead of duplicating it', async () => {
+      const now = Date.now();
+      const local = {
+        id: 'e2e-local-session-1',
         libraryItemId: toAudiobookshelfUuid(bookTwoId),
-        displayTitle: 'Book Two',
-        displayAuthor: 'An Author',
-        mediaPlayer: 'AVPlayer',
-        timeListening: 75,
+        startTime: 0,
         currentTime: 12,
-      });
+        duration: 300,
+        timeListening: 25,
+        deviceInfo: { deviceId: 'e2e-local' },
+        startedAt: now - 60_000,
+        updatedAt: now - 30_000,
+      };
+      const upload = (payload: unknown) =>
+        ctx.app.inject({
+          method: 'POST',
+          url: '/abs/api/session/local-all',
+          headers: { ...authorized(), 'content-type': 'application/json' },
+          payload,
+        });
+
+      expect((await upload([local])).statusCode).toBe(200);
+      expect((await upload([local])).statusCode).toBe(200);
+      expect((await upload([{ ...local, currentTime: 40, timeListening: 50, updatedAt: now - 5_000 }])).statusCode).toBe(200);
+
+      const rows = await absListenRows(bookTwoId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ sessionId: 'abs-local:e2e-local-session-1', durationSeconds: 50, sourceDeviceKey: 'abs:e2e-local' });
+
+      const list = await ctx.app.inject({ method: 'GET', url: `/abs/api/me/item/listening-sessions/${bookTwoId}`, headers: authorized() });
+      expect(list.json().sessions).toEqual([
+        expect.objectContaining({ libraryItemId: toAudiobookshelfUuid(bookTwoId), displayTitle: 'Book Two', timeListening: 50 }),
+      ]);
     });
 
     it('filters listening sessions by library item and 404s unknown items', async () => {
       const response = await ctx.app.inject({ method: 'GET', url: `/abs/api/me/item/listening-sessions/${bookOneId}`, headers: authorized() });
       expect(response.statusCode).toBe(200);
       const envelope = response.json();
-      expect(envelope.numPages).toBe(Math.ceil(envelope.total / envelope.itemsPerPage));
       expect(envelope.sessions.length).toBeGreaterThan(0);
       for (const session of envelope.sessions) {
         expect(session.libraryItemId).toBe(toAudiobookshelfUuid(bookOneId));
@@ -407,32 +426,27 @@ describe('Audiobookshelf-compatible API', () => {
       expect(unknown.statusCode).toBe(404);
     });
 
-    it('aggregates listening stats in the upstream shape', async () => {
+    it('aggregates listening stats in the upstream shape from the reading history', async () => {
       const response = await ctx.app.inject({ method: 'GET', url: '/abs/api/me/listening-stats', headers: authorized() });
       expect(response.statusCode).toBe(200);
       const stats = response.json();
-      expect(stats).toHaveProperty('totalTime');
-      expect(stats).toHaveProperty('items');
-      expect(stats).toHaveProperty('days');
-      expect(stats).toHaveProperty('dayOfWeek');
-      expect(stats).toHaveProperty('today');
-      expect(Array.isArray(stats.recentSessions)).toBe(true);
+      const [liveRow] = await absListenRows(bookOneId);
 
       const item = stats.items[toAudiobookshelfUuid(bookOneId)];
-      expect(item).toBeDefined();
-      expect(item.id).toBe(toAudiobookshelfUuid(bookOneId));
-      expect(item.timeListening).toBe(50);
+      expect(item).toMatchObject({
+        id: toAudiobookshelfUuid(bookOneId),
+        timeListening: liveRow!.durationSeconds,
+        mediaMetadata: { title: 'Book One' },
+      });
       expect(typeof item.lastUpdate).toBe('number');
-      expect(typeof item.mediaMetadata).toBe('object');
+      expect(stats.items[toAudiobookshelfUuid(bookTwoId)]).toMatchObject({ timeListening: 50 });
 
-      // The admin user also owns sessions written by earlier e2e runs, so use lower bounds.
-      expect(stats.totalTime).toBeGreaterThanOrEqual(125); // 50 live + 75 local
-      expect(stats.today).toBeGreaterThanOrEqual(50);
-      expect(Object.keys(stats.days).length).toBeGreaterThan(0);
-      expect(Object.keys(stats.dayOfWeek).length).toBeGreaterThan(0);
-      const localNow = new Date();
-      const todayKey = `${localNow.getFullYear()}-${String(localNow.getMonth() + 1).padStart(2, '0')}-${String(localNow.getDate()).padStart(2, '0')}`;
-      expect(stats.days).toHaveProperty(todayKey);
+      expect(stats.totalTime).toBe(liveRow!.durationSeconds + 50);
+      expect(stats.today).toBeGreaterThanOrEqual(liveRow!.durationSeconds);
+      const todayKey = new Date().toISOString().slice(0, 10);
+      expect(stats.days[todayKey]).toBeGreaterThan(0);
+      expect(Object.values(stats.dayOfWeek).reduce((sum: number, value) => sum + (value as number), 0)).toBe(stats.totalTime);
+      expect(stats.recentSessions.length).toBe(2);
     });
   });
 

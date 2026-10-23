@@ -2,10 +2,11 @@
 
 ## Status
 
-The active branch is `feature/audiobookshelf-api`. Listening sessions and stats are now **complete**
-and committed (see "Listening sessions and stats" below); the parked stash is gone. This pass also
-fixed a latent author-timestamp crash and repaired the audiobookshelf e2e suite, which had never
-been green since the `/abs` RouterModule mount.
+The active branch is `BO-650-audiobookshelf-api`, merged up to date with upstream
+`bookorbit/bookorbit` main. ABS login and refresh run on upstream's session-bound auth (see the
+merge commit), and ABS listening is recorded in BookOrbit's reading history (see "Listening
+sessions and stats" below). The schema delta is one migration, `0125_add_audiobookshelf_api`:
+the per-library opt-in column and the `abs` reading-session source.
 
 The working tree should contain only these user-owned untracked paths in addition to this
 document:
@@ -193,57 +194,46 @@ Note there are **two** author mappers that must stay in sync:
 The duplication is deliberate: `AudiobookshelfAuthorsService` already injects
 `AudiobookshelfLibrariesService`, so reusing the mapper would create a circular DI cycle.
 
-## Listening sessions and stats (complete)
+## Listening sessions and stats
 
-The previously parked stash was popped and finished. The `abs_listening_sessions` table (migration
-`0083`, schema `server/src/db/schema/audiobookshelf.ts`), `AudiobookshelfSessionsRepository` and
-`AudiobookshelfSessionsService` are committed; the stash is gone. The design is the one the stash
-was built against:
+ABS listening is stored in BookOrbit's own `reading_sessions` table (`sessionType: 'listen'`,
+`source: 'abs'`), not in a separate ABS table. The earlier `abs_listening_sessions` table never
+shipped and was removed when the branch was brought up to date with upstream main. As a result ABS
+listening feeds the reading log, statistics, daily stats, achievements and Hardcover/StoryGraph
+sync, and ABS clients see listening from the web player and native apps too.
 
-- Keep the deterministic composite session id (`toAbsCompositeUuid(user.id, bookId)`) as the live
-  playback handle so `play`/`sync`/`close` stay stateless. Persist a **separate** historical row
-  with its own primary key purely for the read paths.
-- Write rows from `play()` (open/refresh), `sync()`/`close()` (accumulate the client-reported
-  `timeListened`, advance `currentTime`), and the local-session batch. Session persistence is
-  batched alongside `applyProgressBatch()`, and a persistence failure is logged and swallowed
-  rather than breaking playback or progress.
-- Reads: `GET /api/me/listening-sessions` and
-  `GET /api/me/item/listening-sessions/:libraryItemId/:episodeId?` return
-  `{ total, numPages, page, itemsPerPage, sessions }` sorted by `updatedAt` desc, with
-  `numPages = Math.ceil(total / itemsPerPage)` and `itemsPerPage` defaulting to 10. Pagination is
-  SQL `LIMIT`/`OFFSET` plus a count, never a slice.
-- `GET /api/me/listening-stats` matches the upstream shape:
-  `{ totalTime, items: { "<libraryItemId>": { id, timeListening, mediaMetadata, lastUpdate } },
-days: { "YYYY-MM-DD": seconds }, dayOfWeek: { "Monday": seconds }, today, recentSessions }`.
-  `items`, `days` and `dayOfWeek` are objects keyed by id/date/weekday, not arrays. Everything but
-  `recentSessions` (limit 10) is computed with grouped SQL aggregates.
+Writes (`AudiobookshelfSessionsService`), all through `ReadingSessionService.recordListeningSession`,
+which relies on `saveSession`'s supersede rule: re-sending a session id with a longer duration grows
+the stored session and adds only the delta to daily stats.
 
-Details worth preserving:
+- Live `sync`/`close`: each report carries `timeListened` seconds since the previous report. The
+  newest `abs-live:*` session for the same user, book and device that ended within
+  `AUDIOBOOKSHELF_LIVE_SESSION_GAP_MS` (10 min) is grown; otherwise a new one starts, backdated by
+  the reported seconds. The lookup is in the table, so it survives restarts. The device id comes
+  from the `play` request's `deviceInfo` (sync bodies do not carry it) and is kept in the open
+  session store; after a restart it falls back to `default`.
+- Offline `/api/session/local` and `/local-all`: keyed by the client's session id
+  (`abs-local:<id>`), so the client's repeated re-uploads of a growing session update one row
+  instead of inserting duplicates. Listening is recorded even when the progress write was skipped
+  as stale.
+- Durations are capped at the session's wall-clock span, and sessions under 10s are not stored,
+  matching every other reading-session source.
+- Read status and progress are not touched here; `saveAudioProgress` already handled them.
 
-- `play()`/`sync()`/`close()` read `timeListened` from the sync/close body (with a `timeListening`
-  fallback). The local-session payloads (`/api/session/local*`) use `timeListening`.
-- There is exactly one 'live' row per user+book (partial unique index), upserted atomically via
-  `ON CONFLICT`. Repeated plays of the same book therefore merge into one row and its
-  `date`/`dayOfWeek` refresh to the most recent play, whereas upstream creates a fresh row per
-  play. This day-attribution tradeoff is documented on the schema; rotating the live row on
-  `close()` would match upstream but is not done.
-- Negative client `currentTime`/`timeListening` values are clamped so a hostile payload cannot
-  trip the CHECK constraints and fail a whole batch insert. The clamp happens at every boundary
-  that writes rows: `persistLiveSessionSync` (live sync/close), `toLocalSessionInput` (local
-  batch), and `recordLocalSessions` (persistence boundary, so `currentTime`/`startTime`/
-  `timeListening` - all three back CHECK constraints - stay non-negative even if a caller changes
-  later). `AudiobookshelfSessionsService` has unit tests pinning the clamps, date-field
-  derivation, pagination bounds, the uuid-keyed stats envelope, and the item-route scope check.
+Reads (`AudiobookshelfSessionsRepository`) serve `GET /api/me/listening-sessions`,
+`GET /api/me/item/listening-sessions/:id` and `GET /api/me/listening-stats` from `listen`
+sessions in ABS-exposed libraries the user can access, with content filters applied. Days and
+weekdays are bucketed in the user's time zone. `startTime`/`currentTime` are derived from the
+session's progress and the book's audio duration, because reading sessions store percentages
+rather than positions.
 
 ### Drizzle timestamp gotcha (important)
 
 drizzle's node-postgres driver deliberately returns raw **strings** for `sql<>` timestamp
-expressions - only schema `Column` fields get mapped back to `Date`. `sql<Date>\`max(...)\`` is a
-compile-time lie; at runtime it is a string, so calling `.getTime()` on it throws. Fix: chain
-`.mapWith(<the schema column>)` on the `sql` expression. Commit `930d61d2` fixed the author/series
-aggregates in `audiobookshelf.repository.ts` (they would have crashed on real data; the unit tests
-mocked the repository with `Date` objects so they never caught it). Use `.mapWith()` for any new
-`sql<>` timestamp aggregate.
+expressions - only schema `Column` fields get mapped back to `Date`. `sql<Date>\`max(...)\``is a
+compile-time lie; at runtime it is a string, so calling`.getTime()`on it throws. Fix: chain`.mapWith(<the schema column>)`on the`sql`expression. Commit`930d61d2`fixed the author/series
+aggregates in`audiobookshelf.repository.ts`(they would have crashed on real data; the unit tests
+mocked the repository with`Date`objects so they never caught it). Use`.mapWith()`for any new`sql<>` timestamp aggregate.
 
 ### E2E suite repair
 
@@ -257,8 +247,13 @@ The audiobookshelf e2e suite had never been green. Two stale assumptions:
   `beforeAll` (per-library opt-in is not enough - the `AudiobookshelfEnabledGuard` checks the
   global setting).
 
-The suite now covers listening sessions end to end: live play/sync/close, offline local-all
-upload, per-item sessions, stats aggregation shape, and derived author timestamps.
+The suite covers listening sessions end to end: live play/sync/close growing one reading session,
+the session showing up in BookOrbit's own reading log, offline re-uploads updating instead of
+duplicating, per-item sessions, stats aggregation, and derived author timestamps.
+
+The ABS routes are listed in the authorization matrix inventory
+(`server/test/e2e/authorization-matrix/route-inventory/routes-11.json`). A new ABS route must be
+added there or the matrix's route-parity check fails.
 
 ## Remaining work, in priority order
 

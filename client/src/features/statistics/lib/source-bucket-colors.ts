@@ -10,6 +10,7 @@ export const SOURCE_BUCKET_COLOR_TOKENS: Record<ReadingSessionSourceBucket, stri
   android: '--pill-android',
   koreader: '--pill-koreader',
   kobo: '--pill-kobo',
+  audiobookshelf: '--pill-abs',
 }
 
 const cache = new Map<string, Record<ReadingSessionSourceBucket, string>>()
@@ -27,6 +28,7 @@ export function resolveSourceBucketColors(themeKey: string): Record<ReadingSessi
     android: toLegacyColor(readCssColor(SOURCE_BUCKET_COLOR_TOKENS.android)),
     koreader: toLegacyColor(readCssColor(SOURCE_BUCKET_COLOR_TOKENS.koreader)),
     kobo: toLegacyColor(readCssColor(SOURCE_BUCKET_COLOR_TOKENS.kobo)),
+    audiobookshelf: toLegacyColor(readCssColor(SOURCE_BUCKET_COLOR_TOKENS.audiobookshelf)),
   }
   cache.set(themeKey, colors)
   return colors

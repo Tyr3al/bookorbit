@@ -26,6 +26,9 @@ export const AUDIOBOOKSHELF_MAX_IN_PROGRESS_LIMIT = 100;
 export const AUDIOBOOKSHELF_DEFAULT_SESSIONS_PAGE_SIZE = 10;
 export const AUDIOBOOKSHELF_MAX_SESSIONS_PAGE_SIZE = 100;
 export const AUDIOBOOKSHELF_RECENT_SESSIONS_LIMIT = 10;
+/** A device that has not reported listening for this long has finished its sitting; its next
+ * report starts a new reading session instead of growing the previous one. */
+export const AUDIOBOOKSHELF_LIVE_SESSION_GAP_MS = 10 * 60 * 1000;
 
 // Matches the default library setting markAsFinishedPercentComplete = 98.
 export const AUDIOBOOKSHELF_FINISHED_PROGRESS = 0.98;

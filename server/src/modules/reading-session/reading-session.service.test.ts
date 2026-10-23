@@ -585,3 +585,92 @@ describe('ReadingSessionService - read status activity', () => {
     expect(bookService.autoUpdateReadStatusForProgress.mock.calls[0]?.[3]?.timeZone).toBe('UTC');
   });
 });
+
+describe('ReadingSessionService.recordListeningSession', () => {
+  const startedAt = new Date('2026-03-01T10:00:00Z');
+  const endedAt = new Date('2026-03-01T10:05:00Z');
+  const params = {
+    userId: 7,
+    bookFileId: 42,
+    sessionId: 'abs-live:1',
+    startedAt,
+    endedAt,
+    durationSeconds: 200,
+    progressDelta: 2,
+    endProgress: 12,
+    source: 'abs' as const,
+    sourceDeviceKey: 'abs:phone',
+    timeZone: 'UTC',
+  };
+
+  function makeListeningService() {
+    const emit = vi.fn();
+    const service = new ReadingSessionService(
+      mockRepo as unknown as ReadingSessionRepository,
+      mockBookService as unknown as BookService,
+      { emit } as never,
+      mockUserStatistics as never,
+    );
+    return { service, emit };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('stores a listen session for the sync source without re-checking access', async () => {
+    mockRepo.saveSession.mockResolvedValue({ kind: 'saved' });
+    const { service, emit } = makeListeningService();
+
+    await service.recordListeningSession(params);
+
+    expect(mockBookService.verifyFileAccess).not.toHaveBeenCalled();
+    expect(mockRepo.saveSession).toHaveBeenCalledWith(
+      7,
+      42,
+      'abs-live:1',
+      startedAt,
+      endedAt,
+      200,
+      2,
+      12,
+      'abs',
+      'UTC',
+      { sourceDeviceKey: 'abs:phone' },
+      'listen',
+    );
+    expect(mockUserStatistics.invalidateUser).toHaveBeenCalledWith(7);
+    expect(emit).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ userId: 7, bookFileId: 42, durationSeconds: 200, source: 'abs' }),
+    );
+  });
+
+  it('caps the reported listening at the wall-clock span', async () => {
+    mockRepo.saveSession.mockResolvedValue({ kind: 'saved' });
+    const { service } = makeListeningService();
+
+    await service.recordListeningSession({ ...params, durationSeconds: 10_000 });
+
+    expect(mockRepo.saveSession.mock.calls[0]?.[5]).toBe(300);
+  });
+
+  it('invalidates statistics but emits no new-session event when an existing session grows', async () => {
+    mockRepo.saveSession.mockResolvedValue({ kind: 'superseded', addedSeconds: 15 });
+    const { service, emit } = makeListeningService();
+
+    await service.recordListeningSession(params);
+
+    expect(mockUserStatistics.invalidateUser).toHaveBeenCalledWith(7);
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('does nothing further when the write was skipped', async () => {
+    mockRepo.saveSession.mockResolvedValue({ kind: 'skipped', reason: 'duration_below_minimum' });
+    const { service, emit } = makeListeningService();
+
+    await expect(service.recordListeningSession(params)).resolves.toEqual({ kind: 'skipped', reason: 'duration_below_minimum' });
+    expect(mockUserStatistics.invalidateUser).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalled();
+  });
+});

@@ -22,13 +22,22 @@ describe('source-bucket-colors', () => {
       android: '--pill-android',
       koreader: '--pill-koreader',
       kobo: '--pill-kobo',
+      audiobookshelf: '--pill-abs',
     })
   })
 
   it('reads each pill token and converts it to a zrender-parseable colour', () => {
     const colors = resolveSourceBucketColors('dark:violet')
 
-    expect(colors).toEqual({ bookorbit: '#abcdef', ios: '#abcdef', watchos: '#abcdef', android: '#abcdef', koreader: '#abcdef', kobo: '#abcdef' })
+    expect(colors).toEqual({
+      bookorbit: '#abcdef',
+      ios: '#abcdef',
+      watchos: '#abcdef',
+      android: '#abcdef',
+      koreader: '#abcdef',
+      kobo: '#abcdef',
+      audiobookshelf: '#abcdef',
+    })
     for (const token of Object.values(SOURCE_BUCKET_COLOR_TOKENS)) {
       expect(mocks.readCssColor).toHaveBeenCalledWith(token)
       expect(mocks.toLegacyColor).toHaveBeenCalledWith(`oklch(${token})`)
@@ -39,6 +48,6 @@ describe('source-bucket-colors', () => {
     const first = resolveSourceBucketColors('light:violet')
     const second = resolveSourceBucketColors('light:violet')
     expect(first).toBe(second)
-    expect(mocks.readCssColor).toHaveBeenCalledTimes(6)
+    expect(mocks.readCssColor).toHaveBeenCalledTimes(7)
   })
 })
