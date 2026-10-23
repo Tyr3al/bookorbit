@@ -137,6 +137,10 @@ describe('community rating labels', () => {
   it('exposes a Community Rating field label', () => {
     expect(fieldLabel('communityRating')).toBe('Community Rating')
   })
+
+  it('exposes a Community Review Count field label', () => {
+    expect(fieldLabel('communityRatingCount')).toBe('Community Review Count')
+  })
 })
 
 describe('ruleToParts', () => {
@@ -158,6 +162,11 @@ describe('ruleToParts', () => {
   it('renders withinLast rules with a days suffix', () => {
     const rule: Rule = { type: 'rule', field: 'addedAt', operator: 'withinLast', value: 7 }
     expect(ruleToParts(rule)).toEqual({ field: 'Added Date', operator: 'within last', value: '7 days' })
+  })
+
+  it('renders moreThanAgo rules as a day age', () => {
+    const rule: Rule = { type: 'rule', field: 'finishedAt', operator: 'moreThanAgo', value: 30 }
+    expect(ruleToParts(rule)).toEqual({ field: 'Date Finished', operator: 'more than', value: '30 days ago' })
   })
 
   it('joins array values with commas', () => {
@@ -188,5 +197,10 @@ describe('ruleToParts', () => {
   it('renders any-provider context for community rating rules', () => {
     const rule: Rule = { type: 'rule', field: 'communityRating', provider: 'any', operator: 'gte', value: 4.5 }
     expect(ruleToParts(rule)).toEqual({ field: 'Community Rating (Any provider)', operator: 'at least', value: '4.5' })
+  })
+
+  it('renders provider context for community review count rules', () => {
+    const rule: Rule = { type: 'rule', field: 'communityRatingCount', provider: 'hardcover', operator: 'gte', value: 1000 }
+    expect(ruleToParts(rule)).toEqual({ field: 'Community Review Count (Hardcover)', operator: 'at least', value: '1000' })
   })
 })

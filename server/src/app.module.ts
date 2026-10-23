@@ -5,16 +5,27 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
 
-import { appConfig, authConfig, dbConfig, emailConfig, fileWriteConfig, migrationConfig, oidcRuntimeConfig, storageConfig } from './config/config';
+import {
+  appConfig,
+  audiolessEpubConfig,
+  authConfig,
+  bookRequestConfig,
+  coverSlotsConfig,
+  dbConfig,
+  djvuConfig,
+  emailConfig,
+  fileWriteConfig,
+  migrationConfig,
+  oidcRuntimeConfig,
+  podcastConfig,
+  storageConfig,
+} from './config/config';
 import { validateEnv } from './config/env.validation';
 import { loggerConfig } from './common/logger.config';
 import { CommonModule } from './common/common.module';
 import { SeriesIdentityModule } from './common/series-identity.module';
 import { AuditInterceptor } from './common/interceptors/audit.interceptor';
-import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
-import { LibraryAccessGuard } from './common/guards/library-access.guard';
-import { PermissionGuard } from './common/guards/permission.guard';
-import { SensitiveEndpointThrottlerGuard } from './common/guards/sensitive-endpoint-throttler.guard';
+import { GLOBAL_GUARDS } from './common/guards/global-guards';
 import { DbModule } from './db/db.module';
 import { AnnotationModule } from './modules/annotation/annotation.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
@@ -23,7 +34,10 @@ import { AppSettingsModule } from './modules/app-settings/app-settings.module';
 import { CollectionModule } from './modules/collection/collection.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { CbzModule } from './modules/reader/cbz/cbz.module';
+import { DjvuModule } from './modules/reader/djvu/djvu.module';
 import { BookmarkModule } from './modules/bookmark/bookmark.module';
+import { BookJournalModule } from './modules/book-journal/book-journal.module';
+import { NotebookModule } from './modules/notebook/notebook.module';
 import { BookModule } from './modules/book/book.module';
 import { CatalogModule } from './modules/catalog/catalog.module';
 import { CoverModule } from './modules/cover/cover.module';
@@ -44,6 +58,7 @@ import { SeedModule } from './modules/seed/seed.module';
 import { EmailModule } from './modules/email/email.module';
 import { EpubModule } from './modules/reader/epub/epub.module';
 import { BookDockModule } from './modules/book-dock/book-dock.module';
+import { BookRequestModule } from './modules/book-request/book-request.module';
 import { BrowseCountsModule } from './modules/browse-counts/browse-counts.module';
 import { UploadModule } from './modules/upload/upload.module';
 import { UserModule } from './modules/user/user.module';
@@ -77,6 +92,11 @@ import { BookDuplicatesModule } from './modules/book-duplicates/book-duplicates.
 import { MaintenanceModule } from './modules/maintenance/maintenance.module';
 import { BookMoveModule } from './modules/book-move/book-move.module';
 import { AudiobookshelfModule } from './modules/audiobookshelf/audiobookshelf.module';
+import { AudiobookModule } from './modules/audiobook/audiobook.module';
+import { TtsModule } from './modules/tts/tts.module';
+import { SearchModule } from './modules/search/search.module';
+import { WatchDownloadModule } from './modules/watch-download/watch-download.module';
+import { PodcastModule } from './modules/podcast/podcast.module';
 
 @Module({
   imports: [
@@ -84,7 +104,21 @@ import { AudiobookshelfModule } from './modules/audiobookshelf/audiobookshelf.mo
     ConfigModule.forRoot({
       isGlobal: true,
       validate: validateEnv,
-      load: [appConfig, dbConfig, authConfig, storageConfig, fileWriteConfig, emailConfig, migrationConfig, oidcRuntimeConfig],
+      load: [
+        appConfig,
+        dbConfig,
+        authConfig,
+        storageConfig,
+        coverSlotsConfig,
+        fileWriteConfig,
+        emailConfig,
+        migrationConfig,
+        bookRequestConfig,
+        oidcRuntimeConfig,
+        podcastConfig,
+        audiolessEpubConfig,
+        djvuConfig,
+      ],
     }),
     ScheduleModule.forRoot(),
     ThrottlerModule.forRoot({
@@ -109,6 +143,7 @@ import { AudiobookshelfModule } from './modules/audiobookshelf/audiobookshelf.mo
     LibraryModule,
     PathModule,
     BookModule,
+    AudiobookModule,
     CatalogModule,
     CoverModule,
     CollectionModule,
@@ -125,14 +160,18 @@ import { AudiobookshelfModule } from './modules/audiobookshelf/audiobookshelf.mo
     KoboModule,
     OpdsModule,
     BookmarkModule,
+    BookJournalModule,
     AnnotationModule,
+    NotebookModule,
     DashboardModule,
     HealthModule,
     CbzModule,
+    DjvuModule,
     ReaderPreferencesModule,
     UserPreferencesModule,
     EpubModule,
     BookDockModule,
+    BookRequestModule,
     EmailModule,
     MetadataScoreModule,
     StatisticsModule,
@@ -160,17 +199,15 @@ import { AudiobookshelfModule } from './modules/audiobookshelf/audiobookshelf.mo
     MaintenanceModule,
     BookMoveModule,
     BrowseCountsModule,
+    TtsModule,
+    SearchModule,
+    WatchDownloadModule,
+    PodcastModule,
     AudiobookshelfModule,
     // Mounts every AudiobookshelfModule route under /abs, the same way an OPDS feed lives at its
     // own subpath - see AUDIOBOOKSHELF_BASE_PATH.
     RouterModule.register([{ path: 'abs', module: AudiobookshelfModule }]),
   ],
-  providers: [
-    { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },
-    { provide: APP_GUARD, useClass: SensitiveEndpointThrottlerGuard },
-    { provide: APP_GUARD, useClass: JwtAuthGuard },
-    { provide: APP_GUARD, useClass: PermissionGuard },
-    { provide: APP_GUARD, useClass: LibraryAccessGuard },
-  ],
+  providers: [{ provide: APP_INTERCEPTOR, useClass: AuditInterceptor }, ...GLOBAL_GUARDS.map((useClass) => ({ provide: APP_GUARD, useClass }))],
 })
 export class AppModule {}

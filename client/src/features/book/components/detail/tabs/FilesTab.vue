@@ -10,7 +10,9 @@ import { api } from '@/lib/api'
 import { copyToClipboard } from '@/lib/clipboard'
 import { useBookDownload } from '@/features/book/composables/useBookDownload'
 import { usePermissions } from '@/features/auth/composables/usePermissions'
+import { useLibraryPermissions } from '@/features/library/composables/useLibraryPermissions'
 import { useBookFileTree, type SortKey, type TreeFile } from '@/features/book/composables/useBookFileTree'
+import { findFileWriteTarget } from '@/features/book/lib/file-write-targets'
 import FilesHeroBar from '../files/FilesHeroBar.vue'
 import FileListCard from '../files/FileListCard.vue'
 import FileDetailCard from '../files/FileDetailCard.vue'
@@ -24,6 +26,8 @@ const { t } = useI18n()
 const router = useRouter()
 const { downloadFile: downloadBookFile } = useBookDownload()
 const { hasPermission } = usePermissions()
+const { hasLibraryPermission } = useLibraryPermissions()
+const canEditMetadata = computed(() => hasLibraryPermission('library_edit_metadata', props.book?.libraryId, 'editor'))
 
 const book = toRef(props, 'book')
 const {
@@ -44,7 +48,7 @@ const {
 
 const canUpload = computed(() => hasPermission(Permission.LibraryUpload))
 const canDownload = computed(() => hasPermission('library_download'))
-const canEdit = computed(() => hasPermission('library_edit_metadata'))
+const canEdit = canEditMetadata
 const canDelete = computed(() => hasPermission('library_delete_books'))
 
 /**
@@ -95,11 +99,9 @@ const runtimeLabel = computed(() => {
   return t('book.detail.files.duration.minutes', { minutes: Math.max(minutes, 1) })
 })
 
-const isWriteTarget = computed(() => {
-  const format = selectedFile.value?.formatKey
-  if (!format) return false
-  return (props.book.fileWriteStatus?.writableFormats ?? []).includes(format as never)
-})
+const selectedWriteTarget = computed(() => (selectedFile.value ? findFileWriteTarget(props.book.fileWriteStatus, selectedFile.value.id) : null))
+const isWriteTarget = computed(() => selectedWriteTarget.value?.writable === true)
+const writeSkipReason = computed(() => (selectedWriteTarget.value?.writable === false ? selectedWriteTarget.value.reason : null))
 
 function handleSort(key: SortKey) {
   toggleSort(key)
@@ -306,6 +308,7 @@ async function confirmDelete() {
             :is-multi-track-audio="isMultiTrackAudio"
             :runtime-seconds="runtimeSeconds"
             :is-write-target="isWriteTarget"
+            :write-skip-reason="writeSkipReason"
             :can-download="canDownload"
             :can-edit="canEdit"
             :can-delete="canDelete"
@@ -325,7 +328,7 @@ async function confirmDelete() {
 
     <!-- Rename -->
     <div v-if="renameTarget" class="fixed inset-0 z-[70] flex items-end justify-center md:items-center md:px-4" @click.self="closeRenameModal">
-      <button class="absolute inset-0 bg-black/45" :aria-label="t('common.cancel')" @click="closeRenameModal" />
+      <button class="absolute inset-0 bg-scrim" :aria-label="t('common.cancel')" @click="closeRenameModal" />
       <div
         class="relative w-full rounded-t-lg border border-border bg-card p-4 shadow-xl md:max-w-md md:rounded-lg md:p-5"
         role="dialog"
@@ -361,7 +364,7 @@ async function confirmDelete() {
 
     <!-- Delete -->
     <div v-if="deleteTarget" class="fixed inset-0 z-[70] flex items-end justify-center md:items-center md:px-4" @click.self="closeDeleteModal">
-      <button class="absolute inset-0 bg-black/45" :aria-label="t('common.cancel')" @click="closeDeleteModal" />
+      <button class="absolute inset-0 bg-scrim" :aria-label="t('common.cancel')" @click="closeDeleteModal" />
       <div
         class="relative w-full rounded-t-lg border border-border bg-card p-4 shadow-xl md:max-w-md md:rounded-lg md:p-5"
         role="dialog"
@@ -388,7 +391,13 @@ async function confirmDelete() {
     </div>
   </div>
 
-  <AddBookFileModal v-if="addFileModalOpen" :book-id="book.id" @close="closeAddFileModal" @uploaded="onFilesAdded" />
+  <AddBookFileModal
+    v-if="addFileModalOpen"
+    :book-id="book.id"
+    :can-rename-files="canEditMetadata"
+    @close="closeAddFileModal"
+    @uploaded="onFilesAdded"
+  />
 </template>
 
 <style scoped>

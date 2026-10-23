@@ -19,6 +19,7 @@ export const EXAMPLE_PATTERN_METADATA: Record<string, string> = {
   library: "Books",
   originalFilename: "neuromancer",
   extension: "epub",
+  readaloud: "readaloud",
 };
 
 export const PATTERN_TOKENS = [
@@ -35,6 +36,7 @@ export const PATTERN_TOKENS = [
   { token: "library", description: "Library name" },
   { token: "originalFilename", description: "Original filename (without extension)" },
   { token: "extension", description: "File extension (without dot)" },
+  { token: "readaloud", description: "The word readaloud for an EPUB with media overlays" },
 ] as const;
 
 export type PatternToken = (typeof PATTERN_TOKENS)[number]["token"];
@@ -129,9 +131,20 @@ function checkAllPlaceholdersPresent(block: string, values: Record<string, strin
   });
 }
 
-export function replacePlaceholders(pattern: string, values: Record<string, string>): string {
+export interface PlaceholderResolution {
+  text: string;
+  /** An optional group could not fill its primary side and used its `|fallback`. */
+  usedFallback: boolean;
+  /** An optional group with no fallback could not be filled and resolved to nothing. */
+  droppedOptional: boolean;
+}
+
+/** replacePlaceholders, also reporting which optional-group branch each group took. */
+export function resolvePlaceholders(pattern: string, values: Record<string, string>): PlaceholderResolution {
+  let usedFallback = false;
+  let droppedOptional = false;
   // Handle optional blocks with else clause: <primary|fallback>
-  pattern = pattern.replace(/<([^<>]+)>/g, (_, blockContent: string) => {
+  const resolved = pattern.replace(/<([^<>]+)>/g, (_, blockContent: string) => {
     const pipeIndex = blockContent.indexOf("|");
     const primary = pipeIndex >= 0 ? blockContent.substring(0, pipeIndex) : blockContent;
     const fallback = pipeIndex >= 0 ? blockContent.substring(pipeIndex + 1) : null;
@@ -139,10 +152,19 @@ export function replacePlaceholders(pattern: string, values: Record<string, stri
     if (checkAllPlaceholdersPresent(primary, values)) {
       return resolveModifierPlaceholders(primary, values);
     }
-    return fallback != null ? resolveModifierPlaceholders(fallback, values) : "";
+    if (fallback != null) {
+      usedFallback = true;
+      return resolveModifierPlaceholders(fallback, values);
+    }
+    droppedOptional = true;
+    return "";
   });
 
-  return resolveModifierPlaceholders(pattern, values).trim();
+  return { text: resolveModifierPlaceholders(resolved, values).trim(), usedFallback, droppedOptional };
+}
+
+export function replacePlaceholders(pattern: string, values: Record<string, string>): string {
+  return resolvePlaceholders(pattern, values).text;
 }
 
 export function validatePattern(pattern: string): boolean {

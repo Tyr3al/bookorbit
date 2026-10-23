@@ -31,6 +31,7 @@ function makeAnnotation(overrides: Partial<AnnotationItem> = {}): AnnotationItem
     origin: 'web',
     positionStatus: 'exact',
     chapterIndex: 0,
+    highlightedAt: '2026-01-01T00:00:00.000Z',
     createdAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
   }
@@ -60,7 +61,7 @@ describe('AnnotationListItem', () => {
     const wrapper = mountItem({ annotation: makeHubAnnotation(), mode: 'hub' })
     const pill = wrapper.findAll('span').find((span) => span.text() === 'MOBI')
 
-    expect(pill?.attributes('style')).toContain('color: rgb(99, 102, 241)')
+    expect(pill?.attributes('style')).toContain('color: var(--format-chip-ink, var(--pill-format-mobi))')
   })
 
   it('renders the quote and the note', () => {

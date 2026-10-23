@@ -64,6 +64,24 @@ export const KOREADER_EXACT_HIGHLIGHT_COLORS = [
 
 export const ANNOTATION_COLOR_FILTER_OPTIONS = [...ANNOTATION_HIGHLIGHT_COLORS, ...KOREADER_EXACT_HIGHLIGHT_COLORS] as const;
 
+export interface AnnotationRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * A PDF highlight's geometry, in unscaled PDF page coordinate space (points,
+ * top-left origin). `page` is the zero-based page index. `rect` is the bounding
+ * box and `rects` are the per-line segment quads used to render the markup.
+ */
+export interface AnnotationPdfPosition {
+  page: number;
+  rect: AnnotationRect;
+  rects: AnnotationRect[];
+}
+
 export interface AnnotationItem {
   id: number;
   bookId: number;
@@ -78,7 +96,13 @@ export interface AnnotationItem {
   origin: "web" | "koreader" | "kobo";
   positionStatus: AnnotationPositionStatus | null;
   chapterIndex: number | null;
+  highlightedAt: string;
   createdAt: string;
+  updatedAt?: string | null;
+  /** Present for PDF highlights; null/absent for EPUB and device-synced formats. */
+  pdf?: AnnotationPdfPosition | null;
+  /** When the reader starred it; null when not starred. Absent from servers older than stars. */
+  starredAt?: string | null;
 }
 
 /**
@@ -209,6 +233,26 @@ export interface AnnotationHubBookFacet {
   author: string | null;
   count: number;
 }
+
+/** Bulk actions on `POST /annotations/bulk`. `star` and `unstar` touch only active rows. */
+export const ANNOTATION_BULK_ACTIONS = ["trash", "restore", "restyle", "star", "unstar"] as const;
+export type AnnotationBulkAction = (typeof ANNOTATION_BULK_ACTIONS)[number];
+
+/** `errorCode` on the 409 from `DELETE /annotations/:id` while a synced device has not acknowledged the deletion. */
+export const ANNOTATION_PURGE_PENDING_DEVICE_SYNC = "ANNOTATION_PURGE_PENDING_DEVICE_SYNC";
+
+export const ANNOTATION_COLOR_NAME_MAX_ENTRIES = 32;
+export const ANNOTATION_COLOR_NAME_MAX_LENGTH = 40;
+
+/**
+ * A reader's own labels for highlight colours, keyed by uppercase `#RRGGBB`. Stored per user
+ * under the `annotation-colors` preference category.
+ */
+export interface AnnotationColorNamePreferences {
+  names: Record<string, string>;
+}
+
+export const ANNOTATION_COLOR_NAME_PREFERENCES_DEFAULTS: AnnotationColorNamePreferences = { names: {} };
 
 export type AnnotationPositionFormat = "cfi" | "xpointer" | "pdf" | "kobo_span";
 

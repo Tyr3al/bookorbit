@@ -1,3 +1,6 @@
+import { AuthSessionRepository, type OidcSessionInput } from './auth-session.repository';
+import { AuthSessionService } from './auth-session.service';
+import { RefreshDto } from './dto/refresh.dto';
 import {
   BadRequestException,
   ConflictException,
@@ -11,16 +14,15 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { JwtService } from '@nestjs/jwt';
 import { compare, hash } from 'bcryptjs';
-import type { StringValue } from 'ms';
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'crypto';
+import { createHash, timingSafeEqual } from 'crypto';
 import '@fastify/cookie';
-import { and, count, eq, gt, isNull, sql } from 'drizzle-orm';
+import { and, count, eq, isNull, sql } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
-import { AuditAction, LoginErrorCode } from '@bookorbit/types';
+import { AuditAction, AuthenticationMethod, LoginErrorCode } from '@bookorbit/types';
+import type { AuthenticationMethod as AuthenticationMethodValue, AuthClientOptions, NativeCredentials, LoginOptionsResponse } from '@bookorbit/types';
 
 import { APP_SETTING_KEYS } from '../../common/constants/app-settings.constants';
 import { DB } from '../../db/db.module';
@@ -28,7 +30,6 @@ import * as schema from '../../db/schema';
 import { AUDIT_EVENT, AuditEventsService } from '../audit/audit-events.service';
 import type { RequestUser } from '../../common/types/request-user';
 import { sanitizeLogValue } from '../../common/utils/log-sanitize.utils';
-import { toAudiobookshelfUuid } from '../../common/utils/audiobookshelf-id.utils';
 import { resolveUserAvatarUrl } from '../../common/utils/user-avatar-url';
 import { SystemMailService } from '../email/system-mail.service';
 import { UserService } from '../user/user.service';
@@ -38,10 +39,10 @@ import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { SetupDto } from './dto/setup.dto';
-import { OidcDiscoveryService } from './oidc/oidc-discovery.service';
-import { OidcSessionRepository } from './oidc/oidc-session.repository';
 import { MagicLinkRepository } from './magic-link.repository';
 import { AppSettingsService } from '../app-settings/app-settings.service';
+import { OidcProviderService } from '../app-settings/oidc-provider.service';
+import { AuthenticationPolicyService } from '../../common/services/authentication-policy.service';
 
 function parseDurationMs(duration: string): number {
   const match = duration.match(/^(\d+)([smhd])$/);
@@ -59,10 +60,7 @@ function sha256(value: string): string {
 
 const LOGIN_LOCKOUT_THRESHOLD = 5;
 const LOGIN_LOCKOUT_DURATION_MS = 15 * 60_000;
-const ROTATION_CHAIN_MAX_HOPS = 5;
 const DUMMY_HASH = '$2a$12$LJ3m4ys3Lk0TSwHBbqP8b.3bFfR1oVDMhPzX8KPrPeuMEJBJJPa.G';
-
-class ConcurrentRotationError extends Error {}
 
 function maskEmail(email: string): string {
   const at = email.indexOf('@');
@@ -86,14 +84,15 @@ export class AuthService {
 
   constructor(
     private readonly userService: UserService,
-    private readonly jwtService: JwtService,
     private readonly config: ConfigService,
     private readonly systemMailService: SystemMailService,
-    private readonly oidcSessionRepo: OidcSessionRepository,
-    private readonly oidcDiscovery: OidcDiscoveryService,
     private readonly auditEvents: AuditEventsService,
     private readonly magicLinkRepo: MagicLinkRepository,
     private readonly appSettings: AppSettingsService,
+    private readonly oidcProviderService: OidcProviderService,
+    private readonly authenticationPolicy: AuthenticationPolicyService,
+    private readonly sessions: AuthSessionService,
+    private readonly sessionRepo: AuthSessionRepository,
     @Inject(DB) private readonly db: NodePgDatabase<typeof schema>,
   ) {}
 
@@ -102,6 +101,7 @@ export class AuthService {
   }
 
   async register(dto: RegisterDto) {
+    this.authenticationPolicy.assertPasswordLoginEnabled();
     if (!(await this.isRegistrationOpen())) {
       throw new ForbiddenException('Registration is not open');
     }
@@ -165,10 +165,28 @@ export class AuthService {
 
   async setupStatus(): Promise<{ needsSetup: boolean; allowRegistration: boolean }> {
     const [count, allowRegistration] = await Promise.all([this.db.$count(schema.users), this.isRegistrationOpen()]);
-    return { needsSetup: count === 0, allowRegistration };
+    return { needsSetup: count === 0, allowRegistration: this.authenticationPolicy.isPasswordLoginEnabled() && allowRegistration };
+  }
+
+  async loginOptions(): Promise<LoginOptionsResponse> {
+    const [allowRegistration, providers] = await Promise.all([this.isRegistrationOpen(), this.oidcProviderService.findEnabled()]);
+    const passwordLoginEnabled = this.authenticationPolicy.isPasswordLoginEnabled();
+    return {
+      passwordLoginEnabled,
+      allowRegistration: passwordLoginEnabled && allowRegistration,
+      oidcProviders: providers.map((provider) => ({
+        slug: provider.slug,
+        displayName: provider.displayName,
+        enabled: provider.enabled,
+        iconUrl: provider.iconUrl,
+        clientId: provider.clientId,
+        scopes: provider.scopes,
+      })),
+    };
   }
 
   async setup(dto: SetupDto, setupToken: string | undefined, reply: FastifyReply) {
+    this.authenticationPolicy.assertPasswordLoginEnabled();
     this.assertSetupToken(setupToken);
     const passwordHash = await hash(dto.password, 12);
 
@@ -221,74 +239,11 @@ export class AuthService {
       return user;
     });
 
-    return this.issueTokensForUser(created.id, reply);
+    return this.issueTokensForUser(created.id, reply, AuthenticationMethod.Setup);
   }
 
   async login(dto: LoginDto, reply: FastifyReply, ip?: string) {
-    const fullUser = await this.authenticateCredentials(dto, ip);
-    const { accessToken, rawRefreshToken } = await this.issueTokenPair(fullUser.id, fullUser.tokenVersion);
-    this.setRefreshCookie(reply, rawRefreshToken);
-    this.setAccessCookie(reply, accessToken);
-
-    this.logger.log(`[auth.login] [end] userId=${fullUser.id} username=${fullUser.username} ip=${ip ?? 'unknown'} - login completed`);
-
-    this.auditEvents.emit(AUDIT_EVENT, {
-      userId: fullUser.id,
-      actorUsername: fullUser.username,
-      action: AuditAction.AuthLogin,
-      description: `User '${fullUser.username}' logged in`,
-      ip,
-    });
-
-    return { accessToken, user: this.buildUserResponse(fullUser) };
-  }
-
-  /**
-   * Login for the Audiobookshelf-compatible API. Same credential validation, lockout, and audit
-   * behavior as `login()`, but the token returned in the body is signed with the longer ABS expiry
-   * (`auth.jwtAbsExpiresIn`) because ABS clients keep the token and only re-authenticate on 401.
-   * Claims stay identical to the web token (`{ sub, ver }`), so the same JWT strategy, guards, and
-   * tokenVersion revocation apply to both.
-   */
-  async loginForAudiobookshelf(dto: LoginDto, reply: FastifyReply, ip?: string, returnTokens?: boolean) {
-    const fullUser = await this.authenticateCredentials(dto, ip);
-    const pair = this.createAudiobookshelfTokenPair(fullUser.id, fullUser.tokenVersion, fullUser.username);
-    const authenticatedAt = new Date();
-    await this.db.transaction(async (tx) => {
-      await tx.insert(schema.refreshTokens).values({ userId: fullUser.id, tokenHash: pair.refreshTokenHash, expiresAt: pair.refreshExpiresAt });
-      await tx
-        .update(schema.users)
-        .set({ lastLoginAt: authenticatedAt, lastAuthenticatedAt: authenticatedAt, updatedAt: sql`${schema.users.updatedAt}` })
-        .where(eq(schema.users.id, fullUser.id));
-    });
-    // Real Audiobookshelf never sets cookies when the client sends x-return-tokens: true (it
-    // relies on the token pair in the body instead) - match that for ABS clients like Prologue.
-    if (!returnTokens) {
-      this.setRefreshCookie(reply, pair.rawRefreshToken);
-      this.setAccessCookie(reply, pair.accessToken);
-    }
-
-    this.logger.log(
-      `[auth.login] [end] userId=${fullUser.id} username=${fullUser.username} ip=${ip ?? 'unknown'} via=audiobookshelf - login completed`,
-    );
-
-    this.auditEvents.emit(AUDIT_EVENT, {
-      userId: fullUser.id,
-      actorUsername: fullUser.username,
-      action: AuditAction.AuthLogin,
-      description: `User '${fullUser.username}' logged in via Audiobookshelf API`,
-      ip,
-    });
-
-    return {
-      accessToken: pair.accessToken,
-      rawRefreshToken: pair.rawRefreshToken,
-      legacyToken: pair.legacyToken,
-      user: this.buildUserResponse(fullUser),
-    };
-  }
-
-  private async authenticateCredentials(dto: LoginDto, ip?: string) {
+    this.authenticationPolicy.assertPasswordLoginEnabled();
     const user = await this.userService.findByUsername(dto.username);
     const now = new Date();
 
@@ -343,10 +298,25 @@ export class AuthService {
     }
 
     const fullUser = await this.userService.findByIdWithPermissions(user.id);
-    return fullUser!;
+    const credentials = await this.sessions.issue(user.id, user.tokenVersion, AuthenticationMethod.Password, dto);
+
+    this.logger.log(`[auth.login] [end] userId=${user.id} username=${user.username} ip=${ip ?? 'unknown'} - login completed`);
+
+    this.auditEvents.emit(AUDIT_EVENT, {
+      userId: user.id,
+      actorUsername: user.username,
+      action: AuditAction.AuthLogin,
+      description: `User '${user.username}' logged in`,
+      ip,
+    });
+
+    return {
+      ...this.deliverCredentials(credentials, reply, dto.clientKind === 'native'),
+      user: this.buildUserResponse(fullUser!, AuthenticationMethod.Password),
+    };
   }
 
-  buildUserResponse(user: RequestUser) {
+  buildUserResponse(user: RequestUser, authenticationMethod: AuthenticationMethodValue = user.authenticationMethod ?? AuthenticationMethod.Legacy) {
     return {
       id: user.id,
       username: user.username,
@@ -358,237 +328,134 @@ export class AuthService {
       settings: user.settings,
       avatarUrl: resolveUserAvatarUrl(user),
       provisioningMethod: user.provisioningMethod,
+      authenticationMethod,
       permissions: user.isSuperuser ? ['*'] : user.permissions,
     };
   }
 
-  async issueTokensForUser(userId: number, reply: FastifyReply) {
+  async issueTokensForUser(
+    userId: number,
+    reply: FastifyReply,
+    authenticationMethod: AuthenticationMethodValue,
+    options: AuthClientOptions = {},
+    oidc?: OidcSessionInput,
+  ) {
     const user = await this.userService.findByIdWithPermissions(userId);
     if (!user || !user.active) throw new UnauthorizedException();
-    const { accessToken, rawRefreshToken, refreshExpiresAt } = await this.issueTokenPair(userId, user.tokenVersion);
-    await this.oidcSessionRepo.touchActiveByUserId(userId, refreshExpiresAt);
-    this.setRefreshCookie(reply, rawRefreshToken);
-    this.setAccessCookie(reply, accessToken);
-    return { accessToken, user: this.buildUserResponse(user) };
+    const credentials = await this.sessions.issue(userId, user.tokenVersion, authenticationMethod, options, oidc);
+    return {
+      ...this.deliverCredentials(credentials, reply, options.clientKind === 'native'),
+      user: this.buildUserResponse(user, authenticationMethod),
+    };
   }
 
-  async refresh(req: FastifyRequest, reply: FastifyReply) {
-    const rawToken = req.cookies?.refresh_token;
-    if (!rawToken) throw new UnauthorizedException();
+  private refreshCredential(req: FastifyRequest, dto: RefreshDto) {
+    const cookie = req.cookies?.refresh_token;
+    if (dto.refreshToken && cookie && dto.refreshToken !== cookie) throw new BadRequestException('Conflicting refresh credentials');
+    return { rawToken: dto.refreshToken ?? cookie, native: !!dto.refreshToken };
+  }
 
-    const { accessToken } = await this.rotateRefreshSession(rawToken, reply);
-    return { accessToken };
+  async refresh(req: FastifyRequest, reply: FastifyReply, dto: RefreshDto = {}) {
+    const { rawToken, native } = this.refreshCredential(req, dto);
+    try {
+      if (!rawToken) throw new UnauthorizedException();
+      const row = await this.sessionRepo.findRefresh(sha256(rawToken));
+      if (!row?.sessionId) throw new UnauthorizedException();
+      const session = await this.sessionRepo.findSession(row.sessionId);
+      if (!session || (session.clientKind === 'native') !== native) throw new UnauthorizedException();
+      const method = this.normalizeAuthenticationMethod(row.authenticationMethod);
+      if (!this.isAuthenticationMethodAllowed(method)) {
+        await this.sessionRepo.revoke(row.sessionId, row.userId);
+        throw new UnauthorizedException();
+      }
+      const user = await this.userService.findByIdWithPermissions(row.userId);
+      if (!user?.active || !(await this.canActNow(user))) throw new UnauthorizedException();
+      const credentials = await this.sessions.refresh(rawToken, row.userId, user.tokenVersion, row.sessionId);
+      return this.deliverCredentials(credentials, reply, native);
+    } catch (error) {
+      if (!native && error instanceof UnauthorizedException) {
+        this.clearRefreshCookie(reply);
+        this.clearAccessCookie(reply);
+      }
+      throw error;
+    }
+  }
+
+  async logout(req: FastifyRequest, reply: FastifyReply, dto: RefreshDto = {}): Promise<Record<string, never>> {
+    const { rawToken, native } = this.refreshCredential(req, dto);
+    if (rawToken) {
+      const row = await this.sessionRepo.findRefresh(sha256(rawToken));
+      if (row?.sessionId) {
+        const session = await this.sessionRepo.findSession(row.sessionId);
+        if (session && (session.clientKind === 'native') === native) {
+          await this.sessionRepo.revoke(row.sessionId, row.userId);
+          const user = await this.userService.findByIdWithPermissions(row.userId);
+          if (user)
+            this.auditEvents.emit(AUDIT_EVENT, {
+              userId: row.userId,
+              actorUsername: user.username,
+              action: AuditAction.AuthLogout,
+              description: `User '${user.username}' logged out`,
+              ip: req.ip,
+            });
+        }
+      }
+    }
+    if (!native) {
+      this.clearRefreshCookie(reply);
+      this.clearAccessCookie(reply);
+    }
+    return {};
+  }
+
+  private deliverCredentials(credentials: NativeCredentials, reply: FastifyReply, native: boolean) {
+    reply.header('Cache-Control', 'no-store');
+    if (native) return credentials;
+    this.setRefreshCookie(reply, credentials.refreshToken, new Date(credentials.refreshTokenExpiresAt));
+    this.setAccessCookie(reply, credentials.accessToken);
+    const { accessToken, accessTokenExpiresAt, sessionId } = credentials;
+    return { accessToken, accessTokenExpiresAt, sessionId };
+  }
+
+  async validateSessionUser(userId: number, tokenVersion: number, authenticationMethod: AuthenticationMethodValue, sessionId?: number) {
+    if (!Number.isSafeInteger(sessionId) || !sessionId || sessionId < 1) throw new UnauthorizedException();
+    if (!(await this.sessionRepo.isActive(sessionId, userId, tokenVersion, authenticationMethod))) throw new UnauthorizedException();
+    const user = await this.validateUser(userId, tokenVersion, authenticationMethod);
+    return { ...user, sessionId };
+  }
+
+  async validateUser(userId: number, tokenVersion: number, authenticationMethod: AuthenticationMethodValue) {
+    if (!this.isAuthenticationMethodAllowed(authenticationMethod)) throw new UnauthorizedException();
+    const user = await this.userService.findByIdWithPermissions(userId);
+    if (!user || !user.active) throw new UnauthorizedException();
+    // Before the shared-link lookup, so a stale token is refused without a second query.
+    if (user.tokenVersion !== tokenVersion) throw new UnauthorizedException();
+    if (!(await this.canActNow(user))) throw new UnauthorizedException();
+
+    return { ...user, authenticationMethod };
   }
 
   /**
-   * Audiobookshelf-compatible refresh: validates and rotates the presented refresh token and
-   * returns a fresh ABS token pair, mirroring ABS `POST /auth/refresh` with the
-   * `x-refresh-token` header.
+   * The user as an authenticated request would have resolved them, for a caller acting on their
+   * behalf rather than as them.
+   *
+   * Everything `validateUser` checks except the token version, which belongs to a token this
+   * caller does not hold. Null rather than a throw, because the refusal a delegated call should
+   * give is not the one a bad token gives, and only the caller knows which it is making.
    */
-  async refreshForAudiobookshelf(rawToken: string, reply: FastifyReply) {
-    if (!rawToken) throw new UnauthorizedException();
-    return this.rotateRefreshSession(rawToken, reply, (userId, tokenVersion, username) =>
-      this.createAudiobookshelfTokenPair(userId, tokenVersion, username),
-    );
-  }
-
-  private async rotateRefreshSession(
-    rawToken: string,
-    reply: FastifyReply,
-    tokenFactory: (
-      userId: number,
-      tokenVersion: number,
-      username: string,
-    ) => { accessToken: string; rawRefreshToken: string; refreshExpiresAt: Date; refreshTokenHash: string } = (userId, tokenVersion) =>
-      this.createTokenPair(userId, tokenVersion),
-  ): Promise<{ accessToken: string; rawRefreshToken: string | null; userId: number; tokenVersion: number | null }> {
-    const tokenHash = sha256(rawToken);
-    const row = await this.db.query.refreshTokens.findFirst({
-      where: eq(schema.refreshTokens.tokenHash, tokenHash),
-    });
-
-    if (!row) {
-      this.logger.warn('[auth.refresh] [fail] errorClass=UnauthorizedException error="token not found" - refresh failed');
-      throw new UnauthorizedException();
-    }
-
-    if (row.revokedAt) {
-      if (await this.isRecentRefreshRotationReuse(row)) {
-        const accessOnly = await this.issueAccessOnlyForRefreshReuse(row.userId, reply);
-        return { accessToken: accessOnly.accessToken, rawRefreshToken: null, userId: row.userId, tokenVersion: null };
-      }
-
-      // Reuse of a revoked token outside a fresh rotation indicates possible theft.
-      // Revoke refresh sessions and bump tokenVersion to invalidate active access tokens.
-      this.logger.warn(
-        `[auth.refresh] [fail] userId=${row.userId} errorClass=UnauthorizedException error="token revoked - reuse attempt" - refresh failed`,
-      );
-      await this.db.transaction(async (tx) => {
-        await tx
-          .update(schema.users)
-          .set({ tokenVersion: sql`${schema.users.tokenVersion} + 1` })
-          .where(eq(schema.users.id, row.userId));
-        await tx.delete(schema.refreshTokens).where(eq(schema.refreshTokens.userId, row.userId));
-      });
-      this.clearRefreshCookie(reply);
-      this.clearAccessCookie(reply);
-      throw new UnauthorizedException();
-    }
-
-    if (row.expiresAt < new Date()) {
-      this.logger.warn(`[auth.refresh] [fail] userId=${row.userId} errorClass=UnauthorizedException error="token expired" - refresh failed`);
-      this.clearRefreshCookie(reply);
-      throw new UnauthorizedException();
-    }
-
-    const userForToken = await this.assertUserCanRefresh(row.userId, reply);
-
-    // Rotate: revoke old, issue new. Guard against the SPA race where two requests
-    // present the same (still-valid) refresh: the loser's UPDATE matches zero rows
-    // and we treat it as a benign reuse of an already-rotated token.
-    const { accessToken, rawRefreshToken, refreshExpiresAt, refreshTokenHash } = tokenFactory(
-      row.userId,
-      userForToken.tokenVersion,
-      userForToken.username,
-    );
-
-    const rotatedAt = new Date();
-    try {
-      await this.db.transaction(async (tx) => {
-        const updateResult = await tx
-          .update(schema.refreshTokens)
-          .set({ revokedAt: rotatedAt, rotatedAt, replacedByTokenHash: refreshTokenHash })
-          .where(and(eq(schema.refreshTokens.id, row.id), isNull(schema.refreshTokens.revokedAt)));
-        if ((updateResult.rowCount ?? 0) === 0) {
-          throw new ConcurrentRotationError();
-        }
-        await tx.insert(schema.refreshTokens).values({ userId: row.userId, tokenHash: refreshTokenHash, expiresAt: refreshExpiresAt });
-        await tx
-          .update(schema.users)
-          .set({ lastAuthenticatedAt: rotatedAt, updatedAt: sql`${schema.users.updatedAt}` })
-          .where(eq(schema.users.id, row.userId));
-      });
-    } catch (err) {
-      if (err instanceof ConcurrentRotationError) {
-        // rowCount=0 only proves "someone else changed this row first" - it could be a
-        // concurrent rotation OR a concurrent logout/security revoke. Re-fetch and only
-        // accept the race as benign if the revoke came from rotation. Otherwise the user
-        // (or admin) explicitly killed this session and we must NOT resurrect it.
-        const refreshedRow = await this.db.query.refreshTokens.findFirst({
-          where: eq(schema.refreshTokens.id, row.id),
-        });
-        if (refreshedRow && (await this.isRecentRefreshRotationReuse(refreshedRow))) {
-          this.logger.log(`[auth.refresh] [end] userId=${row.userId} reason="rotation-race-lost" - access-only refresh issued`);
-          const accessOnly = await this.issueAccessOnlyForRefreshReuse(row.userId, reply);
-          return { accessToken: accessOnly.accessToken, rawRefreshToken: null, userId: row.userId, tokenVersion: null };
-        }
-        // Concurrent non-rotation revoke = the user (logout) or an admin (disable/security)
-        // just killed this specific session. Honor that intent: fail this refresh and clear
-        // cookies, but do NOT touch other devices' sessions (logout deliberately only revoked
-        // this token; admin actions have their own scope).
-        this.logger.warn(
-          `[auth.refresh] [fail] userId=${row.userId} errorClass=UnauthorizedException error="concurrent non-rotation revoke" - refresh failed`,
-        );
-        this.clearRefreshCookie(reply);
-        this.clearAccessCookie(reply);
-        throw new UnauthorizedException();
-      }
-      throw err;
-    }
-    // touchActive must run outside the transaction (oidc sessions are best-effort sliding TTL).
-    await this.oidcSessionRepo.touchActiveByUserId(row.userId, refreshExpiresAt);
-    this.setRefreshCookie(reply, rawRefreshToken);
-    this.setAccessCookie(reply, accessToken);
-
-    return { accessToken, rawRefreshToken, userId: row.userId, tokenVersion: userForToken.tokenVersion };
-  }
-
-  async logout(req: FastifyRequest, reply: FastifyReply): Promise<{ logoutUrl?: string }> {
-    let userId: number | undefined;
-
-    const rawToken: string | undefined = req.cookies?.refresh_token;
-    if (rawToken) {
-      const tokenHash = sha256(rawToken);
-      const row = await this.db.query.refreshTokens.findFirst({ where: eq(schema.refreshTokens.tokenHash, tokenHash) });
-      if (row) {
-        userId = row.userId;
-        this.logger.log(`[auth.logout] [end] userId=${row.userId} source=refresh_token - logout completed`);
-        await Promise.all([
-          this.userService.incrementTokenVersion(row.userId),
-          this.db.update(schema.refreshTokens).set({ revokedAt: new Date() }).where(eq(schema.refreshTokens.id, row.id)),
-        ]);
-      }
-    }
-
-    this.clearRefreshCookie(reply);
-    this.clearAccessCookie(reply);
-
-    if (userId) {
-      const loggedOutUser = await this.db.query.users.findFirst({ where: eq(schema.users.id, userId) });
-      if (loggedOutUser) {
-        this.auditEvents.emit(AUDIT_EVENT, {
-          userId,
-          actorUsername: loggedOutUser.username,
-          action: AuditAction.AuthLogout,
-          description: `User '${loggedOutUser.username}' logged out`,
-          ip: req.ip,
-        });
-      }
-    }
-
-    if (!userId) return {};
-
-    const oidcSession = await this.oidcSessionRepo.findActiveByUserId(userId);
-    if (!oidcSession) return {};
-
-    await this.oidcSessionRepo.revokeByUserId(userId);
-    if (!oidcSession.idTokenHint) return {};
-
-    const oidcLogoutStart = Date.now();
-    try {
-      let issuerUri: string;
-      if (oidcSession.providerId) {
-        const provider = await this.db.query.oidcProviders.findFirst({ where: eq(schema.oidcProviders.id, oidcSession.providerId) });
-        if (!provider?.enabled) return {};
-        issuerUri = provider.issuerUri;
-      } else {
-        const oidcConfig = await this.appSettings.getOidcConfig();
-        if (!oidcConfig.enabled) return {};
-        issuerUri = oidcSession.oidcIssuer;
-      }
-
-      const disc = await this.oidcDiscovery.getDiscoveryDoc(issuerUri);
-      if (!disc.endSessionEndpoint) return {};
-
-      const origin = req.headers['origin'] ?? req.headers['referer'];
-      const postLogoutUri = origin ? new URL('/login', origin).toString() : undefined;
-
-      const params = new URLSearchParams({ id_token_hint: oidcSession.idTokenHint });
-      if (postLogoutUri) params.set('post_logout_redirect_uri', postLogoutUri);
-
-      return { logoutUrl: `${disc.endSessionEndpoint}?${params.toString()}` };
-    } catch (error) {
-      const durationMs = Date.now() - oidcLogoutStart;
-      const errorClass = error instanceof Error ? error.name : 'UnknownError';
-      const errorMessage = error instanceof Error ? error.message : 'unknown error';
-      this.logger.warn(
-        `[auth.logout] [fail] userId=${userId} durationMs=${durationMs} errorClass=${errorClass} error="${errorMessage}" - oidc logout url generation failed`,
-      );
-      return {};
-    }
-  }
-
-  async validateUser(userId: number, tokenVersion: number) {
+  async findActingUser(userId: number): Promise<RequestUser | null> {
     const user = await this.userService.findByIdWithPermissions(userId);
-    if (!user || !user.active) throw new UnauthorizedException();
-    if (user.tokenVersion !== tokenVersion) throw new UnauthorizedException();
+    if (!user || !user.active) return null;
+    return (await this.canActNow(user)) ? user : null;
+  }
 
-    if (user.provisioningMethod === 'shared') {
-      const hasActive = await this.magicLinkRepo.hasActiveByUserId(userId);
-      if (!hasActive) throw new UnauthorizedException();
-    }
-
-    return user;
+  /**
+   * A shared account exists only for as long as a live magic link points at it, so a revoked link
+   * has to close every door and not just the login form.
+   */
+  private async canActNow(user: RequestUser): Promise<boolean> {
+    if (user.provisioningMethod !== 'shared') return true;
+    return this.magicLinkRepo.hasActiveByUserId(user.id);
   }
 
   async revokeAllUserSessions(userId: number) {
@@ -604,23 +471,19 @@ export class AuthService {
     });
   }
 
-  async getSessions(userId: number) {
-    const rows = await this.db.query.refreshTokens.findMany({
-      where: and(eq(schema.refreshTokens.userId, userId), isNull(schema.refreshTokens.revokedAt), gt(schema.refreshTokens.expiresAt, new Date())),
-    });
-    return rows.map(({ id, createdAt, expiresAt }) => ({ id, createdAt, expiresAt }));
+  getSessions(userId: number) {
+    return this.sessionRepo.list(userId);
   }
 
   async revokeSession(userId: number, sessionId: number) {
-    const row = await this.db.query.refreshTokens.findFirst({
-      where: eq(schema.refreshTokens.id, sessionId),
-    });
+    const row = await this.sessionRepo.findSession(sessionId);
     if (!row) throw new NotFoundException('Session not found');
     if (row.userId !== userId) throw new ForbiddenException('You do not have access to this session');
-    await this.db.update(schema.refreshTokens).set({ revokedAt: new Date() }).where(eq(schema.refreshTokens.id, sessionId));
+    await this.sessionRepo.revoke(sessionId, userId);
   }
 
   async forgotPassword(dto: ForgotPasswordDto, ip?: string): Promise<void> {
+    this.authenticationPolicy.assertPasswordLoginEnabled();
     if (!(await this.systemMailService.isConfigured())) {
       throw new ServiceUnavailableException('Self-service password reset is not configured. Contact your administrator.');
     }
@@ -662,6 +525,7 @@ export class AuthService {
   }
 
   async resetPassword(dto: ResetPasswordDto, ip?: string): Promise<void> {
+    this.authenticationPolicy.assertPasswordLoginEnabled();
     const tokenHash = sha256(dto.token);
 
     const row = await this.db.query.passwordResetTokens.findFirst({
@@ -709,6 +573,7 @@ export class AuthService {
   }
 
   async changePassword(userId: number, dto: ChangePasswordDto, reply: FastifyReply, ip?: string) {
+    this.authenticationPolicy.assertPasswordLoginEnabled();
     const user = await this.db.query.users.findFirst({
       where: eq(schema.users.id, userId),
     });
@@ -757,140 +622,15 @@ export class AuthService {
     });
   }
 
-  getRefreshTokenExpiryDate(baseDate = new Date()) {
-    return new Date(baseDate.getTime() + parseDurationMs(this.config.get<string>('auth.jwtRefreshExpiresIn') ?? '7d'));
+  private normalizeAuthenticationMethod(value: string): AuthenticationMethodValue {
+    return Object.values(AuthenticationMethod).includes(value as AuthenticationMethodValue)
+      ? (value as AuthenticationMethodValue)
+      : AuthenticationMethod.Legacy;
   }
 
-  private async issueTokenPair(userId: number, tokenVersion: number) {
-    const pair = this.createTokenPair(userId, tokenVersion);
-    const authenticatedAt = new Date();
-
-    await this.db.transaction(async (tx) => {
-      await tx.insert(schema.refreshTokens).values({ userId, tokenHash: pair.refreshTokenHash, expiresAt: pair.refreshExpiresAt });
-      await tx
-        .update(schema.users)
-        .set({ lastLoginAt: authenticatedAt, lastAuthenticatedAt: authenticatedAt, updatedAt: sql`${schema.users.updatedAt}` })
-        .where(eq(schema.users.id, userId));
-    });
-
-    return pair;
-  }
-
-  private createTokenPair(userId: number, tokenVersion: number) {
-    const accessToken = this.jwtService.sign({ sub: userId, ver: tokenVersion });
-
-    const rawRefreshToken = randomBytes(32).toString('hex');
-    const tokenHash = sha256(rawRefreshToken);
-    const expiresAt = this.getRefreshTokenExpiryDate();
-
-    return { accessToken, rawRefreshToken, refreshExpiresAt: expiresAt, refreshTokenHash: tokenHash };
-  }
-
-  /**
-   * Token pair for the Audiobookshelf-compatible API. ABS clients (Prologue) decode the JWTs
-   * and read userId/username/jti/type claims, and treat the refresh token as a JWT too, so both
-   * tokens carry the ABS claim set. The refresh token is stored hashed like the web token.
-   */
-  private createAudiobookshelfTokenPair(userId: number, tokenVersion: number, username: string) {
-    const accessToken = this.jwtService.sign(
-      {
-        sub: userId,
-        ver: tokenVersion,
-        userId: toAudiobookshelfUuid(userId),
-        username,
-        jti: randomUUID(),
-        type: 'access',
-      },
-      { expiresIn: this.config.getOrThrow<StringValue | number>('auth.jwtAbsExpiresIn') },
-    );
-    const rawRefreshToken = this.jwtService.sign(
-      {
-        userId: toAudiobookshelfUuid(userId),
-        username,
-        jti: randomUUID(),
-        type: 'refresh',
-      },
-      { expiresIn: this.config.getOrThrow<StringValue | number>('auth.jwtRefreshExpiresIn') },
-    );
-    const tokenHash = sha256(rawRefreshToken);
-    const expiresAt = this.getRefreshTokenExpiryDate();
-    // Real Audiobookshelf's legacy `user.token` carries only {userId, username, iat}, no
-    // expiry - unlike `accessToken`. Mirror that minimal, non-expiring shape for ABS clients
-    // that read this field, while still keeping `sub`/`ver` so it validates as a bearer token.
-    const legacyToken = this.jwtService.sign(
-      { sub: userId, ver: tokenVersion, userId: toAudiobookshelfUuid(userId), username },
-      { expiresIn: '100y' },
-    );
-
-    return { accessToken, rawRefreshToken, legacyToken, refreshExpiresAt: expiresAt, refreshTokenHash: tokenHash };
-  }
-
-  private getRefreshRotationGraceMs(): number {
-    return this.config.get<number>('auth.refreshRotationGraceMs') ?? 30_000;
-  }
-
-  /**
-   * Distinguishes a benign rotation race (or a chained rotation) from refresh-token theft.
-   *
-   * Accepts the presented (revoked) token only when:
-   *   - it was revoked by rotation (rotatedAt + replacedByTokenHash set)
-   *   - the rotation happened within the configured grace window
-   *   - walking the rotation chain (up to ROTATION_CHAIN_MAX_HOPS) reaches a live row
-   *     for the same user. A revoked link in the chain is OK only if it was itself rotated
-   *     (so we don't resurrect a session that was explicitly logged out).
-   */
-  private async isRecentRefreshRotationReuse(row: typeof schema.refreshTokens.$inferSelect) {
-    if (!row.rotatedAt || !row.replacedByTokenHash) return false;
-    if (row.expiresAt < new Date()) return false;
-    const elapsedMs = Date.now() - row.rotatedAt.getTime();
-    if (elapsedMs < 0 || elapsedMs > this.getRefreshRotationGraceMs()) return false;
-
-    let nextHash: string | null = row.replacedByTokenHash;
-    for (let hop = 0; hop < ROTATION_CHAIN_MAX_HOPS && nextHash; hop++) {
-      const next: typeof schema.refreshTokens.$inferSelect | undefined = await this.db.query.refreshTokens.findFirst({
-        where: eq(schema.refreshTokens.tokenHash, nextHash),
-      });
-      if (!next || next.userId !== row.userId || next.expiresAt < new Date()) return false;
-      if (!next.revokedAt) return true;
-      // Revoked-but-rotated link: keep walking. Revoked-without-rotation means logout/security revoke.
-      if (!next.rotatedAt || !next.replacedByTokenHash) return false;
-      nextHash = next.replacedByTokenHash;
-    }
-    return false;
-  }
-
-  private async assertUserCanRefresh(userId: number, reply: FastifyReply) {
-    const userForToken = await this.db.query.users.findFirst({ where: eq(schema.users.id, userId) });
-    if (!userForToken) throw new UnauthorizedException();
-    if (!userForToken.active) {
-      this.logger.warn(`[auth.refresh] [fail] userId=${userId} errorClass=UnauthorizedException error="account disabled" - refresh failed`);
-      this.clearRefreshCookie(reply);
-      this.clearAccessCookie(reply);
-      throw new UnauthorizedException('Account disabled');
-    }
-    if (userForToken.provisioningMethod === 'shared') {
-      const hasActive = await this.magicLinkRepo.hasActiveByUserId(userId);
-      if (!hasActive) {
-        this.logger.warn(`[auth.refresh] [fail] userId=${userId} errorClass=UnauthorizedException error="all magic links revoked" - refresh failed`);
-        await this.revokeAllUserSessions(userId);
-        this.clearRefreshCookie(reply);
-        this.clearAccessCookie(reply);
-        throw new UnauthorizedException();
-      }
-    }
-    return userForToken;
-  }
-
-  private async issueAccessOnlyForRefreshReuse(userId: number, reply: FastifyReply) {
-    const userForToken = await this.assertUserCanRefresh(userId, reply);
-    const accessToken = this.jwtService.sign({ sub: userId, ver: userForToken.tokenVersion });
-    await this.db
-      .update(schema.users)
-      .set({ lastAuthenticatedAt: new Date(), updatedAt: sql`${schema.users.updatedAt}` })
-      .where(eq(schema.users.id, userId));
-    this.setAccessCookie(reply, accessToken);
-    this.logger.log(`[auth.refresh] [end] userId=${userId} reason="rotation-race" - access-only refresh issued`);
-    return { accessToken };
+  private isAuthenticationMethodAllowed(authenticationMethod: AuthenticationMethodValue): boolean {
+    if (this.authenticationPolicy.isPasswordLoginEnabled()) return true;
+    return authenticationMethod === AuthenticationMethod.Oidc || authenticationMethod === AuthenticationMethod.MagicLink;
   }
 
   private assertSetupToken(setupToken: string | undefined) {
@@ -920,8 +660,8 @@ export class AuthService {
     return lockedUntil;
   }
 
-  private setRefreshCookie(reply: FastifyReply, rawToken: string) {
-    const ttlSeconds = parseDurationMs(this.config.get<string>('auth.jwtRefreshExpiresIn') ?? '7d') / 1000;
+  private setRefreshCookie(reply: FastifyReply, rawToken: string, expiresAt: Date) {
+    const ttlSeconds = Math.max(0, Math.floor((expiresAt.getTime() - Date.now()) / 1000));
 
     reply.setCookie('refresh_token', rawToken, {
       httpOnly: true,

@@ -21,7 +21,7 @@ describe('LibraryController', () => {
     writeMetadataToFiles: vi.fn(),
   };
 
-  const bookService = { queryForLibrary: vi.fn(), queryJumpBucketsForLibrary: vi.fn() };
+  const bookService = { queryForLibrary: vi.fn(), queryJumpBucketsForLibrary: vi.fn(), facetsForLibrary: vi.fn() };
 
   const bulkRenameService = {
     getPreview: vi.fn(),
@@ -29,7 +29,8 @@ describe('LibraryController', () => {
     execute: vi.fn(),
   };
 
-  const controller = new LibraryController(libraryService as any, bookService as any, bulkRenameService as any);
+  const addedAtService = { start: vi.fn(), get: vi.fn() };
+  const controller = new LibraryController(libraryService as any, bookService as any, bulkRenameService as any, addedAtService as any);
 
   beforeEach(() => {
     vi.resetAllMocks();
@@ -126,14 +127,18 @@ describe('LibraryController', () => {
     expect(reply.raw.end).toHaveBeenCalled();
   });
 
-  it('queryBooks and queryJumpBuckets delegate to the book service', async () => {
+  it('queryBooks, getBookFacets and queryJumpBuckets delegate to the book service', async () => {
     const user = { id: 4, isSuperuser: false } as any;
     const query = { sort: [{ field: 'title', dir: 'asc' }], pagination: { page: 0, size: 50 } } as any;
+    bookService.facetsForLibrary.mockResolvedValue({ total: 3, libraryTotal: 5, formats: [{ format: 'epub', count: 3 }] });
 
     await controller.queryBooks(7, query, user);
+    const facets = await controller.getBookFacets(7, query, user);
     await controller.queryJumpBuckets(7, query, user);
 
     expect(bookService.queryForLibrary).toHaveBeenCalledWith(user, 7, query);
+    expect(bookService.facetsForLibrary).toHaveBeenCalledWith(user, 7, query);
+    expect(facets).toEqual({ total: 3, libraryTotal: 5, formats: [{ format: 'epub', count: 3 }] });
     expect(bookService.queryJumpBucketsForLibrary).toHaveBeenCalledWith(user, 7, query);
   });
 });

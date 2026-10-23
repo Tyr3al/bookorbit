@@ -13,18 +13,10 @@ async function validateInput(input: Record<string, unknown>) {
 }
 
 describe('MetadataSearchDto', () => {
-  it('requires at least one of bookId, title, or isbn', async () => {
+  it('accepts an author-only search', async () => {
     const { errors } = await validateInput({ author: 'Frank Herbert' });
 
-    expect(errors).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          constraints: expect.objectContaining({
-            atLeastOneSearchTerm: 'At least one of bookId, title, or isbn must be provided',
-          }),
-        }),
-      ]),
-    );
+    expect(errors).toHaveLength(0);
   });
 
   it('accepts title-only searches but rejects blank title values', async () => {
@@ -36,7 +28,7 @@ describe('MetadataSearchDto', () => {
       expect.arrayContaining([
         expect.objectContaining({
           constraints: expect.objectContaining({
-            atLeastOneSearchTerm: 'At least one of bookId, title, or isbn must be provided',
+            atLeastOneSearchTerm: 'At least one of bookId, title, author, or isbn must be provided',
           }),
         }),
       ]),
@@ -102,6 +94,19 @@ describe('MetadataSearchDto', () => {
 
     expect(falseValue.errors).toHaveLength(0);
     expect(falseValue.dto.isAudiobook).toBe(false);
+  });
+
+  it('converts resultsPerProvider to a number within the browsing cap', async () => {
+    const valid = await validateInput({ author: 'Terry Pratchett', resultsPerProvider: '20' });
+    const tooMany = await validateInput({ author: 'Terry Pratchett', resultsPerProvider: '21' });
+    const zero = await validateInput({ author: 'Terry Pratchett', resultsPerProvider: '0' });
+    const fraction = await validateInput({ author: 'Terry Pratchett', resultsPerProvider: '2.5' });
+
+    expect(valid.errors).toHaveLength(0);
+    expect(valid.dto.resultsPerProvider).toBe(20);
+    for (const { errors } of [tooMany, zero, fraction]) {
+      expect(errors).toEqual(expect.arrayContaining([expect.objectContaining({ property: 'resultsPerProvider' })]));
+    }
   });
 
   it('rejects unknown provider keys after normalization', async () => {

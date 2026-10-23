@@ -20,9 +20,13 @@ import {
 } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
+import type { ContentFilterRules } from '@bookorbit/types';
+
 import { DB } from '../../db';
+import type { DbTx } from './annotation-sync.repository';
 import { foldActivityRows, foldChapterRows } from './annotation-stats.utils';
 import { accentInsensitiveIlike } from '../../common/utils/accent-insensitive-search.utils';
+import { buildContentFilterClauses } from '../../common/utils/content-filter-sql.utils';
 import * as schema from '../../db/schema';
 import {
   annotationPositions,
@@ -39,16 +43,48 @@ import {
 
 type Db = NodePgDatabase<typeof schema>;
 
+// Revoking a Kobo deletes its sync rows; this covers rows from devices revoked before it did, which
+// can never acknowledge anything again.
+const syncedByLiveDevice = or(
+  sql`${annotationSyncState.source} <> 'kobo'`,
+  sql`exists (select 1 from ${schema.koboDevices} where ${schema.koboDevices.userId} = ${annotationSyncState.userId} and ${schema.koboDevices.id}::text = ${annotationSyncState.deviceId})`,
+)!;
+
 export type AnnotationWithCfi = AnnotationRow & {
   cfi: string | null;
+  /** The file the stored CFI belongs to; null for CFIs stored before positions recorded one. */
+  cfiFileId?: number | null;
   cfiStatus: string | null;
   cfiExtras: Record<string, unknown> | null;
   jumpFileId: number | null;
   pageno: number | null;
+  pdfPos0?: string | null;
+  pdfStatus?: string | null;
 };
-export type HubAnnotationRow = AnnotationWithCfi & { bookTitle: string | null; author: string | null; jumpFileFormat: string | null };
+export type HubAnnotationRow = AnnotationWithCfi & {
+  bookTitle: string | null;
+  author: string | null;
+  jumpFileFormat: string | null;
+  xpointer: string | null;
+};
+
+function highlightedAt(): SQL<Date> {
+  return sql<Date>`coalesce(${annotations.sourceCreatedAt}, ${annotations.createdAt})`;
+}
+
+/** Starring an already starred row keeps its original timestamp. */
+function starredAtValue(starred: boolean): SQL<Date> | null {
+  return starred ? sql<Date>`coalesce(${annotations.starredAt}, now())` : null;
+}
+
+/** The books the caller can still open: library access plus content rules, as book routes check them. */
+export interface HubAccess {
+  libraryIds: number[];
+  contentFilters?: ContentFilterRules;
+}
 
 export interface HubFilters {
+  access?: HubAccess;
   bookId?: number;
   colors?: string[];
   styles?: string[];
@@ -69,6 +105,7 @@ export interface HubSort {
 }
 
 export interface AnnotationFilters {
+  bookFileId?: number;
   colors?: string[];
   search?: string;
   chapter?: string;
@@ -139,6 +176,9 @@ export class AnnotationRepository {
       pageno: sql<
         number | null
       >`(select (ap3.extras ->> 'pageno')::int from annotation_positions ap3 where ap3.annotation_id = ${annotations.id} and ap3.format in ('xpointer', 'pdf') limit 1)`,
+      xpointer: sql<
+        string | null
+      >`(select ap4.pos0 from annotation_positions ap4 where ap4.annotation_id = ${annotations.id} and ap4.format = 'xpointer' limit 1)`,
     };
   }
 
@@ -147,6 +187,7 @@ export class AnnotationRepository {
       .select({
         ...getTableColumns(annotations),
         cfi: annotationPositions.pos0,
+        cfiFileId: annotationPositions.bookFileId,
         cfiStatus: annotationPositions.status,
         cfiExtras: annotationPositions.extras,
         jumpFileId: sql<
@@ -155,6 +196,12 @@ export class AnnotationRepository {
         pageno: sql<
           number | null
         >`(select (ap3.extras ->> 'pageno')::int from annotation_positions ap3 where ap3.annotation_id = ${annotations.id} and ap3.format in ('xpointer', 'pdf') limit 1)`,
+        pdfPos0: sql<
+          string | null
+        >`(select ap4.pos0 from annotation_positions ap4 where ap4.annotation_id = ${annotations.id} and ap4.format = 'pdf' limit 1)`,
+        pdfStatus: sql<
+          string | null
+        >`(select ap5.status from annotation_positions ap5 where ap5.annotation_id = ${annotations.id} and ap5.format = 'pdf' limit 1)`,
       })
       .from(annotations)
       .leftJoin(annotationPositions, and(eq(annotationPositions.annotationId, annotations.id), eq(annotationPositions.format, 'cfi')))
@@ -164,7 +211,7 @@ export class AnnotationRepository {
   async findByBookId(bookId: number, userId: number): Promise<AnnotationWithCfi[]> {
     return this.selectWithCfi()
       .where(and(...this.baseConditions(bookId, userId)))
-      .orderBy(asc(annotations.createdAt));
+      .orderBy(asc(highlightedAt()));
   }
 
   async findById(bookId: number, annotationId: number, userId: number): Promise<AnnotationWithCfi | null> {
@@ -247,7 +294,7 @@ export class AnnotationRepository {
           // The step after `/6` in an epub CFI addresses the spine itemref. Kept raw here and
           // converted to a spine index in foldChapterRows, where it can be tested.
           cfiSpineStep: sql<number | null>`min(nullif(substring(${annotationPositions.pos0} from 'epubcfi[(]/6/([0-9]+)'), '')::int)`,
-          firstCreatedAt: sql<Date>`min(${annotations.createdAt})`,
+          firstCreatedAt: sql<Date>`min(${highlightedAt()})`,
         })
         .from(annotations)
         .leftJoin(annotationPositions, cfiJoin)
@@ -255,7 +302,7 @@ export class AnnotationRepository {
         .groupBy(annotations.chapterTitle, annotations.color),
       this.db
         .select({
-          day: sql<string>`to_char(${annotations.createdAt} at time zone 'UTC', 'YYYY-MM-DD')`,
+          day: sql<string>`to_char(${highlightedAt()} at time zone 'UTC', 'YYYY-MM-DD')`,
           origin: annotations.origin,
           count: count(),
         })
@@ -310,15 +357,61 @@ export class AnnotationRepository {
     });
   }
 
+  /**
+   * Creates an annotation and its `pdf` position in one transaction. The geometry JSON is
+   * stored in pos0, the 1-based page in `extras.pageno` (so the hub can derive a page deep
+   * link), and bookFileId anchors the jump target. Returns the row shaped like the read model.
+   */
+  async createPdf(data: NewAnnotation & { bookFileId?: number | null }, pdf: { page: number; pos0: string }): Promise<AnnotationWithCfi> {
+    const { bookFileId, ...annotationData } = data;
+    const pageno = pdf.page + 1;
+    return this.db.transaction(async (tx) => {
+      const [row] = await tx.insert(annotations).values(annotationData).returning();
+      await tx.insert(annotationPositions).values({
+        annotationId: row.id,
+        userId: row.userId,
+        bookFileId: bookFileId ?? null,
+        format: 'pdf',
+        pos0: pdf.pos0,
+        status: 'exact',
+        extras: { pageno },
+      });
+      return {
+        ...row,
+        cfi: null,
+        cfiStatus: null,
+        cfiExtras: null,
+        jumpFileId: bookFileId ?? null,
+        pageno,
+        pdfPos0: pdf.pos0,
+        pdfStatus: 'exact',
+      };
+    });
+  }
+
+  /**
+   * `version` drives device push-down, so it moves for a content change and stays put for a
+   * request that only stars or unstars. A request with no star field keeps the old behaviour of
+   * always bumping, so nothing an older client sends changes meaning.
+   */
   async update(
     bookId: number,
     annotationId: number,
     userId: number,
     data: Partial<Pick<NewAnnotation, 'note' | 'color' | 'style'>>,
+    options: { starred?: boolean } = {},
   ): Promise<AnnotationWithCfi | null> {
+    const contentChanged = data.note !== undefined || data.color !== undefined || data.style !== undefined;
+    const bumpVersion = options.starred === undefined || contentChanged;
     const [row] = await this.db
       .update(annotations)
-      .set({ ...data, version: sql`${annotations.version} + 1`, updatedAt: sql`now()` })
+      .set({
+        ...data,
+        ...(bumpVersion && { version: sql`${annotations.version} + 1` }),
+        ...(contentChanged && { contentUpdatedAt: sql`now()` }),
+        ...(options.starred !== undefined && { starredAt: starredAtValue(options.starred) }),
+        updatedAt: sql`now()`,
+      })
       .where(and(eq(annotations.id, annotationId), ...this.baseConditions(bookId, userId)))
       .returning();
     if (!row) return null;
@@ -335,12 +428,49 @@ export class AnnotationRepository {
   }
 
   async restore(annotationId: number, userId: number): Promise<AnnotationRow | null> {
-    const [row] = await this.db
-      .update(annotations)
-      .set({ deletedAt: null, version: sql`${annotations.version} + 1`, updatedAt: sql`now()` })
-      .where(and(eq(annotations.id, annotationId), eq(annotations.userId, userId), isNotNull(annotations.deletedAt)))
-      .returning();
-    return row ?? null;
+    return this.db.transaction(async (tx) => {
+      const [row] = await tx
+        .update(annotations)
+        .set({ deletedAt: null, version: sql`${annotations.version} + 1`, updatedAt: sql`now()` })
+        .where(and(eq(annotations.id, annotationId), eq(annotations.userId, userId), isNotNull(annotations.deletedAt)))
+        .returning();
+      if (!row) return null;
+      await this.forgetKoreaderStates([annotationId], userId, tx);
+      return row;
+    });
+  }
+
+  /** Restores trashed rows exactly like {@link restore}, one transaction for the batch. */
+  async bulkRestore(userId: number, ids: number[], access?: HubAccess): Promise<number> {
+    if (ids.length === 0) return 0;
+    return this.db.transaction(async (tx) => {
+      const restored = await tx
+        .update(annotations)
+        .set({ deletedAt: null, version: sql`${annotations.version} + 1`, updatedAt: sql`now()` })
+        .where(and(inArray(annotations.id, ids), eq(annotations.userId, userId), isNotNull(annotations.deletedAt), ...this.hubAccessSql(access)))
+        .returning({ id: annotations.id });
+      await this.forgetKoreaderStates(
+        restored.map((row) => row.id),
+        userId,
+        tx,
+      );
+      return restored.length;
+    });
+  }
+
+  // A device may have removed the highlight even when its delete ack was lost. Re-deliver the
+  // restored identity before accepting another absence as a deletion.
+  private async forgetKoreaderStates(annotationIds: number[], userId: number, tx: DbTx): Promise<void> {
+    if (annotationIds.length === 0) return;
+    await tx
+      .delete(annotationSyncState)
+      .where(
+        and(
+          inArray(annotationSyncState.annotationId, annotationIds),
+          eq(annotationSyncState.userId, userId),
+          eq(annotationSyncState.source, 'koreader'),
+        ),
+      );
   }
 
   /**
@@ -359,7 +489,7 @@ export class AnnotationRepository {
             this.db
               .select({ one: sql`1` })
               .from(annotationSyncState)
-              .where(and(eq(annotationSyncState.annotationId, annotations.id), isNull(annotationSyncState.deleteAckedAt))),
+              .where(and(eq(annotationSyncState.annotationId, annotations.id), isNull(annotationSyncState.deleteAckedAt), syncedByLiveDevice)),
           ),
         ),
       )
@@ -380,7 +510,7 @@ export class AnnotationRepository {
     // The hub groups a page at a time, so a grouped run only ever lands whole when the
     // rows arrive already ordered by the grouping key. Every non-date sort therefore
     // falls back to newest-first inside the group.
-    const withinGroup = [desc(annotations.createdAt), desc(annotations.id)];
+    const withinGroup = [desc(highlightedAt()), desc(annotations.id)];
     const orderBy =
       sort.by === 'book'
         ? [direction(bookMetadata.title), ...withinGroup]
@@ -388,7 +518,7 @@ export class AnnotationRepository {
           ? [direction(annotations.color), ...withinGroup]
           : sort.by === 'origin'
             ? [direction(annotations.origin), ...withinGroup]
-            : [direction(annotations.createdAt), direction(annotations.id)];
+            : [direction(highlightedAt()), direction(annotations.id)];
     const offset = (page - 1) * pageSize;
 
     const [items, totalResult] = await Promise.all([
@@ -421,14 +551,14 @@ export class AnnotationRepository {
     return Number(row?.total ?? 0);
   }
 
-  async findHubById(userId: number, annotationId: number): Promise<HubAnnotationRow | null> {
+  async findHubById(userId: number, annotationId: number, access?: HubAccess): Promise<HubAnnotationRow | null> {
     const [row] = await this.db
       .select(this.hubColumns())
       .from(annotations)
       .leftJoin(annotationPositions, and(eq(annotationPositions.annotationId, annotations.id), eq(annotationPositions.format, 'cfi')))
       .leftJoin(bookMetadata, eq(bookMetadata.bookId, annotations.bookId))
       .leftJoin(books, eq(books.id, annotations.bookId))
-      .where(and(eq(annotations.id, annotationId), eq(annotations.userId, userId)))
+      .where(and(eq(annotations.id, annotationId), eq(annotations.userId, userId), ...this.hubAccessSql(access)))
       .limit(1);
     return (row as HubAnnotationRow | undefined) ?? null;
   }
@@ -442,7 +572,9 @@ export class AnnotationRepository {
       .leftJoin(bookMetadata, eq(bookMetadata.bookId, annotations.bookId))
       .leftJoin(books, eq(books.id, annotations.bookId))
       .where(and(...conditions))
-      .orderBy(asc(bookMetadata.title), asc(annotations.chapterTitle), asc(annotations.createdAt))
+      // Book by book, then each book in reading order, so chapters come out as they are read
+      // rather than alphabetically. The book id keeps two books sharing a title apart.
+      .orderBy(asc(bookMetadata.title), asc(annotations.bookId), ...readingPositionOrder('asc'), asc(highlightedAt()), asc(annotations.id))
       .limit(limit);
     return rows as HubAnnotationRow[];
   }
@@ -489,11 +621,11 @@ export class AnnotationRepository {
   }
 
   /** The whole trash, deliberately ignoring the caller's status filter. */
-  async countHubTrashed(userId: number): Promise<number> {
+  async countHubTrashed(userId: number, access?: HubAccess): Promise<number> {
     const [row] = await this.db
       .select({ total: count() })
       .from(annotations)
-      .where(and(eq(annotations.userId, userId), isNotNull(annotations.deletedAt)));
+      .where(and(eq(annotations.userId, userId), isNotNull(annotations.deletedAt), ...this.hubAccessSql(access)));
     return Number(row?.total ?? 0);
   }
 
@@ -505,12 +637,12 @@ export class AnnotationRepository {
   async getHubActivityWeeks(userId: number, filters: HubFilters, since: Date) {
     return this.db
       .select({
-        weekStart: sql<string>`to_char(date_trunc('week', ${annotations.createdAt} at time zone 'UTC'), 'YYYY-MM-DD')`,
+        weekStart: sql<string>`to_char(date_trunc('week', ${highlightedAt()} at time zone 'UTC'), 'YYYY-MM-DD')`,
         origin: annotations.origin,
         count: count(),
       })
       .from(annotations)
-      .where(and(...this.buildHubConditions(userId, filters), gte(annotations.createdAt, since)))
+      .where(and(...this.buildHubConditions(userId, filters), gte(highlightedAt(), since)))
       .groupBy(sql`1`, annotations.origin)
       .orderBy(sql`1`);
   }
@@ -520,7 +652,7 @@ export class AnnotationRepository {
    * counts rows the device has not acknowledged at the canonical version, which is what
    * makes "did my Kobo's highlights arrive" a question this page can answer at all.
    */
-  async getHubDeviceSummary(userId: number) {
+  async getHubDeviceSummary(userId: number, access?: HubAccess) {
     return this.db
       .select({
         source: annotationSyncState.source,
@@ -531,7 +663,7 @@ export class AnnotationRepository {
       })
       .from(annotationSyncState)
       .innerJoin(annotations, eq(annotations.id, annotationSyncState.annotationId))
-      .where(eq(annotationSyncState.userId, userId))
+      .where(and(eq(annotationSyncState.userId, userId), syncedByLiveDevice, ...this.hubAccessSql(access)))
       .groupBy(annotationSyncState.source, annotationSyncState.deviceId)
       .orderBy(desc(max(annotationSyncState.lastSyncedAt)));
   }
@@ -546,10 +678,14 @@ export class AnnotationRepository {
    * `recent` is what the filter combobox wants: the books you just marked, first.
    * `count` is what the hub's shelf wants: the books you have marked most.
    */
-  async findHubBookFacets(userId: number, params: { status: 'active' | 'trashed'; q?: string; limit: number; order?: 'recent' | 'count' }) {
+  async findHubBookFacets(
+    userId: number,
+    params: { status: 'active' | 'trashed'; q?: string; limit: number; order?: 'recent' | 'count'; access?: HubAccess },
+  ) {
     const conditions: SQL[] = [
       eq(annotations.userId, userId),
       params.status === 'trashed' ? isNotNull(annotations.deletedAt) : isNull(annotations.deletedAt),
+      ...this.hubAccessSql(params.access),
     ];
     const term = params.q?.trim();
     if (term) {
@@ -572,11 +708,11 @@ export class AnnotationRepository {
       .leftJoin(bookMetadata, eq(bookMetadata.bookId, annotations.bookId))
       .where(and(...conditions))
       .groupBy(annotations.bookId, bookMetadata.title)
-      .orderBy(...(params.order === 'count' ? [desc(count()), asc(bookMetadata.title)] : [desc(max(annotations.createdAt)), asc(bookMetadata.title)]))
+      .orderBy(...(params.order === 'count' ? [desc(count()), asc(bookMetadata.title)] : [desc(max(highlightedAt())), asc(bookMetadata.title)]))
       .limit(params.limit);
   }
 
-  async findHubBookFacet(userId: number, status: 'active' | 'trashed', bookId: number) {
+  async findHubBookFacet(userId: number, status: 'active' | 'trashed', bookId: number, access?: HubAccess) {
     const rows = await this.db
       .select({
         bookId: annotations.bookId,
@@ -591,6 +727,7 @@ export class AnnotationRepository {
           eq(annotations.userId, userId),
           eq(annotations.bookId, bookId),
           status === 'trashed' ? isNotNull(annotations.deletedAt) : isNull(annotations.deletedAt),
+          ...this.hubAccessSql(access),
         ),
       )
       .groupBy(annotations.bookId, bookMetadata.title)
@@ -598,34 +735,59 @@ export class AnnotationRepository {
     return rows[0] ?? null;
   }
 
-  async bulkSetDeleted(userId: number, ids: number[], deleted: boolean): Promise<number> {
+  /** Restoring goes through {@link bulkRestore}, which also resets device sync state. */
+  async bulkTrash(userId: number, ids: number[], access?: HubAccess): Promise<number> {
     if (ids.length === 0) return 0;
     const result = await this.db
       .update(annotations)
-      .set({
-        deletedAt: deleted ? sql`now()` : null,
-        version: sql`${annotations.version} + 1`,
-        updatedAt: sql`now()`,
-      })
+      .set({ deletedAt: sql`now()`, version: sql`${annotations.version} + 1`, updatedAt: sql`now()` })
+      .where(and(inArray(annotations.id, ids), eq(annotations.userId, userId), isNull(annotations.deletedAt), ...this.hubAccessSql(access)))
+      .returning({ id: annotations.id });
+    return result.length;
+  }
+
+  /** Active rows only, and only those whose star actually changes; never bumps the version. */
+  async bulkSetStarred(userId: number, ids: number[], starred: boolean, access?: HubAccess): Promise<number> {
+    if (ids.length === 0) return 0;
+    const result = await this.db
+      .update(annotations)
+      .set({ starredAt: starredAtValue(starred), updatedAt: sql`now()` })
       .where(
-        and(inArray(annotations.id, ids), eq(annotations.userId, userId), deleted ? isNull(annotations.deletedAt) : isNotNull(annotations.deletedAt)),
+        and(
+          inArray(annotations.id, ids),
+          eq(annotations.userId, userId),
+          isNull(annotations.deletedAt),
+          starred ? isNull(annotations.starredAt) : isNotNull(annotations.starredAt),
+          ...this.hubAccessSql(access),
+        ),
       )
       .returning({ id: annotations.id });
     return result.length;
   }
 
-  async bulkRestyle(userId: number, ids: number[], patch: { color?: string; style?: string }): Promise<number> {
+  async bulkRestyle(userId: number, ids: number[], patch: { color?: string; style?: string }, access?: HubAccess): Promise<number> {
     if (ids.length === 0 || (patch.color === undefined && patch.style === undefined)) return 0;
     const result = await this.db
       .update(annotations)
-      .set({ ...patch, version: sql`${annotations.version} + 1`, updatedAt: sql`now()` })
-      .where(and(inArray(annotations.id, ids), eq(annotations.userId, userId), isNull(annotations.deletedAt)))
+      .set({ ...patch, version: sql`${annotations.version} + 1`, contentUpdatedAt: sql`now()`, updatedAt: sql`now()` })
+      .where(and(inArray(annotations.id, ids), eq(annotations.userId, userId), isNull(annotations.deletedAt), ...this.hubAccessSql(access)))
       .returning({ id: annotations.id });
     return result.length;
   }
 
+  // An EXISTS on the book, not a join, for the same reason as buildHubConditions' needsReview.
+  private hubAccessSql(access: HubAccess | undefined): SQL[] {
+    if (!access) return [];
+    if (access.libraryIds.length === 0) return [sql`false`];
+    const bookRules = [
+      inArray(books.libraryId, access.libraryIds),
+      ...(access.contentFilters ? buildContentFilterClauses(access.contentFilters, this.db) : []),
+    ];
+    return [sql`exists (select 1 from ${books} where ${books.id} = ${annotations.bookId} and ${and(...bookRules)})`];
+  }
+
   private buildHubConditions(userId: number, filters: HubFilters): SQL[] {
-    const conditions: SQL[] = [eq(annotations.userId, userId)];
+    const conditions: SQL[] = [eq(annotations.userId, userId), ...this.hubAccessSql(filters.access)];
     conditions.push(filters.status === 'trashed' ? isNotNull(annotations.deletedAt) : isNull(annotations.deletedAt));
     if (filters.bookId !== undefined) conditions.push(eq(annotations.bookId, filters.bookId));
     if (filters.colors && filters.colors.length > 0) conditions.push(inArray(annotations.color, filters.colors));
@@ -644,8 +806,8 @@ export class AnnotationRepository {
         sql`exists (select 1 from ${annotationPositions} where ${annotationPositions.annotationId} = ${annotations.id} and ${annotationPositions.format} = 'cfi' and ${annotationPositions.status} <> 'exact')`,
       );
     }
-    if (filters.dateFrom) conditions.push(gte(annotations.createdAt, filters.dateFrom));
-    if (filters.dateTo) conditions.push(lte(annotations.createdAt, filters.dateTo));
+    if (filters.dateFrom) conditions.push(gte(highlightedAt(), filters.dateFrom));
+    if (filters.dateTo) conditions.push(lte(highlightedAt(), filters.dateTo));
     return conditions;
   }
 
@@ -664,6 +826,12 @@ export class AnnotationRepository {
   private buildConditions(bookId: number, userId: number, filters: AnnotationFilters): SQL[] {
     const conditions = this.baseConditions(bookId, userId);
 
+    if (filters.bookFileId !== undefined) {
+      conditions.push(
+        sql`exists (select 1 from ${annotationPositions} ap_file where ap_file.annotation_id = ${annotations.id} and ap_file.book_file_id = ${filters.bookFileId})`,
+      );
+    }
+
     if (filters.colors && filters.colors.length > 0) {
       conditions.push(inArray(annotations.color, filters.colors));
     }
@@ -675,10 +843,10 @@ export class AnnotationRepository {
       conditions.push(eq(annotations.chapterTitle, filters.chapter));
     }
     if (filters.dateFrom) {
-      conditions.push(gte(annotations.createdAt, filters.dateFrom));
+      conditions.push(gte(highlightedAt(), filters.dateFrom));
     }
     if (filters.dateTo) {
-      conditions.push(lte(annotations.createdAt, filters.dateTo));
+      conditions.push(lte(highlightedAt(), filters.dateTo));
     }
     if (filters.hasNote) {
       conditions.push(sql`${annotations.note} is not null and ${annotations.note} <> ''`);
@@ -697,8 +865,53 @@ export class AnnotationRepository {
   private buildOrderBy(sort: AnnotationSort) {
     const direction = sort.dir === 'desc' ? desc : asc;
     if (sort.by === 'position') {
-      return [sql`${annotationPositions.pos0} ${sql.raw(sort.dir === 'desc' ? 'desc' : 'asc')} nulls last`, direction(annotations.id)];
+      return [...readingPositionOrder(sort.dir), direction(annotations.id)];
     }
-    return [direction(annotations.createdAt), direction(annotations.id)];
+    return [direction(highlightedAt()), direction(annotations.id)];
   }
+}
+
+/**
+ * The numeric steps of a CFI as an array, which Postgres compares element by element, so `/6/8`
+ * sorts before `/6/10` where the raw string would put it after. Null when the position is missing
+ * or carries no steps, so those rows still fall to the end under `nulls last`. The ordinality
+ * keeps the steps in the order they appear in the CFI, and `numeric` rather than `bigint` means a
+ * malformed CFI with an absurdly long digit run cannot overflow and fail the whole listing.
+ *
+ * Character classes rather than backslash escapes: inside a template literal JavaScript eats `\d`.
+ */
+export function cfiStepsSortKey(pos0: SQL | typeof annotationPositions.pos0): SQL {
+  return sql`nullif(array(
+    select (step.m)[1]::numeric
+    from regexp_matches(${pos0}, '[/:]([0-9]+)', 'g') with ordinality as step(m, n)
+    order by step.n
+  ), '{}'::numeric[])`;
+}
+
+/**
+ * Where a highlight sits in the book: PDF page, then the vertical offset on that page, then the
+ * CFI steps. Requires the canonical `cfi` position joined as `annotation_positions`.
+ */
+export function readingPositionOrder(dir: 'asc' | 'desc'): SQL[] {
+  const sqlDirection = sql.raw(dir === 'desc' ? 'desc' : 'asc');
+  const pdfPage = sql`(
+    select case
+      when ap_pdf.extras ->> 'pageno' ~ '^[0-9]+$' then (ap_pdf.extras ->> 'pageno')::int
+      else null
+    end
+    from ${annotationPositions} ap_pdf
+    where ap_pdf.annotation_id = ${annotations.id} and ap_pdf.format = 'pdf'
+    limit 1
+  )`;
+  const pdfY = sql`(
+    select ((regexp_match(ap_pdf.pos0, '"y"[[:space:]]*:[[:space:]]*(-?[0-9]+(?:[.][0-9]+)?)'))[1])::numeric
+    from ${annotationPositions} ap_pdf
+    where ap_pdf.annotation_id = ${annotations.id} and ap_pdf.format = 'pdf'
+    limit 1
+  )`;
+  return [
+    sql`${pdfPage} ${sqlDirection} nulls last`,
+    sql`${pdfY} ${sqlDirection} nulls last`,
+    sql`${cfiStepsSortKey(annotationPositions.pos0)} ${sqlDirection} nulls last`,
+  ];
 }

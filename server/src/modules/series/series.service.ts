@@ -1,12 +1,13 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 
 import type { BooksPage, SeriesBooksPage, SeriesDetail, SeriesNextBookResponse, SeriesPage, SeriesSummary } from '@bookorbit/types';
-import { READER_OPENABLE_FORMATS, SERIES_GAP_PREVIEW_LIMIT, getOpenableFormatsForGroup } from '@bookorbit/types';
+import { READER_OPENABLE_FORMATS, SERIES_GAP_PREVIEW_LIMIT, getOpenableFormatsForGroup, isOptInReaderFormat } from '@bookorbit/types';
 import { MAX_OFFSET_ROWS, isOffsetWithinLimit } from '../../common/constants/pagination.constants';
 import type { RequestUser } from '../../common/types/request-user';
 import { normalizeSeriesTotalBooks } from '../../common/utils/series-total-books.utils';
 import { assembleBookCards } from '../book/utils/assemble-book-cards';
 import { BookReadService } from '../book/book-read.service';
+import { BookCoverStore } from '../book-cover-store/book-cover-store.service';
 import { LibraryService } from '../library/library.service';
 import { FindNextSeriesBookDto } from './dto/find-next-series-book.dto';
 import { ListSeriesBooksDto } from './dto/list-series-books.dto';
@@ -23,6 +24,7 @@ export class SeriesService {
     private readonly seriesRepo: SeriesRepository,
     private readonly bookReadService: BookReadService,
     private readonly libraryService: LibraryService,
+    private readonly coverStore: BookCoverStore,
   ) {}
 
   private assertPaginationWindow(page: number, size: number): void {
@@ -162,6 +164,7 @@ export class SeriesService {
         cardData.tagRows,
         cardData.seriesMembershipRows,
       );
+      await this.coverStore.enrichCardFaces(cards);
       const orderMap = new Map(bookPage.bookIds.map((id, i) => [id, i]));
       items = cards
         .map((card) => {
@@ -204,7 +207,9 @@ export class SeriesService {
       seriesId,
       bookId,
       libraryIds,
-      formats: dto.formatGroup ? getOpenableFormatsForGroup(dto.formatGroup) : [...READER_OPENABLE_FORMATS],
+      formats: (dto.formatGroup ? getOpenableFormatsForGroup(dto.formatGroup) : [...READER_OPENABLE_FORMATS]).filter(
+        (format) => dto.includeDjvu === true || !isOptInReaderFormat(format),
+      ),
       contentFilters: user.isSuperuser ? undefined : user.contentFilters,
     });
 

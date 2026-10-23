@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   libraryId: null as unknown as { value: number | null },
   fetchSeriesBooks: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
   api: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
+  readOnlyLibraryIds: new Set<number>(),
 }))
 
 vi.mock('vue-router', async (importOriginal) => {
@@ -44,6 +45,14 @@ vi.mock('vue-router', async (importOriginal) => {
 
 vi.mock('@/features/auth/composables/usePermissions', () => ({
   usePermissions: () => ({ hasPermission: () => true }),
+}))
+
+vi.mock('@/features/library/composables/useLibraryPermissions', () => ({
+  useLibraryPermissions: () => ({
+    hasLibraryPermission: (_permission: string, libraryId: number | null | undefined) =>
+      libraryId == null || !mocks.readOnlyLibraryIds.has(libraryId),
+    hasPermissionInAnyLibrary: () => true,
+  }),
 }))
 
 vi.mock('@/features/book/composables/useBookNavigation', () => ({
@@ -124,6 +133,7 @@ function makeBook(overrides: Partial<BookCard> = {}): BookCard {
     readStatus: null,
     addedAt: '2026-01-01T00:00:00.000Z',
     updatedAt: null,
+    coverVersion: 'legacy:2026-01-01T00:00:00.000Z',
     metadataScore: null,
     hasCover: false,
     hasMetadataLocks: false,
@@ -273,6 +283,7 @@ describe('SeriesDetailView', () => {
     mocks.order = ref('asc')
     mocks.libraryId = ref<number | null>(null)
 
+    mocks.readOnlyLibraryIds.clear()
     mocks.routerPush.mockReset()
     mocks.routerPush.mockResolvedValue(undefined)
     mocks.fetchLibraries.mockReset()
@@ -356,6 +367,25 @@ describe('SeriesDetailView', () => {
     expect(comicsGroup.text()).toContain('Comics')
     expect(comicsGroup.text()).toContain('1')
     expect(comicsGroup.get('[data-testid="virtual-book-grid"]').attributes('data-book-ids')).toBe('10')
+  })
+
+  it('shows a mixed ebook and audiobook in both media sections', async () => {
+    mocks.items = ref([
+      makeBook({
+        id: 7,
+        files: [
+          { id: 1, format: 'epub', role: 'primary', sizeBytes: null },
+          { id: 2, format: 'm4b', role: 'content', sizeBytes: null },
+        ],
+      }),
+    ])
+
+    const wrapper = mountView()
+    await nextTick()
+
+    expect(wrapper.get('[data-testid="series-media-group-books"] [data-testid="virtual-book-grid"]').attributes('data-book-ids')).toBe('7')
+    expect(wrapper.get('[data-testid="series-media-group-audiobooks"] [data-testid="virtual-book-grid"]').attributes('data-book-ids')).toBe('7')
+    expect(wrapper.find('[data-testid="series-media-group-comics"]').exists()).toBe(false)
   })
 
   it('switches between grouped and plain grid rendering', async () => {
@@ -556,5 +586,23 @@ describe('SeriesDetailView', () => {
 
     expect(mocks.loadBooks).not.toHaveBeenCalled()
     expect(mocks.setBookContext).not.toHaveBeenCalled()
+  })
+
+  it('opens the series editor on the books the user can edit, skipping read-only libraries', async () => {
+    mocks.readOnlyLibraryIds.add(1)
+    mocks.items.value = [makeBook({ id: 101, libraryId: 1 }), makeBook({ id: 102, libraryId: 2 })]
+    mocks.total.value = 2
+    mocks.hasMore.value = false
+
+    const wrapper = mountView()
+    await nextTick()
+    mocks.setBookContext.mockClear()
+
+    const editBtn = wrapper.findAll('button').find((b) => b.text().includes('Edit Metadata'))
+    await editBtn!.trigger('click')
+    await flushPromises()
+
+    expect(mocks.setBookContext).toHaveBeenCalledWith([102], 1)
+    expect(mocks.routerPush).toHaveBeenCalledWith({ name: 'book-detail', params: { bookId: 102 }, query: { tab: 'edit' } })
   })
 })

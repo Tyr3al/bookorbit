@@ -9,6 +9,7 @@ const mockState = vi.hoisted(() => ({
   detail: null as unknown as { value: BookDetail | null },
   loading: null as unknown as { value: boolean },
   notFound: null as unknown as { value: boolean },
+  libraries: null as unknown as { value: { id: number; accessLevel: string }[] },
   fetch: vi.fn<(bookId: number) => void>(),
   progressChangedCallback: null as ((event: BookProgressChangedEvent) => void) | null,
 }))
@@ -52,12 +53,15 @@ vi.mock('@/composables/usePageTitle', () => ({
 }))
 
 vi.mock('@/features/auth/composables/usePermissions', () => ({
-  usePermissions: () => ({ hasPermission: () => true }),
+  usePermissions: () => ({ hasPermission: () => true, isSuperuser: { value: false } }),
 }))
 
-vi.mock('@/features/library/composables/useLibraries', () => ({
-  useLibraries: () => ({ libraries: ref([]) }),
-}))
+vi.mock('@/features/library/composables/useLibraries', async () => {
+  const { ref } = await import('vue')
+  const libraries = ref([{ id: 1, accessLevel: 'editor' }])
+  mockState.libraries = libraries
+  return { useLibraries: () => ({ libraries }) }
+})
 
 function makeBook(overrides: Partial<BookDetail> = {}): BookDetail {
   return {
@@ -85,6 +89,9 @@ function makeBook(overrides: Partial<BookDetail> = {}): BookDetail {
     personalNoteUpdatedAt: null,
     communityRatings: [],
     coverSource: null,
+    coverMedia: [],
+    covers: { ebook: null, audio: null },
+    coverVersion: 'legacy:2024-01-01T00:00:00.000Z',
     hardcoverEditionId: null,
     providerIds: {},
     authors: [],
@@ -95,6 +102,17 @@ function makeBook(overrides: Partial<BookDetail> = {}): BookDetail {
     metadataScore: null,
     readStatus: null,
     audioMetadata: null,
+    readAloudSync: {
+      mode: 'auto',
+      state: 'unavailable',
+      unavailableReason: 'no_media_overlay_epub',
+      overlayFileId: null,
+      audioDurationSeconds: null,
+      overlayDurationSeconds: null,
+      durationDifferenceSeconds: null,
+      durationDifferenceRatio: null,
+      koreaderDownloadAvailable: false,
+    },
     formatPriority: [],
     comicMetadata: null,
     customMetadata: [],
@@ -144,11 +162,36 @@ describe('BookDetailView', () => {
       params: { bookId: '217' },
       query: { tab: 'details' },
     })
+    mockState.libraries.value = [{ id: 1, accessLevel: 'editor' }]
     mockState.detail = ref(makeBook())
     mockState.loading = ref(false)
     mockState.notFound = ref(false)
     mockState.fetch.mockReset()
     mockState.progressChangedCallback = null
+  })
+
+  it('hides the editor for a viewer even when the URL explicitly selects edit', async () => {
+    mockState.libraries.value = [{ id: 1, accessLevel: 'viewer' }]
+    mockState.route.query = { tab: 'edit' }
+    const wrapper = mount(BookDetailView, {
+      global: {
+        stubs: {
+          BookDetailLayout: { name: 'BookDetailLayout', props: ['canEditMetadata'], template: '<div><slot /></div>' },
+          DetailsTab: DetailsTabStub,
+          EditMetadataTab: EditMetadataTabStub,
+          FilesTab: true,
+        },
+      },
+    })
+    expect(wrapper.find('[data-test="edit-rating"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="details-rating"]').exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'BookDetailLayout' }).props('canEditMetadata')).toBe(false)
+    mockState.libraries.value[0]!.accessLevel = 'owner'
+    await nextTick()
+    expect(wrapper.find('[data-test="edit-rating"]').exists()).toBe(true)
+    mockState.libraries.value = []
+    await nextTick()
+    expect(wrapper.find('[data-test="edit-rating"]').exists()).toBe(false)
   })
 
   it('keeps updated rating when switching details -> edit -> details tabs', async () => {

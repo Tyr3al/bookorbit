@@ -93,6 +93,16 @@ describe('ProviderConfigService', () => {
     expect(second.amazon.domain).toBe('amazon.com');
   });
 
+  it('returns only the normalized Amazon domain for provider links', async () => {
+    db.query.appSettings.findFirst.mockResolvedValue({
+      value: JSON.stringify({
+        amazon: { enabled: true, domain: 'amazon.de', cookie: 'private-session-cookie' },
+      }),
+    });
+
+    await expect(service.getLinkSettings()).resolves.toEqual({ amazonDomain: 'amazon.de' });
+  });
+
   it('merges stored partial config with defaults', async () => {
     db.query.appSettings.findFirst.mockResolvedValue({
       value: JSON.stringify({
@@ -486,6 +496,27 @@ describe('ProviderConfigService', () => {
     expect(result.ok).toBe(false);
     expect(result.status).toBe('warning');
     expect(result.message).toContain('bot-check');
+  });
+
+  it('returns warning for Amazon interstitial challenge responses', async () => {
+    db.query.appSettings.findFirst.mockResolvedValue(undefined);
+    fetchMock.mockResolvedValue(
+      new Response(
+        '<script>function triggerInterstitialChallenge() { xhr.open("POST", "/_sec/verify?provider=interstitial"); xhr.send(JSON.stringify({"bm-verify":"token"})); }</script>',
+        { status: 200 },
+      ),
+    );
+
+    const result = await service.testProvider(MetadataProviderKey.AMAZON, {
+      amazon: { cookie: 'session-cookie' },
+    });
+
+    expect(result).toEqual({
+      key: MetadataProviderKey.AMAZON,
+      ok: false,
+      status: 'warning',
+      message: 'Amazon responded with a bot-check page. Use a fresh browser session cookie.',
+    });
   });
 
   it('falls back to the allowlisted Amazon origin for an untrusted domain', async () => {

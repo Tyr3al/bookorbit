@@ -29,6 +29,11 @@ function makeBookRow(id: number, overrides?: Partial<Parameters<typeof assembleB
 }
 
 describe('assembleBookCards', () => {
+  it('preserves each book library ID for permission checks', () => {
+    const cards = assembleBookCards([makeBookRow(1, { libraryId: 7 }), makeBookRow(2, { libraryId: 8 })], [], [], [], []);
+    expect(cards.map((card) => card.libraryId)).toEqual([7, 8]);
+  });
+
   it('assembles a simple book card with authors and files', () => {
     const rows = [makeBookRow(1)];
     const authorRows = [{ bookId: 1, name: 'Author A' }];
@@ -93,6 +98,28 @@ describe('assembleBookCards', () => {
     expect(card.hardcoverEditionId).toBe('8941973');
   });
 
+  it('includes EPUB media-overlay capability when present on file rows', () => {
+    const rows = [makeBookRow(1)];
+    const fileRows = [
+      {
+        bookId: 1,
+        id: 10,
+        format: 'epub',
+        role: 'primary',
+        sizeBytes: 4096,
+        mediaOverlayAvailable: true,
+        mediaOverlayDurationSeconds: 42,
+        mediaOverlayCheckedAt: new Date('2026-01-01T00:00:00.000Z'),
+      },
+    ];
+
+    const [card] = assembleBookCards(rows, [], fileRows, [], []);
+
+    expect(card.files).toEqual([
+      { id: 10, format: 'epub', role: 'primary', sizeBytes: 4096, mediaOverlay: { available: true, durationSeconds: 42 } },
+    ]);
+  });
+
   it('falls back to basename of folderPath when title is null', () => {
     const rows = [makeBookRow(2, { title: null, folderPath: '/books/my-book-folder' })];
 
@@ -117,14 +144,31 @@ describe('assembleBookCards', () => {
     expect(card.readingProgress).toBe(45);
   });
 
-  it('falls back to first file for progress when no primary file exists', () => {
+  it('falls back to the first content file for progress when no primary file exists', () => {
     const rows = [makeBookRow(1)];
-    const fileRows = [{ bookId: 1, id: 11, format: 'pdf', role: 'supplemental', sizeBytes: null }];
+    const fileRows = [
+      { bookId: 1, id: 10, format: 'jpg', role: 'cover', sizeBytes: null },
+      { bookId: 1, id: 11, format: 'pdf', role: 'content', sizeBytes: null },
+    ];
     const progressRows = [{ bookFileId: 11, percentage: 30 }];
 
     const [card] = assembleBookCards(rows, [], fileRows, [], progressRows);
 
     expect(card.readingProgress).toBe(30);
+    expect(card.files.find((file) => file.role === 'primary')?.id).toBe(11);
+  });
+
+  it('never makes a cover or sidecar the primary', () => {
+    const rows = [makeBookRow(1)];
+    const fileRows = [
+      { bookId: 1, id: 10, format: 'jpg', role: 'cover', sizeBytes: null },
+      { bookId: 1, id: 11, format: 'opf', role: 'metadata', sizeBytes: null },
+    ];
+
+    const [card] = assembleBookCards(rows, [], fileRows, [], [{ bookFileId: 10, percentage: 30 }]);
+
+    expect(card.files.some((file) => file.role === 'primary')).toBe(false);
+    expect(card.readingProgress).toBeNull();
   });
 
   it('returns null readingProgress when there are no files', () => {

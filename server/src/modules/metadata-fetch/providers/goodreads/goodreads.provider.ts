@@ -2,13 +2,16 @@ import { Injectable, Logger } from '@nestjs/common';
 import { MetadataCandidate, MetadataProviderKey } from '@bookorbit/types';
 
 import { ProviderConfigService } from '../../../metadata-preferences/provider-config.service';
+import { markProviderDegraded, markProviderFailed } from '../../../../common/provider-cache/provider-call-context';
+import type { ProviderCacheSpec } from '../../../../common/provider-cache/provider-cache-spec';
 import { sanitizeLogValue } from '../../../../common/utils/log-sanitize.utils';
 import { fetchWithThrottle } from '../../fetch-with-throttle';
 import { ProviderThrottleError } from '../../provider-throttle.error';
 import { IdentifiableProvider } from '../metadata-provider';
 import { PROVIDER_BUDGETS_MS, PROVIDER_DELAYS_MS, PROVIDER_LIMITS, PROVIDER_RETRY, PROVIDER_TIMEOUT_MS } from '../provider-constants';
 import { MetadataSearchParams } from '../metadata-search-params';
-import { buildRequestSignal, createSearchDeadline, SearchDeadline, sleep } from '../provider-utils';
+import { pickSearchInputs, providerCacheContext } from '../provider-cache';
+import { buildRequestSignal, createSearchDeadline, rethrowWithPartialCandidates, SearchDeadline, sleep } from '../provider-utils';
 import { mapGoodreadsApolloState, mapGoodreadsAutocompleteItem } from './goodreads.mapper';
 import { GoodreadsAutocompleteItem, GoodreadsNextData } from './goodreads.types';
 
@@ -44,8 +47,19 @@ export class GoodreadsProvider implements IdentifiableProvider {
   readonly key = MetadataProviderKey.GOODREADS;
   readonly label = 'Goodreads';
   readonly identifiable = true as const;
+  readonly coverShape = 'portrait' as const;
 
   private readonly logger = new Logger(GoodreadsProvider.name);
+
+  readonly cache: ProviderCacheSpec<MetadataSearchParams> = {
+    version: 1,
+    trustEmpty: false,
+    context: async () => providerCacheContext((await this.providerConfig.getConfig()).goodreads.enabled),
+    // An ISBN picks the query, but title and author still rank what autocomplete returns for it.
+    describeSearch: (params) => ({ inputs: pickSearchInputs(params, ['title', 'author', 'isbn']) }),
+    // Only the blocked fallback reads the search fields, and it is never cached.
+    describeLookup: (providerId) => ({ inputs: { id: providerId } }),
+  };
 
   constructor(private readonly providerConfig: ProviderConfigService) {}
 
@@ -58,26 +72,49 @@ export class GoodreadsProvider implements IdentifiableProvider {
     // run of retries push the whole search past the hard provider timeout and lose everything.
     const deadline = createSearchDeadline(PROVIDER_BUDGETS_MS.GOODREADS_SEARCH, params.signal);
     try {
-      const targets = params.isbn
-        ? await this.findIdByIsbn(params.isbn, deadline).then((id): GoodreadsSearchTarget[] => (id ? [{ id }] : []))
-        : await this.searchTargets(params, deadline);
+      const targets = await this.searchTargets(params, deadline);
 
       // Try the detail scrape first, since it is the only source of a full description. A page that
       // loads but fails to parse, or one that is briefly unavailable, only costs this one book.
       const results: MetadataCandidate[] = [];
-      for (const target of targets.slice(0, PROVIDER_LIMITS.GOODREADS_MAX_RESULTS)) {
-        let candidate: MetadataCandidate | null = null;
-        if (!deadline.expired()) {
-          if (results.length > 0) await sleep(PROVIDER_DELAYS_MS.GOODREADS_BETWEEN_REQUESTS, deadline.signal).catch(() => undefined);
-          // The pause between requests spends budget, so re-check before committing to a fetch.
+      try {
+        const limitedTargets = targets.slice(0, PROVIDER_LIMITS.GOODREADS_MAX_RESULTS);
+        for (let index = 0; index < limitedTargets.length; index++) {
+          const target = limitedTargets[index];
+          let candidate: MetadataCandidate | null = null;
+          let autocompleteCandidate: MetadataCandidate | null = null;
+          let blocked = false;
           if (!deadline.expired()) {
-            const detail = await this.fetchBook(target.id, deadline);
-            candidate = detail.candidate;
-            if (detail.outcome === 'blocked') throw blockedError();
+            if (results.length > 0) await sleep(PROVIDER_DELAYS_MS.GOODREADS_BETWEEN_REQUESTS, deadline.signal).catch(() => undefined);
+            // The pause between requests spends budget, so re-check before committing to a fetch.
+            if (!deadline.expired()) {
+              const detail = await this.fetchBook(target.id, deadline);
+              candidate = detail.candidate;
+              blocked = detail.outcome === 'blocked';
+            }
+          }
+          if (!candidate && target.item) {
+            markProviderDegraded('goodreads.search: autocomplete summary in place of detail');
+            autocompleteCandidate = mapGoodreadsAutocompleteItem(target.item, target.id);
+            candidate = autocompleteCandidate;
+          }
+          if (candidate) results.push(candidate);
+          else markProviderDegraded('goodreads.search: book skipped');
+          if (blocked) {
+            // Goodreads keeps autocomplete available while WAF gates HTML pages. Keep the source
+            // useful with summary candidates instead of putting the whole provider in cooldown.
+            if (!autocompleteCandidate) throw blockedError();
+            markProviderDegraded('goodreads.search: blocked, remaining books from autocomplete');
+            for (const remaining of limitedTargets.slice(index + 1)) {
+              if (!remaining.item) continue;
+              const fallback = mapGoodreadsAutocompleteItem(remaining.item, remaining.id);
+              if (fallback) results.push(fallback);
+            }
+            break;
           }
         }
-        if (!candidate && target.item) candidate = mapGoodreadsAutocompleteItem(target.item, target.id);
-        if (candidate) results.push(candidate);
+      } catch (err) {
+        rethrowWithPartialCandidates(err, results);
       }
 
       return results;
@@ -86,14 +123,20 @@ export class GoodreadsProvider implements IdentifiableProvider {
     }
   }
 
-  async lookupById(providerId: string, signal?: AbortSignal): Promise<MetadataCandidate | null> {
+  async lookupById(providerId: string, signal?: AbortSignal, params?: MetadataSearchParams): Promise<MetadataCandidate | null> {
     const { enabled } = await this.providerConfig.getConfig().then((c) => c.goodreads);
     if (!enabled) return null;
 
     const deadline = createSearchDeadline(PROVIDER_BUDGETS_MS.GOODREADS_SEARCH, signal);
     try {
       const { candidate, outcome } = await this.fetchBook(providerId, deadline);
-      if (outcome === 'blocked') throw blockedError();
+      if (outcome === 'blocked') {
+        markProviderDegraded('goodreads.lookup: blocked, autocomplete fallback');
+        if (!params) throw blockedError();
+        const targets = await this.searchAutocompleteTargets(params, deadline);
+        const matchingItem = targets.find((target) => target.id === providerId)?.item;
+        return matchingItem ? mapGoodreadsAutocompleteItem(matchingItem, providerId) : null;
+      }
       return candidate;
     } finally {
       deadline.dispose();
@@ -101,11 +144,27 @@ export class GoodreadsProvider implements IdentifiableProvider {
   }
 
   private async searchTargets(params: MetadataSearchParams, deadline: SearchDeadline): Promise<GoodreadsSearchTarget[]> {
+    const autocompleteTargets = await this.searchAutocompleteTargets(params, deadline);
+    if (autocompleteTargets.length > 0) return autocompleteTargets;
+    if (deadline.expired()) return [];
+
+    if (params.isbn) {
+      const id = await this.findIdByIsbn(params.isbn, deadline);
+      return id ? [{ id }] : [];
+    }
+
     const query = [params.title, params.author].filter(Boolean).join(' ');
     if (!query.trim()) return [];
 
     // Goodreads search pages are frequently gated behind WAF challenges.
     // Prefer the JSON autocomplete endpoint, then fall back to HTML scraping.
+    const searchUrl = `https://www.goodreads.com/search?q=${encodeURIComponent(query)}&search_type=books`;
+    const { html } = await this.fetchHtml(searchUrl, 'search', { query, deadline });
+    const ids = html ? extractBookIds(html, params.title, PROVIDER_LIMITS.GOODREADS_MAX_RESULTS) : [];
+    return ids.map((id) => ({ id }));
+  }
+
+  private async searchAutocompleteTargets(params: MetadataSearchParams, deadline: SearchDeadline): Promise<GoodreadsSearchTarget[]> {
     const autocompleteItems: GoodreadsAutocompleteItem[] = [];
     for (const autocompleteQuery of buildAutocompleteQueries(params)) {
       if (deadline.expired()) break;
@@ -118,15 +177,9 @@ export class GoodreadsProvider implements IdentifiableProvider {
         deadline.signal,
       );
       if (Array.isArray(autocomplete)) autocompleteItems.push(...autocomplete);
+      else if (autocomplete !== null) markProviderFailed('goodreads.search-autocomplete: response not a list');
     }
-    const autocompleteTargets = rankAutocompleteItems(autocompleteItems, params, PROVIDER_LIMITS.GOODREADS_MAX_RESULTS);
-    if (autocompleteTargets.length > 0) return autocompleteTargets;
-    if (deadline.expired()) return [];
-
-    const searchUrl = `https://www.goodreads.com/search?q=${encodeURIComponent(query)}&search_type=books`;
-    const { html } = await this.fetchHtml(searchUrl, 'search', { query, deadline });
-    const ids = html ? extractBookIds(html, params.title, PROVIDER_LIMITS.GOODREADS_MAX_RESULTS) : [];
-    return ids.map((id) => ({ id }));
+    return rankAutocompleteItems(autocompleteItems, params, PROVIDER_LIMITS.GOODREADS_MAX_RESULTS);
   }
 
   private async findIdByIsbn(isbn: string, deadline: SearchDeadline): Promise<string | null> {
@@ -151,8 +204,9 @@ export class GoodreadsProvider implements IdentifiableProvider {
     if (!html) return { candidate: null, outcome };
     const nextData = extractNextData(html);
     const state = nextData?.props?.pageProps?.apolloState;
-    if (!state) return { candidate: null, outcome: 'ok' };
-    return { candidate: mapGoodreadsApolloState(state, bookId), outcome: 'ok' };
+    const candidate = state ? mapGoodreadsApolloState(state, bookId) : null;
+    if (!candidate) markProviderDegraded('goodreads.lookup: book page did not parse');
+    return { candidate, outcome: 'ok' };
   }
 
   /**
@@ -199,6 +253,7 @@ export class GoodreadsProvider implements IdentifiableProvider {
       }
       const html = await res.text();
       if (isWafChallenge(res.status, html)) {
+        markProviderDegraded(`goodreads.${op}: bot challenge`);
         this.logger.warn(`[goodreads] [fail] op=${op}${suffix} status=${res.status} durationMs=${Date.now() - startedAt} message="bot challenge"`);
         return { html: null, outcome: 'blocked' };
       }
@@ -209,6 +264,7 @@ export class GoodreadsProvider implements IdentifiableProvider {
         this.logger.warn(`[goodreads] [fail] op=${op}${suffix} durationMs=${Date.now() - startedAt} message="throttled"`);
         throw err;
       }
+      markProviderFailed(`goodreads.${op}: request failed`);
       this.logger.warn(
         `[goodreads] [fail] op=${op}${suffix} durationMs=${Date.now() - startedAt} message="${err instanceof Error ? err.message : String(err)}"`,
       );
@@ -243,6 +299,7 @@ export class GoodreadsProvider implements IdentifiableProvider {
         );
         throw err;
       }
+      markProviderFailed(`goodreads.${op}: unusable response`);
       this.logger.warn(
         `[goodreads] [fail] op=${op}${safeQuery ? ` query="${safeQuery}"` : ''}${safeProviderId ? ` providerId="${safeProviderId}"` : ''} durationMs=${Date.now() - startedAt} message="${err instanceof Error ? err.message : String(err)}"`,
       );
@@ -266,7 +323,7 @@ function extractNextData(html: string): GoodreadsNextData | null {
 // AWS WAF serves a JavaScript token challenge with a 202 status instead of the
 // real page. A plain fetch cannot solve it, so treat it as a failed fetch.
 function isWafChallenge(status: number, html: string): boolean {
-  return status === 202 || /awsWafCookieDomainList|AwsWafIntegration|id="challenge-container"|challenge\.js/.test(html);
+  return status === 202 || /awsWafCookieDomainList|AwsWafIntegration|id=["']challenge-container["']/.test(html);
 }
 
 // Goodreads sheds load with a bare 503 and no Retry-After. 429 never reaches here: fetchWithThrottle
@@ -289,6 +346,8 @@ function blockedError(): ProviderThrottleError {
 }
 
 function buildAutocompleteQueries(params: MetadataSearchParams): string[] {
+  const isbn = params.isbn?.trim();
+  if (isbn) return [isbn];
   const title = params.title?.trim();
   const author = params.author?.trim();
   const queries = title ? [title, [title, author].filter(Boolean).join(' ')] : [author ?? ''];

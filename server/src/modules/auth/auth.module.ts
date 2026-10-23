@@ -1,3 +1,5 @@
+import { AuthSessionRepository } from './auth-session.repository';
+import { AuthSessionService } from './auth-session.service';
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
@@ -45,6 +47,8 @@ import { OidcTokenValidatorService } from './oidc/oidc-token-validator.service';
   controllers: [AuthController],
   providers: [
     AuthService,
+    AuthSessionRepository,
+    AuthSessionService,
     JwtStrategy,
     MagicLinkRepository,
     MagicLinkService,
@@ -60,6 +64,6 @@ import { OidcTokenValidatorService } from './oidc/oidc-token-validator.service';
     OidcCleanupService,
     OidcCleanupJob,
   ],
-  exports: [AuthService],
+  exports: [AuthService, JwtModule],
 })
 export class AuthModule {}

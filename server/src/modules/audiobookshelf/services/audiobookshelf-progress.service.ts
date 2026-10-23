@@ -135,7 +135,7 @@ export class AudiobookshelfProgressService {
     const existingRows = await this.repository.findProgressByUserIdAndBookIds(user.id, [book.id]);
     const existing = existingRows[0];
     const incomingUpdatedAt = resolveIncomingUpdatedAt(input);
-    if (existing && incomingUpdatedAt !== null && existing.updatedAt.getTime() > incomingUpdatedAt.getTime()) {
+    if (existing && incomingUpdatedAt !== null && existing.capturedAt.getTime() > incomingUpdatedAt.getTime()) {
       return this.toMediaProgress(existing, orderedFiles);
     }
     const totalDuration = orderedFiles.reduce((sum, file) => sum + (file.durationSeconds ?? 0), 0);
@@ -344,7 +344,7 @@ export class AudiobookshelfProgressService {
           skipped += group.length;
           return;
         }
-        let lastUpdatedAt = progressByBookId.get(bookId)?.updatedAt;
+        let lastUpdatedAt = progressByBookId.get(bookId)?.capturedAt;
         for (const entry of group) {
           try {
             const wasApplied = await this.applyProgressEntry(user, bookId, entry.input, orderedFiles, lastUpdatedAt);

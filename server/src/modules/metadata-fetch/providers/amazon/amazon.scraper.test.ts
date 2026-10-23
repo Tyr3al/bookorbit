@@ -41,6 +41,21 @@ describe('AmazonScraper', () => {
       const result = extractAsins(html, 5);
       expect(result).toEqual(['GOOD123456']);
     });
+
+    it('should skip sponsored cards before following unrelated format links', () => {
+      const html = `
+        <div data-component-type="s-search-result" data-asin="SPONSOR001">
+          <div data-cy="title-recipe">Sponsored Sponsored result</div>
+          <a href="/dp/SERIES0001">Book 1 of 3: A Series</a>
+        </div>
+        <div data-component-type="s-search-result" data-asin="B123456789">
+          <div data-cy="title-recipe">Wanted Book</div>
+          <a href="/dp/B123456789">Kindle</a>
+        </div>
+      `;
+
+      expect(extractAsins(html, 5)).toEqual(['B123456789']);
+    });
   });
 
   describe('parseBookPage', () => {
@@ -181,5 +196,34 @@ describe('AmazonScraper', () => {
       expect(result.communityRating).toBe(4.0);
       expect(result.communityRatingCount).toBeUndefined();
     });
+  });
+});
+
+describe('Amazon cover size', () => {
+  function page(dynamicImage: string): string {
+    return `<span id="productTitle">Dune</span><img id="landingImage" data-a-dynamic-image='${dynamicImage}'>`;
+  }
+
+  it('reads an unsized pair as height then width, the order Amazon pages use', () => {
+    expect(parseBookPage(page('{"https://m.media-amazon.com/images/I/1.jpg": [461, 300]}'))).toMatchObject({
+      coverWidth: 300,
+      coverHeight: 461,
+    });
+  });
+
+  it('lets the sized side of a variant url say which number is which', () => {
+    expect(parseBookPage(page('{"https://m.media-amazon.com/images/I/1._SY522_.jpg": [522, 340]}'))).toMatchObject({
+      coverWidth: 340,
+      coverHeight: 522,
+    });
+    expect(parseBookPage(page('{"https://m.media-amazon.com/images/I/1._SX300_.jpg": [300, 461]}'))).toMatchObject({
+      coverWidth: 300,
+      coverHeight: 461,
+    });
+  });
+
+  it('keeps the largest declared size', () => {
+    const map = '{"https://m.media-amazon.com/images/I/1._SY200_.jpg": [200, 130], "https://m.media-amazon.com/images/I/1._SY522_.jpg": [522, 340]}';
+    expect(parseBookPage(page(map))).toMatchObject({ coverWidth: 340, coverHeight: 522 });
   });
 });

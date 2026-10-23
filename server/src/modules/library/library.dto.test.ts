@@ -33,6 +33,39 @@ describe('Library DTO validation', () => {
     ).toBe(false);
   });
 
+  it('CreateLibraryDto accepts every added_at source and rejects unknown ones', async () => {
+    for (const addedAtSource of ['imported', 'file_modified', 'file_created']) {
+      expect(await hasErrors(plainToInstance(CreateLibraryDto, { name: 'x', icon: 'BookOpen', folders: ['/a'], addedAtSource }))).toBe(false);
+    }
+    expect(await hasErrors(plainToInstance(CreateLibraryDto, { name: 'x', icon: 'BookOpen', folders: ['/a'], addedAtSource: 'bad' }))).toBe(true);
+  });
+
+  it('CreateLibraryDto survives the global whitelist rules with an added_at source', async () => {
+    // The library creator posts its whole form, and main.ts runs ValidationPipe with
+    // whitelist and forbidNonWhitelisted, so a field the DTO does not declare fails
+    // the whole request rather than being quietly dropped.
+    const dto = plainToInstance(CreateLibraryDto, { name: 'x', icon: 'BookOpen', folders: ['/a'], addedAtSource: 'file_modified' });
+    const errors = await validate(dto as any, { whitelist: true, forbidNonWhitelisted: true });
+    expect(errors).toHaveLength(0);
+  });
+
+  it('CreateLibraryDto accepts known library types and rejects null or unknown types', async () => {
+    const base = { name: 'Podcasts', icon: 'Podcast', folders: ['/podcasts'] };
+
+    expect(await hasErrors(plainToInstance(CreateLibraryDto, { ...base, type: 'podcasts' }))).toBe(false);
+    expect(await hasErrors(plainToInstance(CreateLibraryDto, { ...base, type: null }))).toBe(true);
+    expect(await hasErrors(plainToInstance(CreateLibraryDto, { ...base, type: 'music' }))).toBe(true);
+  });
+
+  it('library DTOs validate the podcast local-folder watcher setting as a boolean', async () => {
+    const base = { type: 'podcasts', name: 'Podcasts', icon: 'Podcast', folders: ['/podcasts'] };
+
+    expect(await hasErrors(plainToInstance(CreateLibraryDto, { ...base, watchLocalFolders: true }))).toBe(false);
+    expect(await hasErrors(plainToInstance(CreateLibraryDto, { ...base, watchLocalFolders: 'yes' }))).toBe(true);
+    expect(await hasErrors(plainToInstance(UpdateLibraryDto, { watchLocalFolders: false }))).toBe(false);
+    expect(await hasErrors(plainToInstance(UpdateLibraryDto, { watchLocalFolders: 0 }))).toBe(true);
+  });
+
   it('CreateLibraryDto requires a non-empty icon and UpdateLibraryDto rejects empty icons when provided', async () => {
     expect(await hasErrors(plainToInstance(CreateLibraryDto, { name: 'Sci-Fi', folders: ['/books/scifi'] }))).toBe(true);
     expect(await hasErrors(plainToInstance(CreateLibraryDto, { name: 'Sci-Fi', icon: '   ', folders: ['/books/scifi'] }))).toBe(true);
@@ -61,9 +94,13 @@ describe('Library DTO validation', () => {
     expect(await hasErrors(plainToInstance(UpdateLibraryAccessDto, { accessLevel: 'owner' }))).toBe(false);
   });
 
-  it('PrescanLibraryDto requires at least one non-empty path', async () => {
+  it('PrescanLibraryDto requires at least one non-empty path and validates an optional library ID', async () => {
     expect(await hasErrors(plainToInstance(PrescanLibraryDto, { paths: [''] }))).toBe(true);
     expect(await hasErrors(plainToInstance(PrescanLibraryDto, { paths: ['/books'] }))).toBe(false);
+    expect(await hasErrors(plainToInstance(PrescanLibraryDto, { paths: ['/books'], libraryId: 12 }))).toBe(false);
+    expect(await hasErrors(plainToInstance(PrescanLibraryDto, { paths: ['/books'], libraryId: 0 }))).toBe(true);
+    expect(await hasErrors(plainToInstance(PrescanLibraryDto, { paths: ['/books'], libraryId: 1.5 }))).toBe(true);
+    expect(await hasErrors(plainToInstance(PrescanLibraryDto, { paths: ['/books'], libraryId: '12' }))).toBe(true);
   });
 
   it('ReorderLibrariesDto validates nested order items', async () => {
@@ -86,7 +123,9 @@ describe('Library DTO validation', () => {
     const base = { name: 'x', icon: 'BookOpen', folders: ['/a'] };
     expect(await hasErrors(plainToInstance(CreateLibraryDto, { ...base, markAsFinishedPercentComplete: 89 }))).toBe(true);
     expect(await hasErrors(plainToInstance(CreateLibraryDto, { ...base, markAsFinishedPercentComplete: 101 }))).toBe(true);
-    expect(await hasErrors(plainToInstance(CreateLibraryDto, { ...base, markAsFinishedPercentComplete: 90.5 }))).toBe(true);
+    expect(await hasErrors(plainToInstance(CreateLibraryDto, { ...base, markAsFinishedPercentComplete: 90.05 }))).toBe(false);
+    expect(await hasErrors(plainToInstance(CreateLibraryDto, { ...base, markAsFinishedPercentComplete: 99.95 }))).toBe(false);
+    expect(await hasErrors(plainToInstance(CreateLibraryDto, { ...base, markAsFinishedPercentComplete: 100.05 }))).toBe(true);
     expect(await hasErrors(plainToInstance(CreateLibraryDto, { ...base, markAsFinishedPercentComplete: 90 }))).toBe(false);
     expect(await hasErrors(plainToInstance(CreateLibraryDto, { ...base, markAsFinishedPercentComplete: 100 }))).toBe(false);
   });
@@ -96,6 +135,73 @@ describe('Library DTO validation', () => {
     expect(await hasErrors(plainToInstance(UpdateLibraryDto, { readingThreshold: 2.5 }))).toBe(false);
     expect(await hasErrors(plainToInstance(UpdateLibraryDto, { markAsFinishedPercentComplete: 89 }))).toBe(true);
     expect(await hasErrors(plainToInstance(UpdateLibraryDto, { markAsFinishedPercentComplete: 95 }))).toBe(false);
+    expect(await hasErrors(plainToInstance(UpdateLibraryDto, { markAsFinishedPercentComplete: 99.95 }))).toBe(false);
+  });
+
+  it('validates the read-along toggle and size limit', async () => {
+    const base = { name: 'Books', icon: 'BookOpen', folders: ['/books'] };
+    expect(
+      await hasErrors(plainToInstance(CreateLibraryDto, { ...base, fileWriteReadAlongEnabled: true, fileWriteReadAlongMaxFileSizeMb: 1000 })),
+    ).toBe(false);
+    expect(await hasErrors(plainToInstance(UpdateLibraryDto, { fileWriteReadAlongMaxFileSizeMb: 10000 }))).toBe(false);
+    expect(await hasErrors(plainToInstance(UpdateLibraryDto, { fileWriteReadAlongMaxFileSizeMb: 10001 }))).toBe(true);
+    expect(await hasErrors(plainToInstance(UpdateLibraryDto, { fileWriteReadAlongMaxFileSizeMb: 0 }))).toBe(true);
+    expect(await hasErrors(plainToInstance(UpdateLibraryDto, { fileWriteReadAlongEnabled: 'yes' }))).toBe(true);
+  });
+
+  describe('null on settings that cannot be null', () => {
+    const NOT_NULL_FIELDS = [
+      'displayOrder',
+      'localFolders',
+      'watchLocalFolders',
+      'coverAspectRatio',
+      'watch',
+      'metadataPrecedence',
+      'formatPriority',
+      'allowedFormats',
+      'organizationMode',
+      'excludePatterns',
+      'readingThreshold',
+      'markAsFinishedPercentComplete',
+      'fileWriteEnabled',
+      'fileWriteWriteCover',
+      'fileWriteEpubEnabled',
+      'fileWriteEpubMaxFileSizeMb',
+      'fileWriteFb2Enabled',
+      'fileWriteFb2MaxFileSizeMb',
+      'fileWritePdfEnabled',
+      'fileWritePdfMaxFileSizeMb',
+      'fileWriteCbxEnabled',
+      'fileWriteCbxMaxFileSizeMb',
+      'fileWriteKindleEnabled',
+      'fileWriteKindleMaxFileSizeMb',
+      'fileWriteAudioEnabled',
+      'fileWriteAudioMaxFileSizeMb',
+      'fileWriteAllFiles',
+      'fileWriteReadAlongEnabled',
+      'fileWriteReadAlongMaxFileSizeMb',
+      'fileRenameEnabled',
+    ];
+    const createBase = { name: 'Books', icon: 'BookOpen', folders: ['/books'] };
+
+    it.each(NOT_NULL_FIELDS)('rejects null for %s on create and update instead of failing in the database', async (field) => {
+      expect(await hasErrors(plainToInstance(CreateLibraryDto, { ...createBase, [field]: null }))).toBe(true);
+      expect(await hasErrors(plainToInstance(UpdateLibraryDto, { [field]: null }))).toBe(true);
+    });
+
+    it.each(['name', 'folders'])('rejects null for %s on update', async (field) => {
+      expect(await hasErrors(plainToInstance(UpdateLibraryDto, { [field]: null }))).toBe(true);
+    });
+
+    it.each(['autoScanCronExpression', 'fileNamingPattern'])('still accepts null for %s, which clears it', async (field) => {
+      expect(await hasErrors(plainToInstance(CreateLibraryDto, { ...createBase, [field]: null }))).toBe(false);
+      expect(await hasErrors(plainToInstance(UpdateLibraryDto, { [field]: null }))).toBe(false);
+    });
+
+    it('still accepts every setting being left out', async () => {
+      expect(await hasErrors(plainToInstance(CreateLibraryDto, createBase))).toBe(false);
+      expect(await hasErrors(plainToInstance(UpdateLibraryDto, {}))).toBe(false);
+    });
   });
 
   describe('file write settings validation', () => {
@@ -148,6 +254,14 @@ describe('Library DTO validation', () => {
       expect(await hasErrors(plainToInstance(CreateLibraryDto, { ...base, fileWriteKindleMaxFileSizeMb: 10001 }))).toBe(true);
     });
 
+    it('rejects null and invalid date sources before they reach the database', async () => {
+      for (const addedAtSource of [null, 'unknown', 12]) {
+        expect(await hasErrors(plainToInstance(CreateLibraryDto, { name: 'x', icon: 'BookOpen', folders: ['/a'], addedAtSource }))).toBe(true);
+        expect(await hasErrors(plainToInstance(UpdateLibraryDto, { addedAtSource }))).toBe(true);
+      }
+      expect(await hasErrors(plainToInstance(UpdateLibraryDto, {}))).toBe(false);
+    });
+
     it('CreateLibraryDto accepts the Kindle enable flag', async () => {
       expect(await hasErrors(plainToInstance(CreateLibraryDto, { ...base, fileWriteKindleEnabled: true }))).toBe(false);
       expect(await hasErrors(plainToInstance(CreateLibraryDto, { ...base, fileWriteKindleEnabled: 'yes' }))).toBe(true);
@@ -197,5 +311,48 @@ describe('Library DTO validation', () => {
       });
       expect(await hasErrors(dto)).toBe(false);
     });
+
+    it('keeps the all-files scope optional and boolean on both DTOs', async () => {
+      const options = { whitelist: true, forbidNonWhitelisted: true };
+
+      expect(await validate(plainToInstance(CreateLibraryDto, { ...base }) as object, options)).toHaveLength(0);
+      expect(await validate(plainToInstance(UpdateLibraryDto, {}) as object, options)).toHaveLength(0);
+      for (const fileWriteAllFiles of [true, false]) {
+        expect(await validate(plainToInstance(CreateLibraryDto, { ...base, fileWriteAllFiles }) as object, options)).toHaveLength(0);
+        expect(await validate(plainToInstance(UpdateLibraryDto, { fileWriteAllFiles }) as object, options)).toHaveLength(0);
+      }
+      expect(await hasErrors(plainToInstance(CreateLibraryDto, { ...base, fileWriteAllFiles: 'true' }))).toBe(true);
+      expect(await hasErrors(plainToInstance(UpdateLibraryDto, { fileWriteAllFiles: 1 }))).toBe(true);
+      // The column is NOT NULL, so null is a validation error rather than a 500 from the database.
+      expect(await hasErrors(plainToInstance(CreateLibraryDto, { ...base, fileWriteAllFiles: null }))).toBe(true);
+      expect(await hasErrors(plainToInstance(UpdateLibraryDto, { fileWriteAllFiles: null }))).toBe(true);
+    });
+
+    it('still rejects a field neither DTO declares', async () => {
+      const options = { whitelist: true, forbidNonWhitelisted: true };
+
+      expect(await validate(plainToInstance(CreateLibraryDto, { ...base, fileWriteEveryFile: true }) as object, options)).not.toHaveLength(0);
+      expect(await validate(plainToInstance(UpdateLibraryDto, { fileWriteEveryFile: true }) as object, options)).not.toHaveLength(0);
+    });
+  });
+});
+
+describe('regex metadata DTO validation', () => {
+  it('accepts a nullable config and validates nested rules with the global whitelist', async () => {
+    for (const regexMetadata of [null, { rules: [{ pattern: '(?<title>.+)', flags: 'iu' }] }]) {
+      const dto = plainToInstance(UpdateLibraryDto, { regexMetadata });
+      expect(await validate(dto, { whitelist: true, forbidNonWhitelisted: true })).toEqual([]);
+    }
+  });
+  it.each([
+    { rules: [] },
+    { rules: [{ pattern: '(?<title>.+)', flags: 'g' }] },
+    { rules: [{ pattern: '(?<title>.+)', flags: '', template: '{title}' }] },
+    { rules: [null] },
+    { rules: 'invalid' },
+    [],
+  ])('rejects invalid nested configuration %j', async (regexMetadata) => {
+    const dto = plainToInstance(UpdateLibraryDto, { regexMetadata });
+    expect((await validate(dto, { whitelist: true, forbidNonWhitelisted: true })).length).toBeGreaterThan(0);
   });
 });

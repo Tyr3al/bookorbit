@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
 import { BOOK_METADATA_LOCK_FIELDS, type BookCard, type UserBookStatus } from '@bookorbit/types'
 
+import { i18n } from '@/i18n'
+
 const mocks = vi.hoisted(() => ({
   api: vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<{ ok: boolean }>>(),
   toastSuccess: vi.fn<(message: string) => void>(),
@@ -94,6 +96,7 @@ function makeBook(overrides: Partial<BookCard> = {}): BookCard {
     readStatus: null,
     addedAt: '2026-01-01T00:00:00.000Z',
     updatedAt: null,
+    coverVersion: 'legacy:2026-01-01T00:00:00.000Z',
     metadataScore: null,
     hasCover: false,
     hasMetadataLocks: false,
@@ -242,6 +245,7 @@ describe('useBookBulkActions', () => {
     expect(books.value[0]?.lockedFields).toEqual([...BOOK_METADATA_LOCK_FIELDS])
     expect(books.value[1]?.lockedFields).toEqual([])
     expect(books.value[2]?.lockedFields).toEqual([...BOOK_METADATA_LOCK_FIELDS])
+    expect(books.value[0]?.lockedFields).toEqual(expect.arrayContaining(['cover', 'audioCover']))
   })
 
   it('skips local field updates for selected books where that field is locked', async () => {
@@ -487,6 +491,37 @@ describe('useBookBulkActions', () => {
     expect(mocks.bumpVersion.mock.calls.filter((c) => c[0] === 20).length).toBe(1)
   })
 
+  it('sends the bulk metadata refresh body unchanged unless cached results are ignored', async () => {
+    mocks.api.mockResolvedValue(makeSseStream([`data: ${JSON.stringify({ done: true, processed: 0, failed: 0 })}`]))
+
+    const selectedIds = ref(new Set([10, 20]))
+    const { handleBulkRefreshMetadata } = useBookBulkActions(selectedIds, vi.fn())
+
+    await handleBulkRefreshMetadata()
+    await handleBulkRefreshMetadata({ ignoreCache: false })
+    await handleBulkRefreshMetadata({ ignoreCache: true })
+
+    const bodies = mocks.api.mock.calls
+      .filter(([url]) => url === '/api/v1/books/bulk-refresh-metadata')
+      .map(([, init]) => JSON.parse(String(init?.body)) as Record<string, unknown>)
+    expect(bodies).toEqual([{ bookIds: [10, 20] }, { bookIds: [10, 20] }, { bookIds: [10, 20], ignoreCache: true }])
+  })
+
+  it('adds ignoreCache to a query-scoped bulk metadata refresh only when asked', async () => {
+    mocks.api.mockResolvedValue(makeSseStream([`data: ${JSON.stringify({ done: true, processed: 0, failed: 0 })}`]))
+
+    const querySelection = ref<QuerySelectionState | null>(makeQuerySelection())
+    const { handleBulkRefreshMetadata } = useBookBulkActions(ref(new Set<number>()), vi.fn(), undefined, undefined, querySelection)
+
+    await handleBulkRefreshMetadata({ ignoreCache: true })
+
+    const [, init] = mocks.api.mock.calls.find(([url]) => url === '/api/v1/books/bulk-refresh-metadata')!
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+    expect(body).toHaveProperty('query')
+    expect(body).not.toHaveProperty('bookIds')
+    expect(body.ignoreCache).toBe(true)
+  })
+
   it('does not bump for query-selection books that received no SSE event', async () => {
     mocks.api.mockResolvedValue(
       makeSseStream([`data: ${JSON.stringify({ bookId: 42, success: true })}`, `data: ${JSON.stringify({ done: true, processed: 1, failed: 0 })}`]),
@@ -518,6 +553,26 @@ describe('useBookBulkActions', () => {
     expect(mocks.bumpVersion).toHaveBeenCalledWith(40)
     expect(mocks.bumpVersion.mock.calls.filter((c) => c[0] === 30).length).toBe(1)
     expect(mocks.bumpVersion.mock.calls.filter((c) => c[0] === 40).length).toBe(1)
+  })
+
+  it('reports the bulk re-extract outcome through the English source catalog', async () => {
+    i18n.global.locale.value = 'en'
+    mocks.api.mockResolvedValue(makeSseStream([`data: ${JSON.stringify({ done: true, processed: 2, updated: 1 })}`]))
+
+    const { handleBulkReExtractCover } = useBookBulkActions(ref(new Set([30, 40])), vi.fn())
+    await handleBulkReExtractCover()
+
+    expect(mocks.toastSuccess).toHaveBeenCalledWith('Re-extracted 1 of 2 covers')
+  })
+
+  it('reports a failed bulk re-extract request', async () => {
+    i18n.global.locale.value = 'en'
+    mocks.api.mockResolvedValue({ ok: false })
+
+    const { handleBulkReExtractCover } = useBookBulkActions(ref(new Set([30])), vi.fn())
+    await handleBulkReExtractCover()
+
+    expect(mocks.toastError).toHaveBeenCalledWith('Could not re-extract covers')
   })
 
   it('bumps all re-extract IDs in finally when stream delivers no events', async () => {

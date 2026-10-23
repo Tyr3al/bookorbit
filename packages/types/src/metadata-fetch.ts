@@ -1,4 +1,6 @@
 import type { AudiobookChapter, NarratorRef } from "./audiobook";
+import type { CoverMedium } from "./book";
+import type { MetadataCacheServedProvider, MetadataCandidateCacheInfo } from "./metadata-cache";
 import type { SeriesIndex } from "./series-index";
 
 export const MetadataProviderKey = {
@@ -59,6 +61,33 @@ export interface BookCommunityRating {
   updatedAt: string | null;
 }
 
+/**
+ * The shape of a candidate's cover as the provider knows it, without downloading the image. A
+ * provider that cannot tell (a book-level image that may belong to any edition) says `unknown`.
+ */
+export type MetadataCoverShape = "square" | "portrait" | "unknown";
+
+/**
+ * Width over height from this ratio through `SQUARE_COVER_MAX_RATIO` reads as square art. Measured
+ * on provider covers in September 2026: real audiobook art sat at 0.998-1.000, while portrait
+ * jackets padded to 0.93 and box-set photos came between 0.90 and 0.95, so the floor sits above them.
+ */
+export const SQUARE_COVER_MIN_RATIO = 0.95;
+export const SQUARE_COVER_MAX_RATIO = 1.1;
+/** Width over height at or below this reads as a portrait jacket; real ebook art reached 0.85. */
+export const PORTRAIT_COVER_MAX_RATIO = 0.85;
+/** Provider placeholders and search thumbnails are smaller than this on their short side; no real cover is. */
+export const MIN_COVER_SHORT_SIDE_PX = 150;
+
+/** The shape of a cover of this size, or `unknown` for a size that is neither square nor portrait. */
+export function coverShapeFromSize(width: number | null | undefined, height: number | null | undefined): MetadataCoverShape {
+  if (!width || !height || width <= 0 || height <= 0) return "unknown";
+  const ratio = width / height;
+  if (ratio >= SQUARE_COVER_MIN_RATIO && ratio <= SQUARE_COVER_MAX_RATIO) return "square";
+  if (ratio <= PORTRAIT_COVER_MAX_RATIO) return "portrait";
+  return "unknown";
+}
+
 export interface MetadataCandidate {
   provider: MetadataProviderKey;
   providerId: string;
@@ -83,6 +112,10 @@ export interface MetadataCandidate {
   seriesMemberships?: MetadataSeriesMembership[];
   genres?: string[];
   coverUrl?: string;
+  coverShape?: MetadataCoverShape;
+  /** Pixel size of the cover when the provider states it, so a shape can be checked without a download. */
+  coverWidth?: number;
+  coverHeight?: number;
   sourceUrl?: string;
   narrators?: string[];
   durationSeconds?: number;
@@ -94,11 +127,21 @@ export interface MetadataCandidate {
   communityRatingCount?: number;
 }
 
+/**
+ * A candidate as a search stream sends it. `cache` is present only when the metadata cache answered
+ * for the candidate's provider; it is never part of the candidate itself.
+ */
+export type MetadataSearchCandidateEvent = MetadataCandidate & { cache?: MetadataCandidateCacheInfo };
+
 export interface MetadataProviderInfo {
   key: MetadataProviderKey;
   label: string;
   identifiable: boolean;
   selectedByFieldRules?: boolean;
+  /** Zero-based priority for the effective Cover field rule. Absent when the provider is not used for covers. */
+  coverPriority?: number;
+  /** Zero-based priority for the effective Audiobook cover field rule. Absent when the provider is not used for it. */
+  audioCoverPriority?: number;
 }
 
 /**
@@ -106,6 +149,13 @@ export interface MetadataProviderInfo {
  * client that only reads candidates is unaffected by a provider reporting how it stopped.
  */
 export const METADATA_PROVIDER_STATUS_EVENT = "provider-status";
+
+/**
+ * The most ranked candidates one provider may contribute to a metadata search stream. A search for
+ * one book's match keeps the server's small default; a search that browses, such as finding a book
+ * to request, asks for up to this many with `resultsPerProvider`.
+ */
+export const METADATA_SEARCH_MAX_RESULTS_PER_PROVIDER = 20;
 
 /** Why a provider stopped before finishing, so an interrupted search is not read as an empty one. */
 export type MetadataProviderSearchOutcome = "timeout" | "throttled" | "failed";
@@ -115,7 +165,14 @@ export interface MetadataProviderSearchStatus {
   outcome: MetadataProviderSearchOutcome;
 }
 
-export type MetadataFetchEmptyReason = "no_active_providers" | "providers_throttled" | "no_candidates" | "no_resolved_fields";
+export type MetadataFetchEmptyReason =
+  "no_active_providers" | "no_existing_provider_ids" | "providers_throttled" | "no_candidates" | "no_resolved_fields";
+
+/** How a fetch settled one cover slot. `pass` 2 is the re-query for a book's other medium. */
+export interface MetadataFetchCoverSlotDiagnostics {
+  provider: MetadataProviderKey | null;
+  pass: 1 | 2 | null;
+}
 
 export interface MetadataFetchDiagnostics {
   reason: MetadataFetchEmptyReason | null;
@@ -127,6 +184,10 @@ export interface MetadataFetchDiagnostics {
   candidateProviders: MetadataProviderKey[];
   candidateCount: number;
   resolvedFieldCount: number;
+  /** One entry per cover slot the fetch applied to; a slot outside the book's media is absent. */
+  coverSlots?: Partial<Record<CoverMedium, MetadataFetchCoverSlotDiagnostics>>;
+  /** Providers the metadata cache answered for. Absent on servers without the cache. */
+  cacheServedProviders?: MetadataCacheServedProvider[];
 }
 
 export interface ProviderThrottleRuntimeState {

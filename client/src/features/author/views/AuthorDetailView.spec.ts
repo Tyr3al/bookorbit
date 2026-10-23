@@ -29,12 +29,16 @@ const mocks = vi.hoisted(() => ({
   authorNotFound: null as unknown as Ref<boolean>,
   books: null as unknown as Ref<BookCard[]>,
   total: null as unknown as Ref<number>,
+  bookTotal: null as unknown as Ref<number>,
   loadingBooks: null as unknown as Ref<boolean>,
   booksError: null as unknown as Ref<string | null>,
   hasMore: null as unknown as Ref<boolean>,
   sort: null as unknown as Ref<'addedAt' | 'title' | 'publishedYear'>,
   order: null as unknown as Ref<'asc' | 'desc'>,
   libraryId: null as unknown as Ref<number | null>,
+  collapseSeries: null as unknown as Ref<boolean>,
+  collapsePreference: false,
+  setCollapsePreference: vi.fn<(ctx: unknown, value: boolean | null) => Promise<void>>(),
 }))
 
 vi.mock('vue-router', () => ({
@@ -67,6 +71,10 @@ vi.mock('@/composables/useDisplaySettings', () => ({
 
 vi.mock('@/features/library/composables/useLibraries', () => ({
   useLibraries: () => ({ libraries: ref([]), fetchLibraries: mocks.fetchLibraries }),
+}))
+
+vi.mock('@/features/library/composables/useLibraryPermissions', () => ({
+  useLibraryPermissions: () => ({ hasLibraryPermission: () => true, hasPermissionInAnyLibrary: () => true }),
 }))
 
 vi.mock('@/features/auth/composables/usePermissions', () => ({
@@ -102,13 +110,23 @@ vi.mock('../composables/useAuthorBooks', () => ({
   useAuthorBooks: () => ({
     items: mocks.books,
     total: mocks.total,
+    bookTotal: mocks.bookTotal,
     loading: mocks.loadingBooks,
     error: mocks.booksError,
     hasMore: mocks.hasMore,
     sort: mocks.sort,
     order: mocks.order,
     libraryId: mocks.libraryId,
+    collapseSeries: mocks.collapseSeries,
     load: mocks.loadBooks,
+  }),
+}))
+
+vi.mock('@/features/book/composables/useSeriesCollapsePreference', () => ({
+  useSeriesCollapsePreference: () => ({
+    getEffectivePreference: () => mocks.collapsePreference,
+    setPreference: mocks.setCollapsePreference,
+    prefs: ref(undefined),
   }),
 }))
 
@@ -168,6 +186,7 @@ function makeAuthor(overrides: Partial<AuthorDetail> = {}): AuthorDetail {
     influences: [],
     metadataProvider: null,
     metadataProviderId: null,
+    metadataProviderPinned: false,
     ...overrides,
   }
 }
@@ -186,8 +205,14 @@ async function mountView() {
         AuthorHeader: {
           name: 'AuthorHeader',
           props: ['author'],
-          emits: ['edit', 'merge', 'refresh', 'delete'],
+          emits: ['edit', 'merge', 'refresh', 'delete', 'find-match'],
           template: '<div data-test="author-header">{{ author.bookCount }}</div>',
+        },
+        AuthorMatchSheet: {
+          name: 'AuthorMatchSheet',
+          props: ['author'],
+          emits: ['close', 'updated'],
+          template: '<div data-test="author-match-sheet" />',
         },
         AuthorConfirmDialog: {
           name: 'AuthorConfirmDialog',
@@ -228,12 +253,16 @@ describe('AuthorDetailView', () => {
     mocks.authorNotFound = ref(false)
     mocks.books = ref([makeBook(101), makeBook(102)])
     mocks.total = ref(2)
+    mocks.bookTotal = ref(2)
     mocks.loadingBooks = ref(false)
     mocks.booksError = ref(null)
     mocks.hasMore = ref(false)
     mocks.sort = ref('addedAt')
     mocks.order = ref('desc')
     mocks.libraryId = ref(null)
+    mocks.collapseSeries = ref(false)
+    mocks.collapsePreference = false
+    mocks.setCollapsePreference.mockResolvedValue()
   })
 
   afterEach(() => {
@@ -248,13 +277,21 @@ describe('AuthorDetailView', () => {
     return wrapper
   }
 
+  function inputLabelled(wrapper: Awaited<ReturnType<typeof mountView>>, key: string) {
+    const label = i18n.global.t(key)
+    const match = wrapper.findAll('label').find((candidate) => candidate.text().startsWith(label))
+    expect(match, `no field labelled "${label}"`).toBeDefined()
+    return match!.get('input')
+  }
+
   function editFields(wrapper: Awaited<ReturnType<typeof mountView>>) {
-    const textInputs = wrapper.findAll('input:not([type="file"])')
-    expect(textInputs).toHaveLength(2)
     return {
-      name: textInputs[0],
-      sortName: textInputs[1],
+      name: inputLabelled(wrapper, 'author.detail.edit.name'),
+      sortName: inputLabelled(wrapper, 'author.detail.edit.sortName'),
       description: wrapper.get('textarea'),
+      website: inputLabelled(wrapper, 'author.detail.edit.website'),
+      born: inputLabelled(wrapper, 'author.detail.edit.born'),
+      died: inputLabelled(wrapper, 'author.detail.edit.died'),
     }
   }
 
@@ -274,6 +311,49 @@ describe('AuthorDetailView', () => {
     await input.trigger('change')
     await flushPromises()
   }
+
+  describe('series collapse toggle', () => {
+    it('starts from the saved author pages preference', async () => {
+      mocks.collapsePreference = true
+
+      const wrapper = await mountView()
+
+      expect(mocks.collapseSeries.value).toBe(true)
+      expect(wrapper.get('[data-testid="author-collapse-series-toggle"]').attributes('aria-pressed')).toBe('true')
+    })
+
+    it('turns collapsing on and remembers it for every author page', async () => {
+      const wrapper = await mountView()
+
+      await wrapper.get('[data-testid="author-collapse-series-toggle"]').trigger('click')
+      await flushPromises()
+
+      expect(mocks.collapseSeries.value).toBe(true)
+      expect(mocks.setCollapsePreference).toHaveBeenCalledWith({ authorPages: true }, true)
+    })
+
+    it('turns collapsing back off', async () => {
+      mocks.collapsePreference = true
+
+      const wrapper = await mountView()
+      await wrapper.get('[data-testid="author-collapse-series-toggle"]').trigger('click')
+      await flushPromises()
+
+      expect(mocks.collapseSeries.value).toBe(false)
+      expect(mocks.setCollapsePreference).toHaveBeenCalledWith({ authorPages: true }, false)
+    })
+
+    it('counts books rather than rows in the all-loaded label', async () => {
+      // 2 collapsed rows standing for 200 books: the reader should be told about the books.
+      mocks.total = ref(2)
+      mocks.bookTotal = ref(200)
+      mocks.hasMore = ref(false)
+
+      const wrapper = await mountView()
+
+      expect(wrapper.text()).toContain(i18n.global.t('author.detail.books.allLoaded', { total: '200' }))
+    })
+  })
 
   it('keeps unsaved edit fields when an author image is uploaded', async () => {
     vi.mocked(uploadAuthorImage).mockResolvedValue(makeAuthor({ imageUrl: '/api/v1/authors/7/image' }))
@@ -344,7 +424,7 @@ describe('AuthorDetailView', () => {
   })
 
   it('stops treating the form as unsaved once the edits are saved', async () => {
-    vi.mocked(updateAuthor).mockImplementation(async (_id, payload) => makeAuthor({ ...payload }))
+    vi.mocked(updateAuthor).mockImplementation(async (_id, payload) => makeAuthor({ ...(payload as Partial<AuthorDetail>) }))
     vi.mocked(refreshAuthorMetadata).mockResolvedValue(makeAuthor({ description: 'Provider biography' }))
 
     const wrapper = await openEditPanel()
@@ -361,6 +441,80 @@ describe('AuthorDetailView', () => {
     await flushPromises()
 
     expect((editFields(wrapper).description.element as HTMLTextAreaElement).value).toBe('Provider biography')
+  })
+
+  it('sends only the facts that were changed, as a date and its year', async () => {
+    mocks.author = ref(makeAuthor({ website: 'not a url', birthYear: 1950, genres: ['Journalism'] }))
+    vi.mocked(updateAuthor).mockResolvedValue(makeAuthor())
+
+    const wrapper = await openEditPanel()
+    const fields = editFields(wrapper)
+    expect((fields.born.element as HTMLInputElement).value).toBe('1950')
+    await fields.born.setValue('1965-03-14')
+    await fields.died.setValue('2020')
+
+    await findButtonByLabel(wrapper, 'common.save').trigger('click')
+    await flushPromises()
+
+    expect(vi.mocked(updateAuthor)).toHaveBeenCalledWith(7, {
+      name: 'Author',
+      sortName: null,
+      description: null,
+      birthDate: '1965-03-14',
+      birthYear: 1965,
+      deathDate: null,
+      deathYear: 2020,
+    })
+  })
+
+  it('adds https to a bare website and clears an emptied one', async () => {
+    mocks.author = ref(makeAuthor({ website: 'https://old.example' }))
+    vi.mocked(updateAuthor).mockResolvedValue(makeAuthor())
+
+    const wrapper = await openEditPanel()
+    await editFields(wrapper).website.setValue('johnreid.example')
+    await findButtonByLabel(wrapper, 'common.save').trigger('click')
+    await flushPromises()
+    expect(vi.mocked(updateAuthor)).toHaveBeenLastCalledWith(7, expect.objectContaining({ website: 'https://johnreid.example' }))
+  })
+
+  it('keeps the panel open and flags a life date it cannot read', async () => {
+    const wrapper = await openEditPanel()
+    const born = editFields(wrapper).born
+    await born.setValue('14 March 1965')
+
+    await findButtonByLabel(wrapper, 'common.save').trigger('click')
+    await flushPromises()
+
+    expect(vi.mocked(updateAuthor)).not.toHaveBeenCalled()
+    expect(born.attributes('aria-invalid')).toBe('true')
+    expect(wrapper.text()).toContain(i18n.global.t('author.detail.edit.lifeDateInvalid'))
+
+    await born.setValue('1965')
+    await flushPromises()
+
+    expect(born.attributes('aria-invalid')).toBeUndefined()
+    expect(wrapper.text()).not.toContain(i18n.global.t('author.detail.edit.lifeDateInvalid'))
+  })
+
+  it('opens the match picker and adopts the author it returns', async () => {
+    const wrapper = await mountView()
+    expect(wrapper.find('[data-test="author-match-sheet"]').exists()).toBe(false)
+
+    await wrapper.getComponent({ name: 'AuthorHeader' }).vm.$emit('find-match')
+    await flushPromises()
+    const sheet = wrapper.getComponent({ name: 'AuthorMatchSheet' })
+
+    await sheet.vm.$emit(
+      'updated',
+      makeAuthor({ description: 'Scottish novelist.', metadataProvider: 'goodreads', metadataProviderId: '2222', metadataProviderPinned: true }),
+    )
+    await sheet.vm.$emit('close')
+    await flushPromises()
+
+    expect(mocks.author.value?.description).toBe('Scottish novelist.')
+    expect(mocks.loadMetadataPreview).toHaveBeenCalled()
+    expect(wrapper.find('[data-test="author-match-sheet"]').exists()).toBe(false)
   })
 
   it('deletes a book from the author grid menu action', async () => {

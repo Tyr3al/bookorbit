@@ -69,7 +69,8 @@ watch(
     if (isOpen && props.smartScope) {
       draftName.value = props.smartScope.name
       draftIcon.value = props.smartScope.icon ?? ''
-      draftFilter.value = props.smartScope.filter ?? undefined
+      // This panel edits book scopes; podcast scopes carry episode rules and use their own editor.
+      draftFilter.value = (props.smartScope.filter as GroupRule | null) ?? undefined
       draftSort.value = props.smartScope.defaultSort ? [...props.smartScope.defaultSort] : []
       draftIsPublic.value = props.smartScope.isPublic
       draftSyncToKobo.value = props.smartScope.syncToKobo
@@ -160,7 +161,7 @@ async function save() {
 <template>
   <Teleport to="body">
     <Transition name="smartScope-fade">
-      <div v-if="open" class="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm" @click="emit('close')" />
+      <div v-if="open" class="fixed inset-0 z-40 bg-scrim" @click="emit('close')" />
     </Transition>
 
     <Transition name="smartScope-slide">

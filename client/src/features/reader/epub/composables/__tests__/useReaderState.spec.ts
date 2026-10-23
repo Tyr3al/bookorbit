@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { MEDIA_OVERLAY_HIGHLIGHT_CSS_VARIABLE } from '../../../media-overlay/lib/media-overlay-highlight'
 import { useReaderState } from '../useReaderState'
 
 describe('useReaderState', () => {
@@ -7,6 +8,10 @@ describe('useReaderState', () => {
 
     state.setFontSize(100)
     state.setLineHeight(0.71)
+    state.setParagraphSpacing(3)
+    state.setLetterSpacing(0.3)
+    state.setWordSpacing(0.8)
+    state.setTextIndent(8)
     state.setMaxColumnCount(0)
     state.setGap(0.9)
     state.setMaxInlineSize(200)
@@ -14,13 +19,25 @@ describe('useReaderState', () => {
 
     expect(state.fontSize.value).toBe(32)
     expect(state.lineHeight.value).toBe(0.8)
+    expect(state.paragraphSpacing.value).toBe(2)
+    expect(state.letterSpacing.value).toBe(0.2)
+    expect(state.wordSpacing.value).toBe(0.5)
+    expect(state.textIndent.value).toBe(4)
     expect(state.maxColumnCount.value).toBe(1)
     expect(state.gap.value).toBe(0.5)
     expect(state.maxInlineSize.value).toBe(400)
     expect(state.maxBlockSize.value).toBe(2400)
 
     state.setFontSize(1)
+    state.setParagraphSpacing(-1)
+    state.setLetterSpacing(-1)
+    state.setWordSpacing(-1)
+    state.setTextIndent(-1)
     expect(state.fontSize.value).toBe(6)
+    expect(state.paragraphSpacing.value).toBe(0)
+    expect(state.letterSpacing.value).toBe(0)
+    expect(state.wordSpacing.value).toBe(0)
+    expect(state.textIndent.value).toBe(0)
   })
 
   it('selects default theme when unknown theme name is set', () => {
@@ -55,6 +72,28 @@ describe('useReaderState', () => {
     expect(light).toEqual(state.currentTheme.value.light)
     expect(dark).toEqual(state.currentTheme.value.dark)
     expect(dark.bg).not.toBe(light.bg)
+  })
+
+  it('provides a theme-aware media-overlay highlight whenever the page background is forced', () => {
+    const state = useReaderState()
+
+    for (const theme of state.themes) {
+      state.setThemeName(theme.name)
+      for (const dark of [false, true]) {
+        state.setIsDark(dark)
+        const css = state.generateCSS()
+        const shouldForceBackground = dark || theme.light.bg !== '#ffffff'
+
+        expect(css.includes(`${MEDIA_OVERLAY_HIGHLIGHT_CSS_VARIABLE}:`), `${theme.name} ${dark ? 'dark' : 'light'}`).toBe(shouldForceBackground)
+      }
+    }
+  })
+
+  it('does not couple media-overlay highlighting to a hard-coded active class', () => {
+    const state = useReaderState()
+    state.setThemeName('sepia')
+
+    expect(state.generateCSS()).not.toContain('.media-active')
   })
 
   it('applies renderer attributes and CSS in paginated flow', () => {
@@ -126,10 +165,105 @@ describe('useReaderState', () => {
     const css = state.generateCSS()
 
     expect(css).toContain('font-family: serif !important;')
-    expect(css).toContain('line-height: 1.8;')
+    expect(css).toContain('line-height: 1.8 !important;')
     expect(css).toContain('font-size: 20px;')
     expect(css).toContain('text-align: start !important;')
     expect(css).toContain('hyphens: none;')
+  })
+
+  it('sets the publisher font-size scale on the root beside the reader text size', () => {
+    const state = useReaderState()
+    state.setFontSize(20)
+
+    const rootRule = state.generateCSS().match(/html \{[^}]*font-size: 20px;[^}]*\}/)?.[0] ?? ''
+
+    expect(rootRule).toContain('--bookorbit-font-scale: 1.25;')
+    expect(rootRule).toContain('--bookorbit-font-medium: 20px;')
+    expect(rootRule).toContain('--bookorbit-font-small: 16.25px;')
+  })
+
+  it('overrides a more specific publisher line height on body text', () => {
+    const state = useReaderState()
+    state.setLineHeight(3)
+
+    const publisherStyle = document.createElement('style')
+    publisherStyle.textContent = '.TX { line-height: 1.31; }'
+    const readerStyle = document.createElement('style')
+    readerStyle.textContent = state.generateCSS()
+    const paragraph = document.createElement('p')
+    paragraph.className = 'TX'
+
+    document.head.append(publisherStyle, readerStyle)
+    document.body.append(paragraph)
+
+    expect(getComputedStyle(paragraph).lineHeight).toBe('3')
+
+    paragraph.remove()
+    publisherStyle.remove()
+    readerStyle.remove()
+  })
+
+  it('preserves publisher paragraph margins at the default spacing', () => {
+    const state = useReaderState()
+
+    expect(state.paragraphSpacing.value).toBe(0)
+    expect(state.generateCSS()).not.toContain('margin-block:')
+  })
+
+  it('generates logical paragraph margins for positive spacing', () => {
+    const state = useReaderState()
+    state.setParagraphSpacing(1.6)
+
+    const css = state.generateCSS()
+
+    expect(css).toContain('margin-block: 0 1.6em !important;')
+    expect(css).toContain(':is(hgroup, header) p')
+    expect(css).toContain('margin-block: unset !important;')
+  })
+
+  it('preserves publisher typography when nullable controls are unset', () => {
+    const state = useReaderState()
+
+    expect(state.letterSpacing.value).toBeNull()
+    expect(state.wordSpacing.value).toBeNull()
+    expect(state.textIndent.value).toBeNull()
+    expect(state.generateCSS()).not.toContain('letter-spacing:')
+    expect(state.generateCSS()).not.toContain('word-spacing:')
+    expect(state.generateCSS()).not.toContain('text-indent:')
+  })
+
+  it('emits explicit zero typography overrides and can return to publisher styles', () => {
+    const state = useReaderState()
+    state.setLetterSpacing(0)
+    state.setWordSpacing(0)
+    state.setTextIndent(0)
+
+    const css = state.generateCSS()
+    expect(css).toContain('letter-spacing: 0em !important;')
+    expect(css).toContain('word-spacing: 0em !important;')
+    expect(css).toContain('text-indent: 0em !important;')
+
+    state.setLetterSpacing(null)
+    state.setWordSpacing(null)
+    state.setTextIndent(null)
+    expect(state.state.value).toMatchObject({
+      letterSpacing: null,
+      wordSpacing: null,
+      textIndent: null,
+    })
+  })
+
+  it('generates em-based typography CSS for positive values', () => {
+    const state = useReaderState()
+    state.setLetterSpacing(0.12)
+    state.setWordSpacing(0.35)
+    state.setTextIndent(1.75)
+
+    const css = state.generateCSS()
+    expect(css).toContain('letter-spacing: 0.12em !important;')
+    expect(css).toContain('word-spacing: 0.35em !important;')
+    expect(css).toContain('text-indent: 1.75em !important;')
+    expect(css).toContain(':is(hgroup, header, figure, figcaption, blockquote, li) > p')
   })
 
   describe('font style', () => {

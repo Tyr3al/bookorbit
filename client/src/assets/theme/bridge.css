@@ -2,6 +2,7 @@
    Maps CSS variables → Tailwind utility classes.
 ────────────────────────────────────────────────────────────── */
 @theme inline {
+  --radius-xs: calc(var(--radius) - 6px);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -9,9 +10,9 @@
   --radius-2xl: calc(var(--radius) + 8px);
   --radius-3xl: calc(var(--radius) + 12px);
 
-  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --font-serif: 'Fraunces Variable', ui-serif, Georgia, serif;
-  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  --font-sans: var(--app-font-sans);
+  --font-serif: var(--app-font-serif);
+  --font-mono: var(--app-font-mono);
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -33,16 +34,22 @@
   --color-success-foreground: var(--success-foreground);
   --color-warning: var(--warning);
   --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
   --color-star-highlight: var(--star-highlight);
+  --color-android-highlight: var(--android-highlight);
+  --color-info-foreground: var(--info-foreground);
   --color-volume-read: var(--volume-read);
   --color-volume-reading: var(--volume-reading);
   --color-volume-unread: var(--volume-unread);
   --color-volume-missing: var(--volume-missing);
+  --color-sync-meter-text: var(--sync-meter-text);
+  --color-sync-meter-audio: var(--sync-meter-audio);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-count-foreground: var(--sidebar-count-foreground);
   --color-sidebar-primary: var(--sidebar-primary);
   --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
   --color-sidebar-accent: var(--sidebar-accent);
@@ -61,8 +68,20 @@
 
   --color-diff-del: var(--diff-del);
   --color-diff-ins: var(--diff-ins);
+  --color-scrim: var(--scrim);
+  --color-scrim-media: var(--scrim-media);
   --color-path-dim: var(--path-dim);
   --color-path-fold: var(--path-fold);
+
+  --color-rarity-common: var(--rarity-common);
+  --color-rarity-rare: var(--rarity-rare);
+  --color-rarity-epic: var(--rarity-epic);
+  --color-rarity-legendary: var(--rarity-legendary);
+  --color-rarity-common-fill: var(--rarity-common-fill);
+  --color-rarity-rare-fill: var(--rarity-rare-fill);
+  --color-rarity-epic-fill: var(--rarity-epic-fill);
+  --color-rarity-legendary-fill: var(--rarity-legendary-fill);
+  --color-shelf-line: var(--shelf-line);
 
   --shadow-xs: var(--elevation-xs);
   --shadow-sm: var(--elevation-sm);

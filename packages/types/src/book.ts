@@ -7,21 +7,48 @@ import type { CustomMetadataBookValue } from "./custom-metadata";
 import type { CoverAspectRatio } from "./library";
 import { DEFAULT_FORMAT_PRIORITY } from "./library";
 import type { SeriesIndex } from "./series-index";
+import type { EpubMediaOverlayCapability } from "./epub";
+import { READ_ALONG_FORMAT_PRIORITY } from "./format-priority";
 
 // Derived rather than duplicated: these two lists describe the same set of formats,
 // and maintaining them separately let BOOK_FORMATS fall behind on azw and kepub.
 export const BOOK_FORMATS = DEFAULT_FORMAT_PRIORITY;
 export type BookFormat = (typeof BOOK_FORMATS)[number];
 
-const AUDIO_FORMATS = new Set<string>(["m4b", "mp3", "m4a", "opus", "ogg", "flac"]);
+/** Values accepted by the format filter. Read-along is an edition key, not a physical file format. */
+export const BOOK_FILTER_FORMATS = [...BOOK_FORMATS, READ_ALONG_FORMAT_PRIORITY] as const;
+export type BookFilterFormat = (typeof BOOK_FILTER_FORMATS)[number];
+
+/** Exported as an ordered list too, so a form offering these cannot drift from what matches them. */
+export const AUDIO_FORMAT_LIST = ["m4b", "mp3", "m4a", "opus", "ogg", "flac"] as const;
+const AUDIO_FORMATS = new Set<string>(AUDIO_FORMAT_LIST);
 export function isAudioFormat(format: string): boolean {
   return AUDIO_FORMATS.has(format.toLowerCase());
 }
 
-const COMIC_FORMATS = new Set<string>(["cbz", "cbr", "cb7", "cbx"]);
+export const COMIC_FORMAT_LIST = ["cbz", "cbr", "cb7", "cbx"] as const;
+const COMIC_FORMATS = new Set<string>(COMIC_FORMAT_LIST);
 export function isComicFormat(format: string): boolean {
   return COMIC_FORMATS.has(format.toLowerCase());
 }
+
+const BOOK_FORMAT_SET = new Set<string>(BOOK_FORMATS);
+
+/** A format BookOrbit reads or plays. Covers, sidecars and anything else a book folder holds are not. */
+export function isBookFormat(format: string | null | undefined): boolean {
+  return format != null && BOOK_FORMAT_SET.has(format.toLowerCase());
+}
+
+/**
+ * A readable or listenable edition of the book, as opposed to its cover or a sidecar such as an
+ * OPF or a text file. `primary` is the role the API reports for the book's primary file.
+ */
+export function isContentBookFile(file: { format: string | null; role: string }): boolean {
+  return (file.role === "content" || file.role === "primary") && isBookFormat(file.format);
+}
+
+/** Text and document formats, excluding comic archives and audio. */
+export const EBOOK_FORMAT_LIST = ["epub", "kepub", "mobi", "azw3", "azw", "fb2", "pdf", "djvu"] as const;
 
 export const READ_STATUSES = ["unread", "want_to_read", "reading", "on_hold", "rereading", "read", "skimmed", "abandoned"] as const;
 export type ReadStatus = (typeof READ_STATUSES)[number];
@@ -78,9 +105,14 @@ export type BookFileRef = {
   format: string | null;
   role: string;
   sizeBytes: number | null;
+  mediaOverlay?: EpubMediaOverlayCapability | null;
 };
 
-export type BookMediaKind = "ebook" | "audiobook" | "comic" | "unknown";
+/** The kinds a real file can be. `BookMediaKind` adds the case where no format identifies one. */
+export const CONCRETE_BOOK_MEDIA_KINDS = ["ebook", "audiobook", "comic"] as const;
+export type ConcreteBookMediaKind = (typeof CONCRETE_BOOK_MEDIA_KINDS)[number];
+
+export type BookMediaKind = ConcreteBookMediaKind | "unknown";
 
 export type BookMediaProfile = {
   primaryMediaKind: BookMediaKind;
@@ -91,8 +123,43 @@ export type BookMediaProfile = {
 
 type BookMediaFile = Pick<BookFileRef, "format" | "role">;
 
+export const COVER_MEDIA = ["ebook", "audio"] as const;
+export type CoverMedium = (typeof COVER_MEDIA)[number];
+
+type CoverMediaFile = BookMediaFile & {
+  mediaOverlay?: Pick<EpubMediaOverlayCapability, "available"> | null;
+  mediaOverlayAvailable?: boolean | null;
+};
+
+export type CoverMedia = {
+  hasEbook: boolean;
+  hasAudio: boolean;
+};
+
+export function getCoverMedia(files: readonly CoverMediaFile[]): CoverMedia {
+  let hasEbook = false;
+  let hasAudio = false;
+
+  for (const file of files) {
+    if (file.role !== "content" && file.role !== "primary") continue;
+    const format = file.format?.trim().toLowerCase();
+    if (!format) continue;
+    if (isAudioFormat(format)) hasAudio = true;
+    else hasEbook = true;
+    if (format === "epub" && (file.mediaOverlay?.available === true || file.mediaOverlayAvailable === true)) hasAudio = true;
+  }
+
+  return { hasEbook, hasAudio };
+}
+
 export function getPrimaryBookFile<T extends BookMediaFile>(files: readonly T[]): T | null {
-  return files.find((file) => file.role === "primary") ?? files.find((file) => file.format != null) ?? files[0] ?? null;
+  return (
+    files.find((file) => file.role === "primary") ??
+    files.find((file) => isContentBookFile(file)) ??
+    files.find((file) => file.format != null) ??
+    files[0] ??
+    null
+  );
 }
 
 export function getBookMediaKind(format: string | null | undefined): BookMediaKind {
@@ -104,7 +171,8 @@ export function getBookMediaKind(format: string | null | undefined): BookMediaKi
 }
 
 export function getBookMediaProfile(files: readonly BookMediaFile[]): BookMediaProfile {
-  const mediaKinds = files.map((file) => getBookMediaKind(file.format));
+  // Covers and sidecars such as a folder image or an .nfo fall through getBookMediaKind as "ebook".
+  const mediaKinds = files.filter((file) => file.role === "content" || file.role === "primary").map((file) => getBookMediaKind(file.format));
   return {
     primaryMediaKind: getBookMediaKind(getPrimaryBookFile(files)?.format),
     hasEbook: mediaKinds.includes("ebook"),
@@ -124,7 +192,9 @@ export type BookSeriesMembership = {
 
 export type BookCard = {
   id: number;
+  libraryId?: number;
   status: string;
+  /** The frame of the cover the book shows by default, which follows its primary file's medium rather than its library. */
   coverAspectRatio: CoverAspectRatio;
   title: string | null;
   authors: string[];
@@ -142,6 +212,7 @@ export type BookCard = {
   readStatus: UserBookStatus | null;
   addedAt: string;
   updatedAt: string | null;
+  coverVersion: string;
   metadataScore: number | null;
   hasCover: boolean;
   hasMetadataLocks: boolean;
@@ -159,6 +230,8 @@ export type BookCard = {
 };
 
 export type BookDetailFile = {
+  fileHash?: string | null;
+  contentVersion?: string;
   id: number;
   format: string | null;
   role: string;
@@ -167,6 +240,7 @@ export type BookDetailFile = {
   createdAt: string;
   filename: string | null;
   durationSeconds: number | null;
+  mediaOverlay?: EpubMediaOverlayCapability | null;
 };
 
 export type ProviderIds = Partial<Record<MetadataProviderKey, string | null>>;
@@ -178,14 +252,48 @@ export type AudioMetadata = {
   chapters: AudiobookChapter[] | null;
 };
 
+export type ReadAloudProgressSyncMode = "auto" | "disabled";
+
+export type ReadAloudProgressSyncState = "enabled" | "disabled" | "unavailable";
+
+export type ReadAloudProgressSyncUnavailableReason = "no_media_overlay_epub" | "no_audio_files" | "missing_duration" | "duration_mismatch";
+
+export type ReadAloudProgressSync = {
+  mode: ReadAloudProgressSyncMode;
+  state: ReadAloudProgressSyncState;
+  unavailableReason: ReadAloudProgressSyncUnavailableReason | null;
+  overlayFileId: number | null;
+  audioDurationSeconds: number | null;
+  overlayDurationSeconds: number | null;
+  durationDifferenceSeconds: number | null;
+  durationDifferenceRatio: number | null;
+  koreaderDownloadAvailable: boolean;
+};
+
 export type BookFileWriteDisabledReason =
   "library_disabled" | "no_primary_file" | "format_not_supported" | "format_disabled" | "file_exceeds_size_limit";
+
+/** Why one file of a book is not written. Per-file only: never reported as the book-level `reason`. */
+export type BookFileWriteTargetSkipReason = "format_not_supported" | "format_disabled" | "file_exceeds_size_limit" | "not_content_file";
+
+/** One file the book's write-back considered, with the fields its own format can hold. */
+export type BookFileWriteTargetStatus = {
+  fileId: number;
+  format: string | null;
+  writable: boolean;
+  reason: BookFileWriteTargetSkipReason | null;
+  writableFields: BookFileWriteField[];
+};
 
 export type BookFileWriteStatus = {
   enabled: boolean;
   reason: BookFileWriteDisabledReason | null;
+  /** Union across writable files. Kept for released clients; prefer `targets` for anything per file. */
   writableFormats: BookFormat[];
+  /** Union across writable files. Kept for released clients; prefer `targets` for anything per file. */
   writableFields: BookFileWriteField[];
+  /** Every file write-back considered, in write order. Absent from servers that predate it. */
+  targets?: BookFileWriteTargetStatus[];
 };
 
 export type BookDetail = {
@@ -215,6 +323,11 @@ export type BookDetail = {
   personalNoteUpdatedAt: string | null;
   communityRatings: BookCommunityRating[];
   coverSource: "extracted" | "custom" | null;
+  coverMedia: CoverMedium[];
+  covers: Record<CoverMedium, BookCoverSlot | null>;
+  /** The frame of the cover the book shows by default: square when that is its audiobook art. Absent from servers that predate it. */
+  coverAspectRatio?: CoverAspectRatio;
+  coverVersion: string;
   hardcoverEditionId: string | null;
   providerIds: ProviderIds;
   authors: { id: number; name: string; sortName: string | null }[];
@@ -225,12 +338,20 @@ export type BookDetail = {
   metadataScore: number | null;
   readStatus: UserBookStatus | null;
   audioMetadata: AudioMetadata | null;
+  readAloudSync: ReadAloudProgressSync;
   formatPriority: string[];
   comicMetadata: ComicMetadataFields | null;
   customMetadata: CustomMetadataBookValue[];
   lockedFields: BookMetadataLockField[];
   collections: { id: number; name: string }[];
   fileWriteStatus?: BookFileWriteStatus;
+};
+
+export type BookCoverSlot = {
+  source: "extracted" | "custom";
+  updatedAt: string;
+  width: number | null;
+  height: number | null;
 };
 
 export type BookMetadataSaveResult = {
@@ -240,6 +361,8 @@ export type BookMetadataSaveResult = {
 };
 
 export type BookMetadataRefreshPreviewFields = {
+  isbn10?: string | null;
+  isbn13?: string | null;
   title?: string | null;
   subtitle?: string | null;
   description?: string | null;
@@ -255,6 +378,7 @@ export type BookMetadataRefreshPreviewFields = {
   seriesMemberships?: MetadataSeriesMembership[] | null;
   communityRatings?: BookCommunityRating[];
   coverUrl?: string;
+  audioCoverUrl?: string;
   googleBooksId?: string | null;
   goodreadsId?: string | null;
   amazonId?: string | null;
@@ -320,11 +444,30 @@ export type BooksPage = {
   size: number;
 };
 
+export type BookFormatFacet = {
+  format: BookFilterFormat;
+  count: number;
+};
+
+/**
+ * Counts for a library's browse header, from the same query as its listing. `total` and the
+ * format counts are books, never collapsed-series cards. A format counts every book holding a
+ * file in it, which is how the `format` filter matches, and it is counted without the root-level
+ * format rule so picking one format still shows the others.
+ */
+export type LibraryBookFacets = {
+  total: number;
+  libraryTotal: number;
+  formats: BookFormatFacet[];
+};
+
 export type BookRecommendation = {
   id: number;
   title: string | null;
   coverAspectRatio: CoverAspectRatio;
   updatedAt: string | null;
+  /** The book card's cover cache key. Absent from servers that predate it, where `updatedAt` serves. */
+  coverVersion?: string;
   hasCover: boolean;
   authors: string[];
   readStatus: UserBookStatus | null;
@@ -340,6 +483,8 @@ export type SeriesBookRecommendation = {
   title: string | null;
   coverAspectRatio: CoverAspectRatio;
   updatedAt: string | null;
+  /** The book card's cover cache key. Absent from servers that predate it, where `updatedAt` serves. */
+  coverVersion?: string;
   seriesIndex: SeriesIndex | null;
   hasCover: boolean;
   authors: string[];
@@ -357,7 +502,5 @@ export type CoverSearchResult = {
   source: string;
 };
 
-export type CoverSearchResponse = {
-  results: CoverSearchResult[];
-  total: number;
-};
+/** `GET /books/cover/search` answers with a bare array of results, not an envelope. */
+export type CoverSearchResponse = CoverSearchResult[];

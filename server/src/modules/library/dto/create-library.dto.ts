@@ -1,3 +1,6 @@
+import { RegexMetadataConfigDto } from './regex-metadata.dto';
+import { Type } from 'class-transformer';
+import { IsObject, ValidateNested } from 'class-validator';
 import {
   ArrayMinSize,
   IsDefined,
@@ -14,10 +17,12 @@ import {
   Min,
   ValidateIf,
 } from 'class-validator';
+import { IsOptionalNotNull } from './optional-not-null.decorator';
 import { Transform } from 'class-transformer';
-import { ICON_VALUE_MAX_LENGTH, type CoverAspectRatio, type OrganizationMode } from '@bookorbit/types';
+import { ICON_VALUE_MAX_LENGTH, type AddedAtSource, type CoverAspectRatio, type LibraryType, type OrganizationMode } from '@bookorbit/types';
 
 import {
+  LIBRARY_ADDED_AT_SOURCES,
   LIBRARY_COVER_ASPECT_RATIOS,
   LIBRARY_FILE_WRITE_MAX_SIZE_MB_MAX,
   LIBRARY_FILE_WRITE_MAX_SIZE_MB_MIN,
@@ -34,6 +39,10 @@ function trimString(value: unknown): unknown {
 }
 
 export class CreateLibraryDto {
+  @ValidateIf((_, value) => value !== undefined)
+  @IsIn(['books', 'podcasts'])
+  type?: LibraryType;
+
   @IsString()
   @IsNotEmpty()
   @MaxLength(255)
@@ -46,7 +55,7 @@ export class CreateLibraryDto {
   @MaxLength(ICON_VALUE_MAX_LENGTH)
   icon: string;
 
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsInt()
   @Min(0)
   displayOrder?: number;
@@ -57,11 +66,23 @@ export class CreateLibraryDto {
   @IsNotEmpty({ each: true })
   folders: string[];
 
-  @IsOptional()
+  /** Podcast-only: roots holding podcast folders the user already has. Never written to. */
+  @IsOptionalNotNull()
+  @IsArray()
+  @IsString({ each: true })
+  @IsNotEmpty({ each: true })
+  localFolders?: string[];
+
+  /** Podcast-only: automatically discover changes beneath local podcast roots. */
+  @IsOptionalNotNull()
+  @IsBoolean()
+  watchLocalFolders?: boolean;
+
+  @IsOptionalNotNull()
   @IsIn(LIBRARY_COVER_ASPECT_RATIOS)
   coverAspectRatio?: CoverAspectRatio;
 
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsBoolean()
   watch?: boolean;
 
@@ -71,38 +92,48 @@ export class CreateLibraryDto {
   @IsLibraryAutoScanCronExpression()
   autoScanCronExpression?: string | null;
 
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsArray()
   @IsString({ each: true })
   metadataPrecedence?: string[];
 
   @IsOptional()
+  @IsObject()
+  @ValidateNested()
+  @Type(() => RegexMetadataConfigDto)
+  regexMetadata?: RegexMetadataConfigDto | null;
+
+  @IsOptionalNotNull()
   @IsArray()
   @IsString({ each: true })
   formatPriority?: string[];
 
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsArray()
   @IsString({ each: true })
   allowedFormats?: string[];
 
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsIn(LIBRARY_ORGANIZATION_MODES)
   organizationMode?: OrganizationMode;
 
-  @IsOptional()
+  @ValidateIf((_, value) => value !== undefined)
+  @IsIn(LIBRARY_ADDED_AT_SOURCES)
+  addedAtSource?: AddedAtSource;
+
+  @IsOptionalNotNull()
   @IsArray()
   @IsString({ each: true })
   excludePatterns?: string[];
 
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsNumber()
   @Min(LIBRARY_READING_THRESHOLD_MIN)
   @Max(LIBRARY_READING_THRESHOLD_MAX)
   readingThreshold?: number;
 
-  @IsOptional()
-  @IsInt()
+  @IsOptionalNotNull()
+  @IsNumber()
   @Min(LIBRARY_MARK_AS_FINISHED_MIN)
   @Max(LIBRARY_MARK_AS_FINISHED_MAX)
   markAsFinishedPercentComplete?: number;
@@ -113,75 +144,89 @@ export class CreateLibraryDto {
   @MaxLength(500)
   fileNamingPattern?: string | null;
 
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsBoolean()
   fileWriteEnabled?: boolean;
 
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsBoolean()
   fileWriteWriteCover?: boolean;
 
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsBoolean()
   fileWriteEpubEnabled?: boolean;
 
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsInt()
   @Min(LIBRARY_FILE_WRITE_MAX_SIZE_MB_MIN)
   @Max(LIBRARY_FILE_WRITE_MAX_SIZE_MB_MAX)
   fileWriteEpubMaxFileSizeMb?: number;
 
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsBoolean()
   fileWriteFb2Enabled?: boolean;
 
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsInt()
   @Min(LIBRARY_FILE_WRITE_MAX_SIZE_MB_MIN)
   @Max(LIBRARY_FILE_WRITE_MAX_SIZE_MB_MAX)
   fileWriteFb2MaxFileSizeMb?: number;
 
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsBoolean()
   fileWritePdfEnabled?: boolean;
 
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsInt()
   @Min(LIBRARY_FILE_WRITE_MAX_SIZE_MB_MIN)
   @Max(LIBRARY_FILE_WRITE_MAX_SIZE_MB_MAX)
   fileWritePdfMaxFileSizeMb?: number;
 
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsBoolean()
   fileWriteCbxEnabled?: boolean;
 
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsInt()
   @Min(LIBRARY_FILE_WRITE_MAX_SIZE_MB_MIN)
   @Max(LIBRARY_FILE_WRITE_MAX_SIZE_MB_MAX)
   fileWriteCbxMaxFileSizeMb?: number;
 
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsBoolean()
   fileWriteKindleEnabled?: boolean;
 
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsInt()
   @Min(LIBRARY_FILE_WRITE_MAX_SIZE_MB_MIN)
   @Max(LIBRARY_FILE_WRITE_MAX_SIZE_MB_MAX)
   fileWriteKindleMaxFileSizeMb?: number;
 
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsBoolean()
   fileWriteAudioEnabled?: boolean;
 
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsInt()
   @Min(LIBRARY_FILE_WRITE_MAX_SIZE_MB_MIN)
   @Max(LIBRARY_FILE_WRITE_MAX_SIZE_MB_MAX)
   fileWriteAudioMaxFileSizeMb?: number;
 
-  @IsOptional()
+  @IsOptionalNotNull()
+  @IsBoolean()
+  fileWriteAllFiles?: boolean;
+
+  @IsOptionalNotNull()
+  @IsBoolean()
+  fileWriteReadAlongEnabled?: boolean;
+
+  @IsOptionalNotNull()
+  @IsInt()
+  @Min(LIBRARY_FILE_WRITE_MAX_SIZE_MB_MIN)
+  @Max(LIBRARY_FILE_WRITE_MAX_SIZE_MB_MAX)
+  fileWriteReadAlongMaxFileSizeMb?: number;
+
+  @IsOptionalNotNull()
   @IsBoolean()
   fileRenameEnabled?: boolean;
 

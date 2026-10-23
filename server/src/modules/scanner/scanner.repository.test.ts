@@ -47,6 +47,7 @@ function makeDb() {
 
   const db: any = {};
   Object.assign(db, {
+    execute: vi.fn().mockResolvedValue(undefined),
     select: vi.fn(() => next('select')),
     insert: vi.fn(() => next('insert')),
     update: vi.fn(() => next('update')),
@@ -161,9 +162,11 @@ describe('ScannerRepository', () => {
     queues.select.push([{ id: 1, status: 'present', folderPath: '/books/A', primaryFileId: 90 }]);
     queues.select.push([{ bookId: 1, absolutePath: '/books/A/book.epub', format: 'epub' }]);
     queues.select.push([{ id: 7, absolutePath: '/books/A/book.epub' }]);
-    queues.select.push([{ id: 90, bookId: 1, absolutePath: '/books/A/book.epub', ino: 999n, sizeBytes: 10, mtime: new Date(), fileHash: 'x' }]);
-    queues.select.push([{ id: 15, bookId: 1, libraryId: 4, primaryFileId: 90 }]);
-    queues.select.push([{ id: 16, bookId: 2, libraryId: 5, primaryFileId: 91 }]);
+    queues.select.push([
+      { id: 90, bookId: 1, absolutePath: '/books/A/book.epub', relPath: 'A/book.epub', ino: 999n, sizeBytes: 10, mtime: new Date(), fileHash: 'x' },
+    ]);
+    queues.select.push([{ id: 15, bookId: 1, libraryId: 4, primaryFileId: 90, libraryFolderPath: '/books' }]);
+    queues.select.push([{ id: 16, bookId: 2, libraryId: 5, primaryFileId: 91, libraryFolderPath: '/books' }]);
     queues.select.push([{ id: 3, folderPath: '/books/A' }]);
     queues.select.push([{ id: 4, folderPath: '/books/B' }]);
     queues.select.push([{ id: 8, folderPath: '/books/A', status: 'missing' }]);
@@ -175,10 +178,31 @@ describe('ScannerRepository', () => {
     await expect(repo.findPrimaryBookFilesByLibrary(4)).resolves.toEqual([{ bookId: 1, absolutePath: '/books/A/book.epub', format: 'epub' }]);
     await expect(repo.findPrimaryBookFilesByBookId(1)).resolves.toEqual([{ id: 7, absolutePath: '/books/A/book.epub' }]);
     await expect(repo.findBookFilesByLibraryFolder(4)).resolves.toEqual([
-      { id: 90, bookId: 1, absolutePath: '/books/A/book.epub', ino: 999n, sizeBytes: 10, mtime: expect.any(Date), fileHash: 'x' },
+      {
+        id: 90,
+        bookId: 1,
+        absolutePath: '/books/A/book.epub',
+        relPath: 'A/book.epub',
+        ino: 999n,
+        sizeBytes: 10,
+        mtime: expect.any(Date),
+        fileHash: 'x',
+      },
     ]);
-    await expect(repo.findBookFileByAbsolutePath('/books/A/book.epub')).resolves.toEqual({ id: 15, bookId: 1, libraryId: 4, primaryFileId: 90 });
-    await expect(repo.findBookFileByAbsolutePath('/books/B/book.epub', 5)).resolves.toEqual({ id: 16, bookId: 2, libraryId: 5, primaryFileId: 91 });
+    await expect(repo.findBookFileByAbsolutePath('/books/A/book.epub')).resolves.toEqual({
+      id: 15,
+      bookId: 1,
+      libraryId: 4,
+      primaryFileId: 90,
+      libraryFolderPath: '/books',
+    });
+    await expect(repo.findBookFileByAbsolutePath('/books/B/book.epub', 5)).resolves.toEqual({
+      id: 16,
+      bookId: 2,
+      libraryId: 5,
+      primaryFileId: 91,
+      libraryFolderPath: '/books',
+    });
     await expect(repo.findBooksByFolderPath('/books/A')).resolves.toEqual([{ id: 3, folderPath: '/books/A' }]);
     await expect(repo.findBooksByFolderPath('/books/B', 5)).resolves.toEqual([{ id: 4, folderPath: '/books/B' }]);
     await expect(repo.findMissingBookByFolderPath('/books/A')).resolves.toEqual({ id: 8, folderPath: '/books/A', status: 'missing' });
@@ -212,7 +236,7 @@ describe('ScannerRepository', () => {
         coverAspectRatio: '1/1',
       }),
     ]);
-    expect(db.select.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ coverAspectRatio: expect.anything() }));
+    expect(db.select.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ libraryId: expect.anything(), coverAspectRatio: expect.anything() }));
     expect(chains.select[0]?.mocks.innerJoin).toHaveBeenCalledTimes(1);
   });
 
@@ -298,7 +322,7 @@ describe('ScannerRepository', () => {
     await repo.deleteBookFile(21);
     await repo.updateBookFolderPath(4, '/books/D');
 
-    expect(db.delete).toHaveBeenCalledTimes(1);
+    expect(db.execute).toHaveBeenCalledTimes(1);
     expect(db.update).toHaveBeenCalledTimes(1);
   });
 
@@ -330,49 +354,79 @@ describe('ScannerRepository', () => {
     });
   });
 
-  it('handles directory scan state lookups and upserts', async () => {
-    const { repo, queues, db } = makeRepo();
+  it('loads a versioned directory scan-state snapshot', async () => {
+    const { repo, queues } = makeRepo();
     queues.select.push([
-      { dirPath: '/books/a', lastSeenMtimeMs: 100 },
-      { dirPath: '/books/b', lastSeenMtimeMs: 200 },
+      { version: 7, dirPath: '/books/a', lastSeenMtimeMs: 100 },
+      { version: 7, dirPath: '/books/b', lastSeenMtimeMs: 200 },
     ]);
+
+    const snapshot = await repo.findDirScanStateSnapshot(7);
+
+    expect(snapshot?.version).toBe(7);
+    expect(snapshot?.mtimes).toEqual(
+      new Map([
+        ['/books/a', 100],
+        ['/books/b', 200],
+      ]),
+    );
+  });
+
+  it('returns an empty snapshot for a folder without state and null for a missing folder', async () => {
+    const { repo, queues } = makeRepo();
+    queues.select.push([{ version: 3, dirPath: null, lastSeenMtimeMs: null }]);
+    queues.select.push([]);
+
+    await expect(repo.findDirScanStateSnapshot(7)).resolves.toEqual({ version: 3, mtimes: new Map() });
+    await expect(repo.findDirScanStateSnapshot(8)).resolves.toBeNull();
+  });
+
+  it('persists directory scan state atomically when the version still matches', async () => {
+    const { repo, queues, db } = makeRepo();
+    queues.select.push([{ version: 7 }]);
     queues.insert.push([]);
     queues.insert.push([]);
-
-    const map = await repo.findDirScanState(7);
-    expect(map.get('/books/a')).toBe(100);
-    expect(map.get('/books/b')).toBe(200);
-
-    await repo.upsertDirScanState(7, []);
-    expect(db.insert).toHaveBeenCalledTimes(0);
+    queues.select.push([
+      { id: 1, dirPath: '/books/0' },
+      { id: 2, dirPath: '/stale' },
+    ]);
 
     const entries = Array.from({ length: 501 }, (_, i) => ({ dirPath: `/books/${i}`, mtimeMs: i + 0.4 }));
-    await repo.upsertDirScanState(7, entries);
+    await expect(repo.persistDirScanState(7, 7, entries)).resolves.toBe(true);
+
+    expect(db.transaction).toHaveBeenCalledTimes(1);
     expect(db.insert).toHaveBeenCalledTimes(2);
+    expect(db.delete).toHaveBeenCalledTimes(1);
   });
 
-  it('deletes stale directory scan state across all branch paths', async () => {
+  it('skips directory scan-state persistence after the version changes', async () => {
     const { repo, queues, db } = makeRepo();
+    queues.select.push([{ version: 8 }]);
 
-    await repo.deleteStaleDirScanState(7, new Set());
-    expect(db.delete).toHaveBeenCalledTimes(1);
+    await expect(repo.persistDirScanState(7, 7, [{ dirPath: '/books', mtimeMs: 100 }])).resolves.toBe(false);
 
-    queues.select.push([
-      { id: 1, dirPath: '/keep' },
-      { id: 2, dirPath: '/drop' },
-    ]);
-    await repo.deleteStaleDirScanState(7, new Set(['/keep']));
-    expect(db.delete).toHaveBeenCalledTimes(2);
-
-    queues.select.push([{ id: 3, dirPath: '/keep-only' }]);
-    await repo.deleteStaleDirScanState(7, new Set(['/keep-only']));
-    expect(db.delete).toHaveBeenCalledTimes(2);
+    expect(db.insert).not.toHaveBeenCalled();
+    expect(db.delete).not.toHaveBeenCalled();
   });
 
-  it('clears directory scan state for a library folder', async () => {
-    const { repo, db } = makeRepo();
-    await repo.clearDirScanState(21);
+  it('clears directory scan state under the folder lock and returns its version', async () => {
+    const { repo, queues, db } = makeRepo();
+    queues.update.push([{ version: 9 }]);
+
+    await expect(repo.clearDirScanState(21)).resolves.toBe(9);
+
+    expect(db.transaction).toHaveBeenCalledTimes(1);
+    expect(db.update).toHaveBeenCalledTimes(1);
     expect(db.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not clear directory scan state when the library folder no longer exists', async () => {
+    const { repo, queues, db } = makeRepo();
+    queues.update.push([]);
+
+    await expect(repo.clearDirScanState(21)).resolves.toBeNull();
+
+    expect(db.delete).not.toHaveBeenCalled();
   });
 
   it('findRecentScanJobs reads the newest jobs for one library', async () => {
@@ -389,5 +443,74 @@ describe('ScannerRepository', () => {
 
     await expect(repo.findLatestScanJobs([])).resolves.toEqual([]);
     expect(db.selectDistinctOn).not.toHaveBeenCalled();
+  });
+
+  describe('realignAudioTrackOrder', () => {
+    it('renumbers the tracks inside a transaction that holds the book row', async () => {
+      const { repo, queues, db, chains } = makeRepo();
+      queues.select.push([{ id: 4 }]);
+      queues.select.push([
+        { id: 41, absolutePath: '/books/Book/Part 2.mp3', format: 'mp3', sortOrder: 0 },
+        { id: 42, absolutePath: '/books/Book/Part 1.mp3', format: 'mp3', sortOrder: 1 },
+      ]);
+
+      await expect(repo.realignAudioTrackOrder(4)).resolves.toBe(2);
+
+      expect(db.transaction).toHaveBeenCalledTimes(1);
+      expect(chains.select[0]!.mocks.for).toHaveBeenCalledWith('update');
+      expect(chains.update).toHaveLength(1);
+      expect(chains.update[0]!.mocks.set).toHaveBeenCalledWith({ sortOrder: expect.anything() });
+    });
+
+    it('does not write when the tracks already play in path order', async () => {
+      const { repo, queues, chains } = makeRepo();
+      queues.select.push([{ id: 4 }]);
+      queues.select.push([
+        { id: 41, absolutePath: '/books/Book/Part 1.mp3', format: 'mp3', sortOrder: 0 },
+        { id: 42, absolutePath: '/books/Book/Part 2.mp3', format: 'mp3', sortOrder: 1 },
+      ]);
+
+      await expect(repo.realignAudioTrackOrder(4)).resolves.toBe(0);
+
+      expect(chains.update).toHaveLength(0);
+    });
+  });
+
+  describe('remapAudioPositions', () => {
+    it('moves audio bookmarks and progress percentages in one transaction, skipping finished books and unplaceable rows', async () => {
+      const { repo, queues, db, chains } = makeRepo();
+      queues.select.push([
+        { id: 1, positionSeconds: 350 },
+        { id: 2, positionSeconds: 50 },
+        { id: 3, positionSeconds: 9999 },
+      ]);
+      queues.select.push([
+        { userId: 7, currentFileId: 21, positionSeconds: 20, percentage: 12 },
+        { userId: 8, currentFileId: 21, positionSeconds: 20, percentage: 100 },
+        { userId: 9, currentFileId: 99, positionSeconds: 20, percentage: 30 },
+      ]);
+      const remap = vi.fn((seconds: number) => (seconds === 350 ? 150 : seconds === 9999 ? null : seconds));
+      const percentageAt = vi.fn((fileId: number) => (fileId === 21 ? 42 : null));
+
+      await expect(repo.remapAudioPositions(4, remap, percentageAt)).resolves.toEqual({ bookmarks: 1, progress: 1 });
+
+      expect(db.transaction).toHaveBeenCalledTimes(1);
+      expect(chains.select[0]!.mocks.for).toHaveBeenCalledWith('update');
+      expect(chains.select[1]!.mocks.for).toHaveBeenCalledWith('update');
+      expect(db.update).toHaveBeenCalledTimes(2);
+      expect(chains.update[0]!.mocks.set).toHaveBeenCalledWith({ positionSeconds: 150 });
+      expect(chains.update[1]!.mocks.set).toHaveBeenCalledWith({ percentage: 42 });
+      expect(percentageAt.mock.calls).toEqual([
+        [21, 20],
+        [99, 20],
+      ]);
+    });
+  });
+
+  it("reads the formats of a book's files", async () => {
+    const { repo, queues } = makeRepo();
+    queues.select.push([{ id: 3, format: 'mp3' }]);
+
+    await expect(repo.findBookFileFormats(4)).resolves.toEqual([{ id: 3, format: 'mp3' }]);
   });
 });

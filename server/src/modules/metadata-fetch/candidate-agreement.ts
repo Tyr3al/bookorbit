@@ -3,7 +3,7 @@ import { MetadataCandidate } from '@bookorbit/types';
 import { matchableTitle, scoreCandidate } from './candidate-relevance';
 import { candidateHasNormalizedIsbn, candidatesShareIsbn, normalizeMetadataIsbn } from './isbn-match';
 import { MetadataSearchParams } from './providers/metadata-search-params';
-import { scoreTitleMatch, shareSignificantToken } from './title-match';
+import { scoreTitleMatch, shareSignificantToken } from '../../common/text-match/title-match';
 
 /**
  * How closely two providers' titles must match before their records are treated as the same book.
@@ -50,6 +50,24 @@ export function resolveCandidateAgreement(candidates: readonly MetadataCandidate
   }
 
   return { anchor, accepted, rejected };
+}
+
+/**
+ * Holds candidates from a later search to an anchor chosen earlier, such as the audiobook edition's
+ * art to the book a first pass identified. Unlike `resolveCandidateAgreement`, a single candidate
+ * is checked too: it has no peers to outvote it, but the anchor still describes the book.
+ */
+export function acceptAgainstAnchor(
+  anchor: MetadataCandidate,
+  candidates: readonly MetadataCandidate[],
+): Pick<CandidateAgreement, 'accepted' | 'rejected'> {
+  const accepted: MetadataCandidate[] = [];
+  const rejected: MetadataCandidate[] = [];
+  for (const candidate of candidates) {
+    if (candidate === anchor || describesSameBook(anchor, candidate)) accepted.push(candidate);
+    else rejected.push(candidate);
+  }
+  return { accepted, rejected };
 }
 
 /**

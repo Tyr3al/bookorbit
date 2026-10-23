@@ -20,6 +20,8 @@ local LIBRARY_VERSION_TOUCH_INTERVAL = 3600
 local shared
 local generation = 0
 local active_mutation
+local account_identity
+local account_epoch = 0
 local maps
 local maps_generation = -1
 
@@ -110,7 +112,7 @@ end
 
 local function ensure()
     if not shared then
-        shared = BookOrbitState.open()
+        shared = BookOrbitState.open(account_identity)
         shared.on_flush = publish
         publish()
     end
@@ -123,11 +125,12 @@ local function scopeTables(state, scope)
             books = state.books,
             unmatched = state.unmatched,
             files = state.files,
+            statsRows = state.statsRows,
             global = state.global,
         }
     end
 
-    local tables = { books = {}, unmatched = {}, files = {}, global = {} }
+    local tables = { books = {}, unmatched = {}, files = {}, statsRows = {}, global = {} }
     for digest in pairs(scope.digests) do
         tables.books[digest] = state.books[digest]
         tables.unmatched[digest] = state.unmatched[digest]
@@ -135,20 +138,27 @@ local function scopeTables(state, scope)
     for file in pairs(scope.files) do
         tables.files[file] = state.files[file]
     end
+    for row_id in pairs(scope.statsRows) do
+        tables.statsRows[row_id] = state.statsRows[row_id]
+    end
     if scope.global then tables.global = state.global end
     return tables
 end
 
 local function normalizeScope(opts)
     if not opts or opts.full then
-        return { full = true, digests = {}, files = {}, global = true }
+        return { full = true, digests = {}, files = {}, statsRows = {}, global = true }
     end
-    local scope = { full = false, digests = {}, files = {}, global = opts.global ~= false }
+    local scope = { full = false, digests = {}, files = {}, statsRows = {}, global = opts.global ~= false }
     for _, digest in ipairs(opts.digests or {}) do
         if digest then scope.digests[digest] = true end
     end
     for _, file in ipairs(opts.files or {}) do
         if file then scope.files[file] = true end
+    end
+    for _, row_id in ipairs(opts.statsRows or {}) do
+        row_id = tonumber(row_id)
+        if row_id then scope.statsRows[tostring(row_id)] = true end
     end
     return scope
 end
@@ -158,12 +168,16 @@ local function refreshSession(session)
     session.books = deepCopy(current.books)
     session.unmatched = deepCopy(current.unmatched)
     session.files = deepCopy(current.files)
+    session.statsRows = deepCopy(current.statsRows)
     session.global = deepCopy(current.global)
     session.manager_base = deepCopy(current)
     session.manager_generation = generation
 end
 
 local function commitSession(session)
+    if session.manager_account_epoch ~= account_epoch then
+        return nil, "stale_account"
+    end
     local state = ensure()
     local scope = session.manager_scope
     local base = session.manager_base
@@ -172,6 +186,7 @@ local function commitSession(session)
         replaceTable(state.books, mergeValue(base.books, session.books, state.books))
         replaceTable(state.unmatched, mergeValue(base.unmatched, session.unmatched, state.unmatched))
         replaceTable(state.files, mergeValue(base.files, session.files, state.files))
+        replaceTable(state.statsRows, mergeValue(base.statsRows, session.statsRows, state.statsRows))
         replaceTable(state.global, mergeValue(base.global, session.global, state.global))
     else
         for digest in pairs(scope.digests) do
@@ -181,6 +196,9 @@ local function commitSession(session)
         end
         for file in pairs(scope.files) do
             state.files[file] = mergeValue(base.files[file], session.files[file], state.files[file])
+        end
+        for row_id in pairs(scope.statsRows) do
+            state.statsRows[row_id] = mergeValue(base.statsRows[row_id], session.statsRows[row_id], state.statsRows[row_id])
         end
         if scope.global then
             replaceTable(state.global, mergeValue(base.global, session.global, state.global))
@@ -207,7 +225,23 @@ function StateManager.session(opts)
     session.manager_scope = scope
     session.manager_base = deepCopy(initial)
     session.manager_generation = generation
+    session.manager_account_epoch = account_epoch
     return session
+end
+
+function StateManager.setAccount(api)
+    local identity = "anonymous"
+    if api and api.server_url and api.username and api.userkey then
+        identity = tostring(api.server_url):gsub("/+$", "") .. "|" .. tostring(api.username)
+    end
+    if identity == account_identity then return false end
+    account_identity = identity
+    account_epoch = account_epoch + 1
+    shared = nil
+    active_mutation = nil
+    publish()
+    ensure()
+    return true
 end
 
 -- Compatibility alias for older callers. It returns an isolated session, not
@@ -330,7 +364,7 @@ end
 -- JSON subprocess envelope, so the child returns sequential records and the
 -- parent rebuilds lookup maps only if the generation is still current.
 function StateManager.computeOnDeviceMaps()
-    local state = shared or BookOrbitState.open()
+    local state = shared or BookOrbitState.open(account_identity)
     local by_book_id, by_file_id = state:matchedFileMaps()
     return {
         bookEntries = mapToEntries(by_book_id),
@@ -415,6 +449,24 @@ function StateManager.linkFile(digest, book_file_id, book_id, file)
     })
 end
 
+function StateManager.repairFileIdentity(file, old_digest, new_digest)
+    if not file or not new_digest then return generation end
+    if old_digest == new_digest and ensure().files[file] == new_digest then
+        return generation
+    end
+    local digests = { new_digest }
+    if old_digest and old_digest ~= new_digest then
+        table.insert(digests, old_digest)
+    end
+    return StateManager.mutateScoped({
+        digests = digests,
+        files = { file },
+        global = false,
+    }, function(session)
+        session:repairFileIdentity(file, old_digest, new_digest)
+    end)
+end
+
 -- Test seam: forgets the shared instance and every derived cache.
 function StateManager.reset()
     shared = nil
@@ -422,6 +474,8 @@ function StateManager.reset()
     maps_generation = -1
     generation = 0
     active_mutation = nil
+    account_identity = nil
+    account_epoch = account_epoch + 1
 end
 
 return StateManager

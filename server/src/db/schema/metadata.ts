@@ -92,6 +92,7 @@ export const bookMetadata = pgTable(
     index('bm_title_unaccent_trgm_idx').using('gin', sql`public.bookorbit_unaccent(${t.title}) gin_trgm_ops`),
     index('bm_title_lower_idx').on(sql`lower(${t.title})`),
     index('bm_title_book_id_idx').on(t.title, t.bookId),
+    index('bm_subtitle_unaccent_trgm_idx').using('gin', sql`public.bookorbit_unaccent(${t.subtitle}) gin_trgm_ops`),
     index('bm_series_trgm_idx').using('gin', t.seriesName.op('gin_trgm_ops')),
     index('bm_series_unaccent_trgm_idx').using('gin', sql`public.bookorbit_unaccent(${t.seriesName}) gin_trgm_ops`),
     index('bm_series_id_idx').on(t.seriesId),
@@ -114,6 +115,7 @@ export const bookMetadata = pgTable(
     index('bm_language_unaccent_trgm_idx').using('gin', sql`public.bookorbit_unaccent(${t.language}) gin_trgm_ops`),
     index('bm_published_date_idx').on(t.publishedDate),
     index('bm_published_year_idx').on(t.publishedYear),
+    index('bm_page_count_idx').on(t.pageCount),
     index('bm_published_date_sort_idx').on(sql`coalesce(${t.publishedDate}, make_date(${t.publishedYear}, 1, 1))`),
     index('bm_series_name_index_idx').on(
       t.seriesName,
@@ -155,6 +157,8 @@ export const bookCommunityRatings = pgTable(
     index('book_community_ratings_provider_idx').on(t.provider),
     index('book_community_ratings_rating_book_idx').on(t.rating, t.bookId),
     index('book_community_ratings_provider_rating_book_idx').on(t.provider, t.rating, t.bookId),
+    index('book_community_ratings_count_book_idx').on(t.ratingCount, t.bookId),
+    index('book_community_ratings_provider_count_book_idx').on(t.provider, t.ratingCount, t.bookId),
     check('book_community_ratings_rating_range_chk', sql`${t.rating} >= 0 and ${t.rating} <= 5`),
     check('book_community_ratings_count_nonnegative_chk', sql`${t.ratingCount} is null or ${t.ratingCount} >= 0`),
   ],
@@ -177,6 +181,8 @@ export const authors = pgTable(
     influences: text('influences').array(),
     metadataProvider: varchar('metadata_provider', { length: 50 }),
     metadataProviderId: varchar('metadata_provider_id', { length: 128 }),
+    /** Set when a user chose this provider match; enrichment then looks the id up instead of searching by name. */
+    metadataProviderPinned: boolean('metadata_provider_pinned').notNull().default(false),
     lastEnrichedAt: timestamp('last_enriched_at', { withTimezone: true }),
   },
   (t) => [
@@ -219,6 +225,8 @@ export const authorEnrichmentQueue = pgTable(
     lastSuccessAt: timestamp('last_success_at', { withTimezone: true }),
     lastError: text('last_error'),
     lastHttpStatus: integer('last_http_status'),
+    /** Set by a run that asked to bypass cached provider answers; survives requeues. */
+    ignoreCache: boolean('ignore_cache').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true })
       .notNull()
@@ -319,6 +327,8 @@ export const bookMetadataFetchQueue = pgTable(
     lastAttemptAt: timestamp('last_attempt_at', { withTimezone: true }),
     lastError: text('last_error'),
     lastHttpStatus: integer('last_http_status'),
+    /** Set by a run that asked to bypass cached provider answers; survives requeues. */
+    ignoreCache: boolean('ignore_cache').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true })
       .notNull()

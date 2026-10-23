@@ -18,6 +18,7 @@ import { useBookHighlights } from '@/features/book/composables/useBookHighlights
 import { HIGHLIGHT_VIEW_KEYS, type HighlightViewKey } from '@/features/book/lib/highlight-views'
 import HighlightsSideRail from '@/features/book/components/detail/highlights/HighlightsSideRail.vue'
 import HighlightsEmptyStage from '@/features/book/components/detail/highlights/HighlightsEmptyStage.vue'
+import { annotationSourceKey } from '@/features/annotations/lib/source-label'
 
 const props = defineProps<{ book: BookDetail }>()
 
@@ -63,7 +64,7 @@ const groups = computed<StreamGroup[]>(() =>
     if (group.mode === 'source') {
       return {
         key: group.key,
-        label: t(`annotations.sources.${group.key}`),
+        label: t(annotationSourceKey(group.key)),
         swatch: `var(--pill-${group.key})`,
         count: group.total,
         items: group.items,
@@ -73,7 +74,7 @@ const groups = computed<StreamGroup[]>(() =>
       const first = group.items[0]
       return {
         key: group.key,
-        label: first ? formatDate(new Date(first.createdAt), { day: 'numeric', month: 'long', year: 'numeric' }) : group.key,
+        label: first ? formatDate(new Date(first.highlightedAt), { day: 'numeric', month: 'long', year: 'numeric' }) : group.key,
         count: group.total,
         items: group.items,
       }

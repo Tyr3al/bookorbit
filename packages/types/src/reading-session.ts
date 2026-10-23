@@ -1,7 +1,13 @@
 import type { ReadingSessionSourceBucket } from "./reading-session-source-bucket";
 
-export const READING_SESSION_SOURCES = ["web", "koreader", "manual", "kobo"] as const;
+export const READING_SESSION_SOURCES = ["web", "ios", "watchos", "android", "koreader", "manual", "kobo"] as const;
 export type ReadingSessionSource = (typeof READING_SESSION_SOURCES)[number];
+
+export const CLIENT_READING_SESSION_SOURCES = ["ios", "watchos", "android"] as const;
+export type ClientReadingSessionSource = (typeof CLIENT_READING_SESSION_SOURCES)[number];
+
+export const READING_SESSION_TYPES = ["read", "tts", "listen"] as const;
+export type ReadingSessionType = (typeof READING_SESSION_TYPES)[number];
 
 export interface BookReadingSession {
   id: number;
@@ -16,6 +22,9 @@ export interface BookReadingSession {
   // The reading attempt this session was recorded against, when one was open at the time.
   // Sessions logged before attempts existed, or outside any attempt, carry null.
   attemptId: number | null;
+  // How the session was spent: reading the text, listening to text to speech, or listening to
+  // audio. Optional because servers before this field omit it; clients fall back to the format.
+  sessionType?: ReadingSessionType;
 }
 
 export interface BookReadingSourceSlice {
@@ -38,7 +47,7 @@ export interface BookReadingSessionStats {
   // session has. Unlike every other field here it ignores the list filters, because it
   // feeds the book's progress ring rather than a summary of the filtered rows.
   latestEndProgress: number | null;
-  // Reading time/sessions split across the 3 display buckets, ordered by
+  // Reading time/sessions split across the display buckets, ordered by
   // READING_SESSION_SOURCE_BUCKETS; only buckets with activity are included.
   bySource: BookReadingSourceSlice[];
   // Longest single session in the filtered window. The client only ever holds one page of

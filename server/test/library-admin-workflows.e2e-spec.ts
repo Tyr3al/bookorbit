@@ -1,9 +1,10 @@
 import { randomUUID } from 'crypto';
-import { access, mkdir, readFile } from 'fs/promises';
+import { access, mkdir, readFile, stat, utimes, writeFile } from 'fs/promises';
 import { basename, join } from 'path';
 
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { Permission } from '@bookorbit/types';
+import type { AddedAtRecomputeJob, RegexMetadataConfig } from '@bookorbit/types';
 
 import * as schema from '../src/db/schema';
 import { waitForCondition, waitForScanCompletion } from './e2e/app-harness';
@@ -19,7 +20,8 @@ import {
   type AuthorizationMatrixE2EContext,
   type TestUserSession,
 } from './e2e/authorization-matrix/authorization-matrix-harness';
-import { createEpubFixture, writeFixtureFile } from './e2e/authorization-matrix/authorization-matrix-fixture-builder';
+import { createEpubFixture } from './e2e/authorization-matrix/authorization-matrix-fixture-builder';
+import { createSlotCoverArtifacts } from './e2e/slot-cover-artifacts';
 
 type InjectResponse = Awaited<ReturnType<AuthorizationMatrixE2EContext['app']['inject']>>;
 
@@ -138,6 +140,8 @@ async function createLibraryViaApi(
     readingThreshold: number;
     markAsFinishedPercentComplete: number;
     fileWriteEnabled: boolean;
+    regexMetadata: RegexMetadataConfig;
+    metadataPrecedence: string[];
   }>,
 ): Promise<{
   response: InjectResponse;
@@ -165,6 +169,8 @@ async function createLibraryViaApi(
       readingThreshold: input?.readingThreshold ?? 0.4,
       markAsFinishedPercentComplete: input?.markAsFinishedPercentComplete ?? 95,
       fileWriteEnabled: input?.fileWriteEnabled ?? false,
+      regexMetadata: input?.regexMetadata,
+      metadataPrecedence: input?.metadataPrecedence,
     },
   });
   expect(response.statusCode).toBe(201);
@@ -206,6 +212,330 @@ describe('Library admin workflows (e2e)', { timeout: SCENARIO_TIMEOUT_MS }, () =
 
   afterAll(async () => {
     await closeAuthorizationMatrixE2EContext(ctx);
+  });
+
+  it('protects regex preview and validates its nested request contract', async () => {
+    const payload = { config: { rules: [{ pattern: '^(?<title>.+)$', flags: '' }] }, relativePath: 'Book.epub' };
+    for (const [token, status] of [
+      [manager.accessToken, 200],
+      [noPermissionUser.accessToken, 403],
+    ] as const) {
+      const response = await ctx.app.inject({ method: 'POST', url: '/api/v1/libraries/regex-metadata/preview', headers: authHeader(token), payload });
+      expect(response.statusCode).toBe(status);
+      if (status === 200) expect(response.json()).toMatchObject({ inputPath: 'Book', metadata: { title: 'Book' } });
+    }
+    for (const bad of [
+      { ...payload, relativePath: '/private/Book.epub' },
+      { ...payload, relativePath: '../Book.epub' },
+      { ...payload, config: { rules: [{ ...payload.config.rules[0], template: '{title}' }] } },
+    ]) {
+      const response = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/libraries/regex-metadata/preview',
+        headers: authHeader(manager.accessToken),
+        payload: bad,
+      });
+      expect(response.statusCode).toBe(400);
+    }
+    // Like every other library setting, regex rules need ManageLibraries and no per-library grant.
+    const library = await createLibraryWithFolder(ctx);
+    const scoped = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/libraries/regex-metadata/preview',
+      headers: authHeader(manager.accessToken),
+      payload: { ...payload, libraryId: library.libraryId },
+    });
+    expect(scoped.statusCode).toBe(200);
+    const update = await ctx.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/libraries/${library.libraryId}`,
+      headers: authHeader(manager.accessToken),
+      payload: { icon: 'BookOpen', regexMetadata: payload.config },
+    });
+    expect(update.statusCode, update.body).toBe(200);
+    expect(update.json().regexMetadata).toEqual(payload.config);
+  });
+
+  it('validates regex rules without a path and enforces access and DTO boundaries', async () => {
+    const config = { rules: [{ pattern: '(?<title>.+)', flags: '' }] };
+    const request = (payload: object, token = manager.accessToken) =>
+      ctx.app.inject({ method: 'POST', url: '/api/v1/libraries/regex-metadata/validate', headers: authHeader(token), payload });
+    const valid = await request({ config });
+    expect(valid.statusCode).toBe(200);
+    expect(valid.json()).toEqual({ valid: true, diagnostics: [] });
+    const invalid = await request({ config: { rules: [{ pattern: '[', flags: '' }] } });
+    expect(invalid.statusCode).toBe(200);
+    expect(invalid.json()).toEqual({ valid: false, diagnostics: [{ code: 'invalid_pattern', ruleIndex: 0 }] });
+    expect((await request({ config }, noPermissionUser.accessToken)).statusCode).toBe(403);
+    expect((await request({ config, relativePath: 'unexpected.epub' })).statusCode).toBe(400);
+    expect((await request({ config: { rules: [{ pattern: '(?<title>.+)', flags: 'g' }] } })).statusCode).toBe(400);
+    const library = await createLibraryWithFolder(ctx);
+    expect((await request({ config, libraryId: library.libraryId })).statusCode).toBe(200);
+    expect((await request({ config, libraryId: 2_147_483_000 })).statusCode).toBe(404);
+  });
+
+  it.each([
+    { organizationMode: 'book_per_file', autoScanCronExpression: '0 2 * * *', watch: true, fileWriteEnabled: true },
+    { organizationMode: 'book_per_folder', autoScanCronExpression: null, watch: false, fileWriteEnabled: false },
+  ])('returns saved library summary settings to non-superusers: $organizationMode', async (savedSettings) => {
+    const library = await createLibraryWithFolder(ctx);
+    const hiddenLibrary = await createLibraryWithFolder(ctx);
+    await ctx.db.update(schema.libraries).set(savedSettings).where(eq(schema.libraries.id, library.libraryId));
+    await grantLibraryAccess(ctx, manager.userId, library.libraryId, 'viewer');
+
+    const detailResponse = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/libraries/${library.libraryId}`,
+      headers: authHeader(manager.accessToken),
+    });
+    expect(detailResponse.statusCode).toBe(200);
+    expect(detailResponse.json()).toMatchObject(savedSettings);
+
+    const superuserResponse = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/v1/libraries',
+      headers: authHeader(ctx.adminToken),
+    });
+    expect(superuserResponse.statusCode).toBe(200);
+    const superuserLibraries = superuserResponse.json() as Array<{ id: number }>;
+    expect(superuserLibraries.find(({ id }) => id === library.libraryId)).toMatchObject(savedSettings);
+
+    const scopedResponse = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/v1/libraries',
+      headers: authHeader(manager.accessToken),
+    });
+    expect(scopedResponse.statusCode).toBe(200);
+    const scopedLibraries = scopedResponse.json() as Array<{ id: number }>;
+    expect(scopedLibraries.map(({ id }) => id)).not.toContain(hiddenLibrary.libraryId);
+    expect(scopedLibraries.find(({ id }) => id === library.libraryId)).toMatchObject({
+      ...savedSettings,
+      accessLevel: 'viewer',
+    });
+  });
+
+  it('does not grant management or file-write actions to viewers who can read automation settings', async () => {
+    const library = await createLibraryWithFolder(ctx);
+    const savedSettings = { watch: true, autoScanCronExpression: '0 2 * * *', fileWriteEnabled: true };
+    await ctx.db.update(schema.libraries).set(savedSettings).where(eq(schema.libraries.id, library.libraryId));
+    await grantLibraryAccess(ctx, scopedUser.userId, library.libraryId, 'viewer');
+
+    const listResponse = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/v1/libraries',
+      headers: authHeader(scopedUser.accessToken),
+    });
+    expect(listResponse.statusCode).toBe(200);
+    const visibleLibraries = listResponse.json() as Array<{ id: number }>;
+    expect(visibleLibraries.find(({ id }) => id === library.libraryId)).toMatchObject(savedSettings);
+
+    for (const payload of [{ watch: false }, { autoScanCronExpression: null }, { fileWriteEnabled: false }]) {
+      const response = await ctx.app.inject({
+        method: 'PATCH',
+        url: `/api/v1/libraries/${library.libraryId}`,
+        headers: authHeader(scopedUser.accessToken),
+        payload,
+      });
+      expectError(response, 403, 'Missing permission: manage_libraries');
+    }
+
+    for (const action of ['scan', 'refresh-covers']) {
+      const response = await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/scanner/libraries/${library.libraryId}/${action}`,
+        headers: authHeader(scopedUser.accessToken),
+      });
+      expectError(response, 403, 'Missing permission: manage_libraries');
+    }
+
+    const writeUrl = `/api/v1/libraries/${library.libraryId}/write-metadata-to-files`;
+    expectError(
+      await ctx.app.inject({ method: 'POST', url: writeUrl, headers: authHeader(scopedUser.accessToken) }),
+      403,
+      'Missing permission: library_edit_metadata',
+    );
+    const metadataEditor = await createUserAndLogin(ctx, { permissions: [Permission.LibraryEditMetadata] });
+    await grantLibraryAccess(ctx, metadataEditor.userId, library.libraryId, 'viewer');
+    expectError(
+      await ctx.app.inject({ method: 'POST', url: writeUrl, headers: authHeader(metadataEditor.accessToken) }),
+      403,
+      'Insufficient library access level',
+    );
+
+    const [storedLibrary] = await ctx.db.select().from(schema.libraries).where(eq(schema.libraries.id, library.libraryId));
+    expect(storedLibrary).toMatchObject(savedSettings);
+  });
+
+  it.each([null, { rules: [{ pattern: '(?<title>.+)', flags: '' }] }])(
+    'lets managers save regex rules and unrelated settings without a library grant: %j',
+    async (regexMetadata) => {
+      const library = await createLibraryWithFolder(ctx);
+      await ctx.db.update(schema.libraries).set({ regexMetadata }).where(eq(schema.libraries.id, library.libraryId));
+      const response = await ctx.app.inject({
+        method: 'PATCH',
+        url: `/api/v1/libraries/${library.libraryId}`,
+        headers: authHeader(manager.accessToken),
+        payload: { name: `Renamed library ${library.libraryId}`, icon: 'BookOpen', regexMetadata },
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json()).toMatchObject({ name: `Renamed library ${library.libraryId}`, regexMetadata });
+      const nextRegexMetadata = regexMetadata === null ? { rules: [{ pattern: '(?<title>.+)', flags: '' }] } : null;
+      const changed = await ctx.app.inject({
+        method: 'PATCH',
+        url: `/api/v1/libraries/${library.libraryId}`,
+        headers: authHeader(manager.accessToken),
+        payload: { icon: 'BookOpen', regexMetadata: nextRegexMetadata },
+      });
+      expect(changed.statusCode, changed.body).toBe(200);
+      const [stored] = await ctx.db.select().from(schema.libraries).where(eq(schema.libraries.id, library.libraryId));
+      expect(stored.regexMetadata).toEqual(nextRegexMetadata);
+    },
+  );
+
+  describe('date added recompute', () => {
+    async function finishRecompute(libraryId: number): Promise<AddedAtRecomputeJob> {
+      let result: AddedAtRecomputeJob;
+      await waitForCondition(async () => {
+        const response = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/libraries/${libraryId}/recompute-added-at`,
+          headers: authHeader(manager.accessToken),
+        });
+        expect(response.statusCode).toBe(200);
+        result = response.json() as AddedAtRecomputeJob;
+        expect(result.status).not.toBe('running');
+      }, 15_000);
+      return result!;
+    }
+
+    it('enforces both permission and library access and updates multiple batches with precise database timestamps', async () => {
+      const library = await createLibraryWithFolder(ctx);
+      const url = `/api/v1/libraries/${library.libraryId}/recompute-added-at`;
+      for (const method of ['POST', 'GET'] as const) {
+        expect((await ctx.app.inject({ method, url, headers: authHeader(manager.accessToken) })).statusCode).toBe(403);
+      }
+      await grantLibraryAccess(ctx, manager.userId, library.libraryId, 'viewer');
+      expect((await ctx.app.inject({ method: 'POST', url, headers: authHeader(manager.accessToken) })).statusCode).toBe(403);
+      await grantLibraryAccess(ctx, manager.userId, library.libraryId, 'editor');
+      await grantLibraryAccess(ctx, scopedUser.userId, library.libraryId, 'editor');
+      for (const method of ['POST', 'GET'] as const) {
+        expect((await ctx.app.inject({ method, url, headers: authHeader(scopedUser.accessToken) })).statusCode).toBe(403);
+      }
+      const imported = await ctx.app.inject({ method: 'POST', url, headers: authHeader(manager.accessToken) });
+      expect(imported.statusCode).toBe(400);
+      expect(imported.json().errorCode).toBe('ADDED_AT_SOURCE_IMPORTED');
+      const update = await ctx.app.inject({
+        method: 'PATCH',
+        url: `/api/v1/libraries/${library.libraryId}`,
+        headers: authHeader(manager.accessToken),
+        payload: { addedAtSource: 'file_modified', icon: 'BookOpen' },
+      });
+      expect(update.statusCode, update.body).toBe(200);
+      expect(update.json().addedAtSource).toBe('file_modified');
+      const inserted = await ctx.db
+        .insert(schema.books)
+        .values(
+          Array.from({ length: 105 }, (_, i) => ({
+            libraryId: library.libraryId,
+            libraryFolderId: library.libraryFolderId,
+            folderPath: join(library.folderPath, String(i)),
+            addedAt: sql`'2026-01-01 00:00:00.000123+00'::timestamptz`,
+          })),
+        )
+        .returning({ id: schema.books.id });
+      const expectedTime = new Date('2019-01-01T00:00:00Z');
+      await ctx.db.insert(schema.bookFiles).values(
+        inserted.slice(0, 104).flatMap(({ id }) => [
+          {
+            bookId: id,
+            libraryFolderId: library.libraryFolderId,
+            absolutePath: join(library.folderPath, `${id}.epub`),
+            ino: BigInt(id),
+            mtime: expectedTime,
+            role: 'content',
+          },
+          {
+            bookId: id,
+            libraryFolderId: library.libraryFolderId,
+            absolutePath: join(library.folderPath, `${id}.pdf`),
+            ino: BigInt(id + 100000),
+            mtime: new Date(0),
+            role: 'content',
+          },
+          {
+            bookId: id,
+            libraryFolderId: library.libraryFolderId,
+            absolutePath: join(library.folderPath, `${id}.jpg`),
+            ino: BigInt(id + 200000),
+            mtime: new Date('2010-01-01'),
+            role: 'cover',
+          },
+        ]),
+      );
+      const otherLibrary = await createLibraryWithFolder(ctx);
+      const [other] = await ctx.db
+        .insert(schema.books)
+        .values({ libraryId: otherLibrary.libraryId, libraryFolderId: otherLibrary.libraryFolderId, folderPath: otherLibrary.folderPath })
+        .returning();
+      const started = await ctx.app.inject({ method: 'POST', url, headers: authHeader(manager.accessToken) });
+      expect(started.statusCode).toBe(202);
+      expect(started.json().status).toBe('running');
+      expect(await finishRecompute(library.libraryId)).toMatchObject({ total: 105, processed: 105, updated: 104, skipped: 1, failed: 0 });
+      const [updated] = await ctx.db.select().from(schema.books).where(eq(schema.books.id, inserted[0].id));
+      expect(updated.addedAt).toEqual(expectedTime);
+      const [untouched] = await ctx.db.select().from(schema.books).where(eq(schema.books.id, other.id));
+      expect(untouched.addedAt).toEqual(other.addedAt);
+      expect((await ctx.app.inject({ method: 'POST', url, headers: authHeader(manager.accessToken) })).statusCode).toBe(202);
+      expect(await finishRecompute(library.libraryId)).toMatchObject({ updated: 0, unchanged: 104, skipped: 1 });
+    });
+
+    it('uses real birthtimes and preserves dates when any content file is missing', async () => {
+      const library = await createLibraryWithFolder(ctx);
+      await grantLibraryAccess(ctx, manager.userId, library.libraryId, 'editor');
+      await ctx.db.update(schema.libraries).set({ addedAtSource: 'file_created' }).where(eq(schema.libraries.id, library.libraryId));
+      const original = new Date('2020-01-01T00:00:00Z');
+      const inserted = await ctx.db
+        .insert(schema.books)
+        .values(
+          [0, 1].map((i) => ({
+            libraryId: library.libraryId,
+            libraryFolderId: library.libraryFolderId,
+            folderPath: join(library.folderPath, String(i)),
+            addedAt: original,
+          })),
+        )
+        .returning();
+      const present = join(library.folderPath, 'present.epub');
+      await writeFile(present, 'timestamp fixture');
+      const info = await stat(present);
+      await ctx.db.insert(schema.bookFiles).values([
+        { bookId: inserted[0].id, libraryFolderId: library.libraryFolderId, absolutePath: present, ino: 1n },
+        { bookId: inserted[1].id, libraryFolderId: library.libraryFolderId, absolutePath: join(library.folderPath, 'missing.epub'), ino: 2n },
+      ]);
+      const response = await ctx.app.inject({
+        method: 'POST',
+        url: `/api/v1/libraries/${library.libraryId}/recompute-added-at`,
+        headers: authHeader(manager.accessToken),
+      });
+      expect(response.statusCode).toBe(202);
+      const result = await finishRecompute(library.libraryId);
+      expect(result).toMatchObject({ processed: 2, updated: 1, failed: 1, failureSamples: [{ bookId: inserted[1].id, code: 'file_unavailable' }] });
+      expect(JSON.stringify(result)).not.toContain(library.folderPath);
+      const rows = await ctx.db.select().from(schema.books).where(eq(schema.books.libraryId, library.libraryId)).orderBy(schema.books.id);
+      expect(rows[0].addedAt).toEqual(info.birthtime.getTime() > 1000 ? info.birthtime : info.mtime);
+      expect(rows[1].addedAt).toEqual(original);
+    });
+
+    it('applies a saved file source to new scanner imports', async () => {
+      const library = await createLibraryWithFolder(ctx);
+      await ctx.db.update(schema.libraries).set({ addedAtSource: 'file_modified' }).where(eq(schema.libraries.id, library.libraryId));
+      const path = await createEpubFixture(library.folderPath, 'dated.epub', { title: 'Dated Book' });
+      const timestamp = new Date('2018-06-01T00:00:00Z');
+      await utimes(path, timestamp, timestamp);
+      await startLibraryScanAs(ctx, ctx.adminToken, library.libraryId);
+      const [book] = await ctx.db.select().from(schema.books).where(eq(schema.books.libraryId, library.libraryId));
+      expect(book.addedAt).toEqual(timestamp);
+    });
   });
 
   describe('path and prescan', () => {
@@ -308,6 +638,25 @@ describe('Library admin workflows (e2e)', { timeout: SCENARIO_TIMEOUT_MS }, () =
         },
       ]);
 
+      const editPrescanResponse = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/libraries/prescan',
+        headers: authHeader(manager.accessToken),
+        payload: { paths: [overlapLibrary.folderPath], libraryId: overlapLibrary.libraryId },
+      });
+
+      expect(editPrescanResponse.statusCode).toBe(201);
+      expect(editPrescanResponse.json()).toEqual({
+        totalFiles: 0,
+        paths: [
+          {
+            path: overlapLibrary.folderPath,
+            accessible: true,
+            fileCount: 0,
+          },
+        ],
+      });
+
       const forbiddenPrescanResponse = await ctx.app.inject({
         method: 'POST',
         url: '/api/v1/libraries/prescan',
@@ -319,6 +668,39 @@ describe('Library admin workflows (e2e)', { timeout: SCENARIO_TIMEOUT_MS }, () =
   });
 
   describe('create library and manage access', () => {
+    it.each([undefined, ['regex', 'embedded']])('creates regex rules with precedence %j', async (metadataPrecedence) => {
+      const regexMetadata = { rules: [{ pattern: '(?<title>.+)', flags: '' }] };
+      const { body: library } = await createLibraryViaApi(ctx, manager.accessToken, { regexMetadata, metadataPrecedence });
+      expect(library.regexMetadata).toEqual(regexMetadata);
+      expect(library.metadataPrecedence).toEqual(metadataPrecedence ?? ['folderStructure', 'embedded', 'nfoFile', 'opfFile', 'sidecar', 'regex']);
+      await waitForNoRunningScans(ctx, library.id);
+    });
+
+    it('persists fractional finished thresholds through create and update', async () => {
+      const { body: createdLibrary } = await createLibraryViaApi(ctx, manager.accessToken, {
+        markAsFinishedPercentComplete: 99.95,
+      });
+      expect(createdLibrary.markAsFinishedPercentComplete).toBe(99.95);
+
+      await grantLibraryAccess(ctx, manager.userId, createdLibrary.id, 'owner');
+      const update = await ctx.app.inject({
+        method: 'PATCH',
+        url: `/api/v1/libraries/${createdLibrary.id}`,
+        headers: authHeader(manager.accessToken),
+        payload: { markAsFinishedPercentComplete: 98.05 },
+      });
+      expect(update.statusCode, update.body).toBe(200);
+      expect(update.json().markAsFinishedPercentComplete).toBe(98.05);
+
+      const read = await ctx.app.inject({
+        method: 'GET',
+        url: `/api/v1/libraries/${createdLibrary.id}`,
+        headers: authHeader(manager.accessToken),
+      });
+      expect(read.statusCode, read.body).toBe(200);
+      expect(read.json().markAsFinishedPercentComplete).toBe(98.05);
+    });
+
     it('creates a library with the requested settings, requires explicit access rows, and reflects grant/update/revoke changes', async () => {
       const { body: createdLibrary } = await createLibraryViaApi(ctx, manager.accessToken, {
         name: `library-contract-${randomUUID()}`,
@@ -568,7 +950,8 @@ describe('Library admin workflows (e2e)', { timeout: SCENARIO_TIMEOUT_MS }, () =
         format: 'epub',
       });
       expect(uploadedBookFile?.absolutePath).toContain('Uploaded Contract Title.epub');
-      expect(uploadedBookFile?.relPath).toBe('Uploaded Contract Title.epub');
+      // The default upload pattern files a book under its first author, and this fixture names none.
+      expect(uploadedBookFile?.relPath).toBe('Unknown Author/Uploaded Contract Title.epub');
 
       const uploadedMetadataRow = await ctx.db.query.bookMetadata.findFirst({
         where: eq(schema.bookMetadata.bookId, uploadBody.bookId),
@@ -714,8 +1097,10 @@ describe('Library admin workflows (e2e)', { timeout: SCENARIO_TIMEOUT_MS }, () =
         },
       ]);
 
-      await writeFixtureFile(ctx.fixture.booksPath, `covers/${uploadedBookId}/cover_custom.jpg`, Buffer.from('cover', 'utf8'));
-      await writeFixtureFile(ctx.fixture.booksPath, `covers/${uploadedBookId}/thumbnail.jpg`, Buffer.from('thumb', 'utf8'));
+      await createSlotCoverArtifacts(ctx, uploadedBookId, {
+        coverContent: Buffer.from('cover', 'utf8'),
+        thumbnailContent: Buffer.from('thumb', 'utf8'),
+      });
 
       const reorderResponse = await ctx.app.inject({
         method: 'POST',

@@ -98,6 +98,16 @@ describe('GoogleProvider', () => {
       expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('q=isbn%3A1234567890'), expect.any(Object));
     });
 
+    it('asks for a page of ten unless a browsing search wants more', async () => {
+      global.fetch = vi.fn().mockResolvedValue({ ok: true, json: vi.fn().mockResolvedValue({ items: [] }) });
+
+      await provider.search({ author: 'Terry Pratchett' });
+      await provider.search({ author: 'Terry Pratchett', resultsPerProvider: 20 });
+
+      const pageSizes = vi.mocked(global.fetch).mock.calls.map(([url]) => new URL(url as string).searchParams.get('maxResults'));
+      expect(pageSizes).toEqual(['10', '20']);
+    });
+
     it('should return empty array on fetch error', async () => {
       global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 500 });
 
@@ -113,6 +123,62 @@ describe('GoogleProvider', () => {
 
       const result = await provider.search({ title: 'Test' });
       expect(result).toEqual([]);
+    });
+
+    it('does not validate cover thumbnails during bulk-compatible searches', async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: vi.fn().mockResolvedValue({
+          items: [
+            {
+              id: 'vol1',
+              volumeInfo: {
+                title: 'Test Book',
+                imageLinks: { thumbnail: 'http://books.google.com/books/content?id=vol1&zoom=1' },
+              },
+            },
+          ],
+        }),
+      });
+
+      const result = await provider.search({ title: 'Test Book' });
+
+      expect(result[0]?.coverUrl).toBe('https://books.google.com/books/content?id=vol1&zoom=0');
+      expect(global.fetch).toHaveBeenCalledOnce();
+    });
+
+    it('performs the bounded cover check for interactive searches', async () => {
+      global.fetch = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: vi.fn().mockResolvedValue({
+            items: [
+              {
+                id: 'vol1',
+                volumeInfo: {
+                  title: 'Test Book',
+                  imageLinks: { thumbnail: 'http://books.google.com/books/content?id=vol1&zoom=1' },
+                },
+              },
+            ],
+          }),
+        })
+        .mockResolvedValueOnce(
+          new Response(null, {
+            status: 200,
+            headers: { 'content-type': 'image/jpeg', 'content-length': '120000' },
+          }),
+        );
+
+      const result = await provider.search({ title: 'Test Book', validateCoverPlaceholders: true });
+
+      expect(result[0]?.coverUrl).toBe('https://books.google.com/books/content?id=vol1&zoom=0');
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+      expect(global.fetch).toHaveBeenLastCalledWith(
+        'https://books.google.com/books/content?id=vol1&zoom=0',
+        expect.objectContaining({ method: 'HEAD', redirect: 'manual' }),
+      );
     });
   });
 

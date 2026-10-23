@@ -4,10 +4,12 @@ import type { Library, LibraryOverviewEntry } from '@bookorbit/types'
 
 import { formatFamily, toFormatSegments } from '../lib/library-formats'
 import { shortenPath } from '../lib/library-paths'
+import { libraryProblem } from '../lib/library-problems'
 import { isLibrarySortField, matchesLibraryQuery, sortLibraries } from '../lib/library-sort'
 
 function library(overrides: Partial<Library> & Pick<Library, 'id' | 'name'>): Library {
   return {
+    type: 'books',
     icon: null,
     displayOrder: 0,
     coverAspectRatio: '2/3',
@@ -17,6 +19,7 @@ function library(overrides: Partial<Library> & Pick<Library, 'id' | 'name'>): Li
     formatPriority: [],
     allowedFormats: [],
     organizationMode: 'book_per_folder',
+    addedAtSource: 'imported',
     excludePatterns: [],
     readingThreshold: 10,
     markAsFinishedPercentComplete: 90,
@@ -35,6 +38,9 @@ function library(overrides: Partial<Library> & Pick<Library, 'id' | 'name'>): Li
     fileWriteKindleMaxFileSizeMb: 100,
     fileWriteAudioEnabled: false,
     fileWriteAudioMaxFileSizeMb: 500,
+    fileWriteAllFiles: false,
+    fileWriteReadAlongEnabled: false,
+    fileWriteReadAlongMaxFileSizeMb: 1000,
     fileRenameEnabled: false,
     enableAudiobookshelfApi: false,
     folders: [],
@@ -60,7 +66,8 @@ describe('formatFamily', () => {
 
   it('is case insensitive and falls back for unknown extensions', () => {
     expect(formatFamily('EPUB')).toBe('ebook')
-    expect(formatFamily('djvu')).toBe('other')
+    expect(formatFamily('DJVU')).toBe('document')
+    expect(formatFamily('unknown')).toBe('other')
   })
 })
 
@@ -103,7 +110,7 @@ describe('matchesLibraryQuery', () => {
   const novels = library({
     id: 1,
     name: 'Novels',
-    folders: [{ id: 1, path: '/srv/media/novels', createdAt: '2024-01-01T00:00:00.000Z' }],
+    folders: [{ id: 1, path: '/srv/media/novels', role: 'downloads', createdAt: '2024-01-01T00:00:00.000Z' }],
   })
 
   it('matches on name, case insensitively', () => {
@@ -181,5 +188,38 @@ describe('isLibrarySortField', () => {
   it('accepts known fields and rejects anything else', () => {
     expect(isLibrarySortField('lastScan')).toBe(true)
     expect(isLibrarySortField('nonsense')).toBe(false)
+  })
+})
+
+describe('libraryProblem', () => {
+  const scan = (overrides: Partial<NonNullable<LibraryOverviewEntry['lastScan']>> = {}) => ({
+    status: 'completed' as const,
+    triggeredBy: 'schedule' as const,
+    startedAt: '2026-09-28T06:00:00.000Z',
+    completedAt: '2026-09-28T06:00:01.000Z',
+    addedCount: 0,
+    updatedCount: 0,
+    missingCount: 0,
+    errorMessage: null,
+    ...overrides,
+  })
+
+  it('flags a library that has never been scanned', () => {
+    expect(libraryProblem(null, false)).toEqual({ kind: 'never' })
+  })
+
+  it('flags a failed scan with the scan it came from', () => {
+    const failed = scan({ status: 'failed', errorMessage: 'Server restarted during scan' })
+    expect(libraryProblem(failed, false)).toEqual({ kind: 'failed', scan: failed })
+  })
+
+  it('has nothing to say about a completed scan, missing books included', () => {
+    expect(libraryProblem(scan(), false)).toBeNull()
+    expect(libraryProblem(scan({ missingCount: 11 }), false)).toBeNull()
+  })
+
+  it('stays quiet while a scan is running, since it is about to replace the last one', () => {
+    expect(libraryProblem(null, true)).toBeNull()
+    expect(libraryProblem(scan({ status: 'failed' }), true)).toBeNull()
   })
 })

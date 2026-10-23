@@ -1,8 +1,9 @@
-import { MetadataCandidate } from '@bookorbit/types';
+import { MetadataProviderKey, type MetadataCandidate } from '@bookorbit/types';
 
 import { candidateHasNormalizedIsbn, normalizeMetadataIsbn } from './isbn-match';
 import { MetadataSearchParams } from './providers/metadata-search-params';
-import { normalizeTitleText, scoreTitleMatch, shareSignificantToken } from './title-match';
+import { scoreComicVineIssue } from './providers/comicvine/comicvine.matching';
+import { normalizeTitleText, scoreTitleMatch, shareSignificantToken } from '../../common/text-match/title-match';
 
 const DEFAULT_LIMIT = 5;
 
@@ -56,13 +57,13 @@ export function scoreCandidate(candidate: MetadataCandidate, params: MetadataSea
   let score = 0;
 
   const matchable = matchableTitle(candidate);
-  if (params.title && matchable) {
-    score += scoreTitleMatch(params.title, matchable);
-  }
+  const comicScore = candidate.provider === MetadataProviderKey.COMICVINE ? scoreComicVineIssue(candidate, params) : null;
+  if (comicScore !== null) score = comicScore;
+  else if (params.title && matchable) score = scoreTitleMatch(params.title, matchable);
 
-  // Author only boosts when there is already a positive title signal.
-  // A matching author alone (e.g. a different book by the same author) is not enough to keep a result.
-  if (score > 0 && params.author && candidate.authors?.length) {
+  // When a title was supplied, author remains a boost and cannot rescue an unrelated title.
+  // Without a title, an exact or containing author match is strong enough to stand on its own.
+  if ((!params.title || score > 0) && params.author && candidate.authors?.length) {
     score += scoreAuthor(params.author, candidate.authors);
   }
 

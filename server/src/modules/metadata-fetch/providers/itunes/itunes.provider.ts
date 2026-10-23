@@ -2,10 +2,13 @@ import { Injectable, Logger } from '@nestjs/common';
 import { MetadataCandidate, MetadataProviderKey } from '@bookorbit/types';
 
 import { ProviderConfigService } from '../../../metadata-preferences/provider-config.service';
+import { markProviderFailed } from '../../../../common/provider-cache/provider-call-context';
+import type { ProviderCacheSpec } from '../../../../common/provider-cache/provider-cache-spec';
 import { fetchWithThrottle } from '../../fetch-with-throttle';
 import { ProviderThrottleError } from '../../provider-throttle.error';
 import { IdentifiableProvider } from '../metadata-provider';
 import { MetadataSearchParams } from '../metadata-search-params';
+import { pickSearchInputs, providerCacheContext } from '../provider-cache';
 import { PROVIDER_TIMEOUT_MS } from '../provider-constants';
 import { buildRequestSignal } from '../provider-utils';
 import { mapITunesResult } from './itunes.mapper';
@@ -13,14 +16,48 @@ import { ITunesResponse } from './itunes.types';
 
 const SEARCH_URL = 'https://itunes.apple.com/search';
 const LOOKUP_URL = 'https://itunes.apple.com/lookup';
+type ITunesMediaKind = 'ebook' | 'audiobook';
+
+interface ITunesErrorBody {
+  errorMessage?: unknown;
+}
+
+function mediaKindOf(result: ITunesResponse['results'][number]): ITunesMediaKind | null {
+  if (result.kind === 'ebook' || result.kind === 'audiobook') return result.kind;
+  if (result.wrapperType === 'audiobook') return 'audiobook';
+  return null;
+}
+
+function matchesMediaKind(result: ITunesResponse['results'][number], expected: ITunesMediaKind): boolean {
+  return mediaKindOf(result) === expected;
+}
 
 @Injectable()
 export class ITunesProvider implements IdentifiableProvider {
   readonly key = MetadataProviderKey.ITUNES;
   readonly label = 'iTunes';
   readonly identifiable = true as const;
+  readonly editionFollowsMedium = true;
 
   private readonly logger = new Logger(ITunesProvider.name);
+
+  readonly cache: ProviderCacheSpec<MetadataSearchParams> = {
+    version: 1,
+    trustEmpty: true,
+    context: async () => {
+      const { enabled, coverResolution } = (await this.providerConfig.getConfig()).itunes;
+      return providerCacheContext(enabled, { coverResolution });
+    },
+    // Search asks for the ebook entity unless audiobooks are requested, so an absent medium is an ebook.
+    describeSearch: (params) => ({
+      inputs: {
+        ...(params.isbn ? { isbn: params.isbn } : pickSearchInputs(params, ['title', 'author'])),
+        isAudiobook: params.isAudiobook === true,
+      },
+    }),
+    // Lookup keeps the medium tri-state: without one it accepts either edition.
+    describeLookup: (providerId, params) => ({ inputs: { id: providerId, isAudiobook: params?.isAudiobook } }),
+  };
 
   constructor(private readonly providerConfig: ProviderConfigService) {}
 
@@ -33,7 +70,8 @@ export class ITunesProvider implements IdentifiableProvider {
 
     const url = new URL(SEARCH_URL);
     url.searchParams.set('term', query);
-    url.searchParams.set('entity', params.isAudiobook ? 'audiobook' : 'ebook');
+    const mediaKind: ITunesMediaKind = params.isAudiobook ? 'audiobook' : 'ebook';
+    url.searchParams.set('entity', mediaKind);
     url.searchParams.set('limit', '10');
     const requestUrl = url.toString();
     const startedAt = Date.now();
@@ -47,12 +85,15 @@ export class ITunesProvider implements IdentifiableProvider {
         );
         return [];
       }
-      const body = (await res.json()) as ITunesResponse;
+      const body = (await res.json()) as ITunesResponse & ITunesErrorBody;
+      if (body.errorMessage !== undefined) markProviderFailed('itunes.search: api error body');
       const results = body.results
+        .filter((result) => matchesMediaKind(result, mediaKind))
         .map((r) => {
           try {
             return mapITunesResult(r, coverResolution);
           } catch (err) {
+            markProviderFailed('itunes.search: result did not map');
             this.logger.warn(`[itunes] skipping result due to error: ${err instanceof Error ? err.message : String(err)}`);
             return null;
           }
@@ -68,6 +109,7 @@ export class ITunesProvider implements IdentifiableProvider {
         this.logger.warn(`[itunes] [fail] op=search query="${query}" durationMs=${Date.now() - startedAt} message="throttled"`);
         throw err;
       }
+      markProviderFailed('itunes.search: unusable response');
       this.logger.error(
         `[itunes] [fail] op=search query="${query}" durationMs=${Date.now() - startedAt} message="${err instanceof Error ? err.message : String(err)}"`,
       );
@@ -75,7 +117,7 @@ export class ITunesProvider implements IdentifiableProvider {
     }
   }
 
-  async lookupById(providerId: string, signal?: AbortSignal): Promise<MetadataCandidate | null> {
+  async lookupById(providerId: string, signal?: AbortSignal, params?: MetadataSearchParams): Promise<MetadataCandidate | null> {
     const { enabled, coverResolution } = await this.providerConfig.getConfig().then((c) => c.itunes);
     if (!enabled) return null;
 
@@ -93,12 +135,17 @@ export class ITunesProvider implements IdentifiableProvider {
         );
         return null;
       }
-      const body = (await res.json()) as ITunesResponse;
+      const body = (await res.json()) as ITunesResponse & ITunesErrorBody;
+      if (body.errorMessage !== undefined) markProviderFailed('itunes.lookup: api error body');
       let result: MetadataCandidate | null = null;
-      if (body.results.length > 0) {
+      const rawResult = body.results[0];
+      const expectedMediaKind: ITunesMediaKind | undefined =
+        params?.isAudiobook === undefined ? undefined : params.isAudiobook ? 'audiobook' : 'ebook';
+      if (rawResult && (expectedMediaKind === undefined || matchesMediaKind(rawResult, expectedMediaKind))) {
         try {
-          result = mapITunesResult(body.results[0], coverResolution);
+          result = mapITunesResult(rawResult, coverResolution);
         } catch (err) {
+          markProviderFailed('itunes.lookup: result did not map');
           this.logger.warn(`[itunes] failed to map lookup result providerId="${providerId}": ${err instanceof Error ? err.message : String(err)}`);
         }
       }
@@ -111,6 +158,7 @@ export class ITunesProvider implements IdentifiableProvider {
         this.logger.warn(`[itunes] [fail] op=lookup providerId="${providerId}" durationMs=${Date.now() - startedAt} message="throttled"`);
         throw err;
       }
+      markProviderFailed('itunes.lookup: unusable response');
       this.logger.error(
         `[itunes] [fail] op=lookup providerId="${providerId}" durationMs=${Date.now() - startedAt} message="${err instanceof Error ? err.message : String(err)}"`,
       );

@@ -7,6 +7,13 @@ export const NotificationType = {
   MetadataFetchFailed: "metadata_fetch_failed",
   BookDockFinalized: "book_dock_finalized",
   BookDockFinalizedWithErrors: "book_dock_finalized_with_errors",
+  BookRequestSubmitted: "book_request_submitted",
+  BookRequestApproved: "book_request_approved",
+  BookRequestRejected: "book_request_rejected",
+  BookRequestAvailable: "book_request_available",
+  BookRequestNeedsReview: "book_request_needs_review",
+  BookRequestNeedsRelease: "book_request_needs_release",
+  BookRequestFailed: "book_request_failed",
   AuthorEnrichmentCompleted: "author_enrichment_completed",
   AuthorEnrichmentFailed: "author_enrichment_failed",
   EmailSent: "email_sent",
@@ -20,6 +27,9 @@ export const NotificationType = {
   BulkRenameCompleted: "bulk_rename_completed",
   BulkRenameFailed: "bulk_rename_failed",
   AchievementUnlocked: "achievement_unlocked",
+  PodcastEpisodePublished: "podcast_episode_published",
+  PodcastFeedUnhealthy: "podcast_feed_unhealthy",
+  PodcastDownloadFailed: "podcast_download_failed",
 } as const;
 
 export type NotificationType = (typeof NotificationType)[keyof typeof NotificationType];
@@ -41,6 +51,7 @@ export const NOTIFICATION_CATEGORY_IDS = [
   "scanning",
   "metadata",
   "bookDock",
+  "bookRequests",
   "authorEnrichment",
   "email",
   "migration",
@@ -48,6 +59,7 @@ export const NOTIFICATION_CATEGORY_IDS = [
   "fileRename",
   "bulkRename",
   "achievements",
+  "podcasts",
 ] as const;
 
 export type NotificationCategory = (typeof NOTIFICATION_CATEGORY_IDS)[number];
@@ -71,6 +83,13 @@ export const NOTIFICATION_TYPE_META: Record<NotificationType, NotificationTypeMe
   [NotificationType.MetadataFetchFailed]: { category: "metadata", severity: "warning" },
   [NotificationType.BookDockFinalized]: { category: "bookDock", severity: "success" },
   [NotificationType.BookDockFinalizedWithErrors]: { category: "bookDock", severity: "warning" },
+  [NotificationType.BookRequestSubmitted]: { category: "bookRequests", severity: "success" },
+  [NotificationType.BookRequestApproved]: { category: "bookRequests", severity: "success" },
+  [NotificationType.BookRequestRejected]: { category: "bookRequests", severity: "warning" },
+  [NotificationType.BookRequestAvailable]: { category: "bookRequests", severity: "success" },
+  [NotificationType.BookRequestNeedsReview]: { category: "bookRequests", severity: "warning" },
+  [NotificationType.BookRequestNeedsRelease]: { category: "bookRequests", severity: "warning" },
+  [NotificationType.BookRequestFailed]: { category: "bookRequests", severity: "error" },
   [NotificationType.AuthorEnrichmentCompleted]: { category: "authorEnrichment", severity: "success" },
   [NotificationType.AuthorEnrichmentFailed]: { category: "authorEnrichment", severity: "warning" },
   [NotificationType.EmailSent]: { category: "email", severity: "success" },
@@ -84,6 +103,9 @@ export const NOTIFICATION_TYPE_META: Record<NotificationType, NotificationTypeMe
   [NotificationType.BulkRenameCompleted]: { category: "bulkRename", severity: "success" },
   [NotificationType.BulkRenameFailed]: { category: "bulkRename", severity: "warning" },
   [NotificationType.AchievementUnlocked]: { category: "achievements", severity: "success" },
+  [NotificationType.PodcastEpisodePublished]: { category: "podcasts", severity: "success" },
+  [NotificationType.PodcastFeedUnhealthy]: { category: "podcasts", severity: "warning" },
+  [NotificationType.PodcastDownloadFailed]: { category: "podcasts", severity: "error" },
 };
 
 export const NOTIFICATION_CATEGORIES: Record<NotificationCategory, readonly NotificationType[]> = NOTIFICATION_CATEGORY_IDS.reduce(

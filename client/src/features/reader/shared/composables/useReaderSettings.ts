@@ -8,11 +8,20 @@ import {
   CBX_READER_DEFAULTS,
   EPUB_FONT_SIZE_MAX,
   EPUB_FONT_SIZE_MIN,
+  EPUB_LETTER_SPACING_MAX,
+  EPUB_LETTER_SPACING_MIN,
+  EPUB_PARAGRAPH_SPACING_MAX,
+  EPUB_PARAGRAPH_SPACING_MIN,
   EPUB_READER_DEFAULTS,
+  EPUB_TEXT_INDENT_MAX,
+  EPUB_TEXT_INDENT_MIN,
+  EPUB_WORD_SPACING_MAX,
+  EPUB_WORD_SPACING_MIN,
   PDF_READER_DEFAULTS,
   type CbxReaderSettings,
   type EpubReaderSettings,
   type PdfReaderSettings,
+  type ReaderDefaultsPatchBody,
   type ReaderFormatGroup,
   type ReaderSettings,
   READER_GROUP_DEFAULTS,
@@ -58,6 +67,10 @@ function isIntegerInRange(value: unknown, min: number, max: number): value is nu
   return Number.isInteger(value) && isNumberInRange(value, min, max)
 }
 
+function isNullableNumberInRange(value: unknown, min: number, max: number): value is number | null {
+  return value === null || isNumberInRange(value, min, max)
+}
+
 function sanitizeEpubPartialSettings(settings: unknown): Partial<EpubReaderSettings> | null {
   if (!isRecord(settings)) return null
 
@@ -83,6 +96,18 @@ function sanitizeEpubPartialSettings(settings: unknown): Partial<EpubReaderSetti
   }
   if (isNumberInRange(settings.lineHeight, 0.8, 3)) {
     out.lineHeight = settings.lineHeight
+  }
+  if (isNumberInRange(settings.paragraphSpacing, EPUB_PARAGRAPH_SPACING_MIN, EPUB_PARAGRAPH_SPACING_MAX)) {
+    out.paragraphSpacing = settings.paragraphSpacing
+  }
+  if (isNullableNumberInRange(settings.letterSpacing, EPUB_LETTER_SPACING_MIN, EPUB_LETTER_SPACING_MAX)) {
+    out.letterSpacing = settings.letterSpacing
+  }
+  if (isNullableNumberInRange(settings.wordSpacing, EPUB_WORD_SPACING_MIN, EPUB_WORD_SPACING_MAX)) {
+    out.wordSpacing = settings.wordSpacing
+  }
+  if (isNullableNumberInRange(settings.textIndent, EPUB_TEXT_INDENT_MIN, EPUB_TEXT_INDENT_MAX)) {
+    out.textIndent = settings.textIndent
   }
   if (isIntegerInRange(settings.maxColumnCount, 1, 10)) {
     out.maxColumnCount = settings.maxColumnCount
@@ -304,19 +329,34 @@ export function useReaderSettings(bookFileId: number, format: string) {
     }
   }
 
+  // Sends only what changed.
+  //
+  // These used to PUT the whole object. PUT replaces the stored row, so a write from here threw
+  // away every field another client had set since this page loaded: the iOS reader owns the look
+  // fields and keeps the layout fields on the device, and a full snapshot from this tab silently
+  // reverted whatever it had just changed. PATCH merges field by field on the server, so two
+  // clients editing different fields no longer race over the whole row.
+  function patchSettings(path: string, set: Partial<ReaderSettings>) {
+    if (Object.keys(set).length === 0) return
+    api(path, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ set } satisfies ReaderDefaultsPatchBody),
+    }).catch(() => {})
+  }
+
   // Merges only the changed field(s) into the existing delta — never saves a full snapshot.
   function updateBookSettings(patch: Partial<ReaderSettings>) {
-    const next = { ...(bookDelta.value ?? undefined), ...patch } as Partial<ReaderSettings>
+    const next = {
+      ...(bookDelta.value ?? undefined),
+      ...patch,
+    } as Partial<ReaderSettings>
     bookDelta.value = next
     isCustomized.value = Object.keys(next).length > 0
     writeLs(lsBookKey(bookFileId), next)
 
     if (syncEnabled.value) {
-      api(`/api/v1/reader/preferences/${bookFileId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ settings: next }),
-      }).catch(() => {})
+      patchSettings(`/api/v1/reader/preferences/${bookFileId}`, patch)
     }
   }
 
@@ -326,7 +366,9 @@ export function useReaderSettings(bookFileId: number, format: string) {
     removeLs(lsBookKey(bookFileId))
 
     if (syncEnabled.value) {
-      api(`/api/v1/reader/preferences/${bookFileId}`, { method: 'DELETE' }).catch(() => {})
+      api(`/api/v1/reader/preferences/${bookFileId}`, {
+        method: 'DELETE',
+      }).catch(() => {})
     }
   }
 
@@ -337,11 +379,7 @@ export function useReaderSettings(bookFileId: number, format: string) {
     writeLs(lsDefaultKey(group), next)
 
     if (syncEnabled.value) {
-      api(`/api/v1/reader/defaults/${group}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ settings: next }),
-      }).catch(() => {})
+      patchSettings(`/api/v1/reader/defaults/${group}`, patch)
     }
   }
 
@@ -412,11 +450,11 @@ export function useReaderDefaultSettings<T extends ReaderSettings>(format: strin
     settings.value = next
     writeLs(lsDefaultKey(group), next)
 
-    if (syncEnabled.value) {
+    if (syncEnabled.value && Object.keys(patch).length > 0) {
       api(`/api/v1/reader/defaults/${group}`, {
-        method: 'PUT',
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ settings: next }),
+        body: JSON.stringify({ set: patch } satisfies ReaderDefaultsPatchBody),
       }).catch(() => {})
     }
   }

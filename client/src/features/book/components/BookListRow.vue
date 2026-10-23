@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { BookCard, BookFileRef } from '@bookorbit/types'
-import { getBookMediaProfile } from '@bookorbit/types'
+import { getBookMediaProfile, getPrimaryBookFile } from '@bookorbit/types'
 import BookCoverArtwork from './BookCoverArtwork.vue'
 import BookCoverSurface from './BookCoverSurface.vue'
 import { api } from '@/lib/api'
@@ -14,6 +14,7 @@ import {
   Eye,
   ExternalLink,
   FolderPlus,
+  Headphones,
   LibraryBig,
   Loader2,
   FolderInput,
@@ -32,10 +33,13 @@ import { useCoverVersions } from '../composables/useCoverVersions'
 import { COVER_ASPECT_RATIO_KEY, DEFAULT_COVER_ASPECT_RATIO } from '../lib/cover-aspect-ratio'
 import { useRefreshMetadata } from '../composables/useRefreshMetadata'
 import { usePermissions } from '@/features/auth/composables/usePermissions'
+import { useLibraryPermissions } from '@/features/library/composables/useLibraryPermissions'
 import SendBookDialog from '@/features/email/components/SendBookDialog.vue'
 import { RATING_STARS, getRatingStarClass } from '@/features/book/lib/rating-stars'
 import { useDisplaySettings } from '@/composables/useDisplaySettings'
 import { displayPublishedDate } from '../lib/published-date'
+import { bookFormatEntries, formatKeyCode, type BookFormatEntry } from '@/features/book/lib/book-formats'
+import { formatChipStyle } from '@/features/book/lib/format-colors'
 
 const COLLAPSED_SERIES_COVER_LIMIT = 3
 
@@ -58,6 +62,8 @@ const emit = defineEmits<{
 }>()
 
 const { hasPermission } = usePermissions()
+const { hasLibraryPermission } = useLibraryPermissions()
+const canEditMetadata = computed(() => hasLibraryPermission('library_edit_metadata', props.book?.libraryId, 'editor'))
 const { thumbnailClickAction } = useDisplaySettings()
 const showSendDialog = ref(false)
 
@@ -92,24 +98,11 @@ const seriesLine = computed(() => {
 })
 
 const isMissing = computed(() => props.book.status === 'missing')
-const primaryFile = computed(() => props.book.files.find((f) => f.role === 'primary') ?? props.book.files[0] ?? null)
+const primaryFile = computed(() => getPrimaryBookFile(props.book.files))
 const mediaProfile = computed(() => getBookMediaProfile(props.book.files))
 const isAudiobook = computed(() => mediaProfile.value.primaryMediaKind === 'audiobook')
 const isComic = computed(() => mediaProfile.value.primaryMediaKind === 'comic')
-const secondaryFiles = computed(() => props.book.files.filter((f) => f !== primaryFile.value))
-
-const uniqueSecondaryFiles = computed(() => {
-  const seenFormats = new Set<string>()
-  if (primaryFile.value?.format) seenFormats.add(primaryFile.value.format)
-
-  return secondaryFiles.value.filter((f) => {
-    const format = f.format
-    if (!format) return true
-    if (seenFormats.has(format)) return false
-    seenFormats.add(format)
-    return true
-  })
-})
+const formatEntries = computed(() => bookFormatEntries(props.book.files))
 
 const metaLine = computed(() => {
   const parts: string[] = []
@@ -144,7 +137,7 @@ async function setRating(star: number) {
 }
 
 const { coverUrl } = useCoverVersions()
-const coverSrc = computed(() => coverUrl(props.book.id, 'thumbnail', props.book.updatedAt ?? props.book.addedAt))
+const coverSrc = computed(() => coverUrl(props.book.id, 'thumbnail', props.book.coverVersion))
 
 const { refreshing, refreshWithFeedback } = useRefreshMetadata()
 const injectedCoverAspectRatio = inject(COVER_ASPECT_RATIO_KEY, ref(DEFAULT_COVER_ASPECT_RATIO))
@@ -156,6 +149,21 @@ function openFile(file: BookFileRef, mode?: 'peek') {
     params: { bookId: props.book.id, fileId: file.id },
     query: mode === 'peek' ? { format: file.format ?? 'epub', mode } : { format: file.format ?? 'epub' },
   })
+}
+
+function formatButtonClasses(entry: BookFormatEntry): string {
+  if (entry.readAlong) return 'text-white hover:opacity-90 transition-opacity'
+  return entry.primary
+    ? 'bg-primary/15 text-primary hover:bg-primary/25 transition-colors'
+    : 'bg-muted text-foreground hover:bg-muted/70 transition-colors'
+}
+
+function formatButtonStyle(entry: BookFormatEntry): Record<string, string> | undefined {
+  return entry.readAlong ? formatChipStyle(entry.key, 'solid') : undefined
+}
+
+function formatButtonTooltip(entry: BookFormatEntry): string {
+  return entry.readAlong ? t('book.actions.openReadAlong') : t('book.actions.openAs', { format: formatKeyCode(entry.key) })
 }
 
 function peekPrimaryFile() {
@@ -178,7 +186,7 @@ function openSeriesDetails() {
 }
 
 function collapsedCoverVersion(bookId: number): string | null | undefined {
-  if (bookId === props.book.id) return props.book.updatedAt ?? props.book.addedAt
+  if (bookId === props.book.id) return props.book.coverVersion
   return collapsedSeries.value?.coverUpdatedAtByBookId?.[bookId]
 }
 
@@ -300,7 +308,7 @@ function handleRowClick(event: MouseEvent) {
     <div
       v-if="selectionMode"
       data-testid="book-selection-checkbox"
-      class="h-5 w-5 rounded shrink-0 flex items-center justify-center transition-colors"
+      class="h-5 w-5 rounded-xs shrink-0 flex items-center justify-center transition-colors"
       :class="selected ? 'bg-primary' : 'border border-border bg-background'"
     >
       <Check v-if="selected" class="text-primary-foreground" :size="12" />
@@ -309,7 +317,7 @@ function handleRowClick(event: MouseEvent) {
     <!-- Cover -->
     <BookCoverSurface
       size="mini"
-      class="book-cover-surface--spine-fitted w-16 rounded shrink-0 overflow-hidden relative"
+      class="book-cover-surface--spine-fitted w-16 rounded-xs shrink-0 overflow-hidden relative"
       :disable-spine="isAudiobook"
       :is-comic="isComic"
       :class="isMissing ? 'opacity-50 grayscale' : ''"
@@ -326,6 +334,11 @@ function handleRowClick(event: MouseEvent) {
         backdrop-class="blur-md brightness-50"
         :spine="!isAudiobook"
         :is-comic="isComic"
+        :authors="book.authors"
+        :subtitle="book.subtitle"
+        :series-name="book.seriesName"
+        :series-index="book.seriesIndex"
+        :genres="book.genres"
       />
     </BookCoverSurface>
 
@@ -368,38 +381,33 @@ function handleRowClick(event: MouseEvent) {
       <div class="flex items-center gap-1">
         <span
           v-if="isMissing"
-          class="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400"
+          class="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-xs bg-amber-500/15 text-amber-600 dark:text-amber-400"
         >
           <TriangleAlert class="size-3 shrink-0" />
           <span class="hidden sm:inline">{{ t('book.card.missing') }}</span>
         </span>
-        <Tooltip v-if="primaryFile && !isMissing">
-          <TooltipTrigger as-child>
-            <button
-              class="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-primary/15 text-primary hover:bg-primary/25 transition-colors"
-              @click="openFile(primaryFile)"
-            >
-              {{ primaryFile.format ?? '?' }}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent>{{ t('book.actions.openAs', { format: primaryFile.format?.toUpperCase() ?? t('book.unknownFormat') }) }}</TooltipContent>
-        </Tooltip>
-        <Tooltip v-for="file in uniqueSecondaryFiles" :key="file.id">
-          <TooltipTrigger as-child>
-            <button
-              class="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-muted text-muted-foreground hover:bg-muted/70 transition-colors"
-              @click="openFile(file)"
-            >
-              {{ file.format ?? '?' }}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent>{{ t('book.actions.openAs', { format: file.format?.toUpperCase() ?? t('book.unknownFormat') }) }}</TooltipContent>
-        </Tooltip>
+        <template v-if="!isMissing">
+          <Tooltip v-for="entry in formatEntries" :key="entry.key">
+            <TooltipTrigger as-child>
+              <button
+                class="inline-flex items-center gap-0.5 text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-xs"
+                :class="formatButtonClasses(entry)"
+                :style="formatButtonStyle(entry)"
+                :aria-label="formatButtonTooltip(entry)"
+                @click="openFile(entry.files[0]!)"
+              >
+                <span aria-hidden="true">{{ formatKeyCode(entry.key) }}</span>
+                <Headphones v-if="entry.readAlong" class="size-2.5 shrink-0" :stroke-width="2.5" aria-hidden="true" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>{{ formatButtonTooltip(entry) }}</TooltipContent>
+          </Tooltip>
+        </template>
       </div>
 
       <DropdownMenu>
         <DropdownMenuTrigger as-child>
-          <button class="p-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground">
+          <button class="p-1 rounded-xs hover:bg-muted transition-colors text-muted-foreground hover:text-foreground">
             <MoreHorizontal class="size-4" />
           </button>
         </DropdownMenuTrigger>
@@ -421,19 +429,16 @@ function handleRowClick(event: MouseEvent) {
             {{ t('book.actions.bookDetails') }}
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem
-            v-if="hasPermission('library_edit_metadata')"
-            @click="router.push({ name: 'book-detail', params: { bookId: book.id }, query: { tab: 'edit' } })"
-          >
+          <DropdownMenuItem v-if="canEditMetadata" @click="router.push({ name: 'book-detail', params: { bookId: book.id }, query: { tab: 'edit' } })">
             <Pencil class="size-4 mr-2" />
             {{ t('book.actions.editMetadata') }}
           </DropdownMenuItem>
-          <DropdownMenuItem v-if="hasPermission('library_edit_metadata')" :disabled="refreshing" @click="refreshWithFeedback(book.id)">
+          <DropdownMenuItem v-if="canEditMetadata" :disabled="refreshing" @click="refreshWithFeedback(book.id)">
             <Loader2 v-if="refreshing" class="size-4 mr-2 animate-spin" />
             <RefreshCw v-else class="size-4 mr-2" />
             {{ t('book.actions.refreshMetadata') }}
           </DropdownMenuItem>
-          <DropdownMenuItem v-if="allowMoveToLibrary && hasPermission('library_edit_metadata')" @click="emit('action', 'move-to-library')">
+          <DropdownMenuItem v-if="allowMoveToLibrary && canEditMetadata" @click="emit('action', 'move-to-library')">
             <FolderInput class="size-4 mr-2" />
             {{ t('book.move.action') }}
           </DropdownMenuItem>
@@ -466,6 +471,7 @@ function handleRowClick(event: MouseEvent) {
     :selected-count="1"
     :book-files="book.files"
     :book-title="book.title ?? undefined"
+    :book-authors="authorLine ?? undefined"
     @update:open="showSendDialog = $event"
   />
 </template>

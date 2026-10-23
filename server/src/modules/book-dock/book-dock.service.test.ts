@@ -4,9 +4,17 @@ import { BookDockService } from './book-dock.service';
 
 vi.mock('fs/promises', () => ({
   unlink: vi.fn(),
+  rmdir: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { unlink } from 'fs/promises';
+import { rmdir, unlink } from 'fs/promises';
+import { inspectEpubMediaOverlayFields } from '../reader/epub/epub-media-overlay-capability';
+
+vi.mock('../reader/epub/epub-media-overlay-capability', () => ({
+  inspectEpubMediaOverlayFields: vi
+    .fn()
+    .mockResolvedValue({ mediaOverlayAvailable: false, mediaOverlayDurationSeconds: null, mediaOverlayCheckedAt: null }),
+}));
 
 function row(overrides?: Record<string, unknown>) {
   return {
@@ -46,6 +54,8 @@ function makeService() {
     setTargetsByIds: vi.fn(),
     countsByStatus: vi.fn(),
     getStatistics: vi.fn(),
+    findUnitFiles: vi.fn().mockResolvedValue([]),
+    findUnitFilesByDockFileIds: vi.fn().mockResolvedValue(new Map()),
   };
   const ingestService = {
     retryFetch: vi.fn(),
@@ -116,6 +126,53 @@ describe('BookDockService', () => {
         createdAt: '2026-01-01T00:00:00.000Z',
       }),
     );
+  });
+
+  it('lists and reads unit members even when books share a directory', async () => {
+    const { service, repo } = makeService();
+    const shared = row({ unitDirectory: null });
+    const member = { fileName: 'track-02.mp3', fileSize: 20, format: 'mp3', role: 'content', sortOrder: 1 };
+    repo.findAll.mockResolvedValue({ items: [shared], total: 1 });
+    repo.findUnitFilesByDockFileIds.mockResolvedValue(new Map([[shared.id, [member]]]));
+    repo.findById.mockResolvedValue(shared);
+    repo.findUnitFiles.mockResolvedValue([member]);
+
+    const page = await service.listFiles({ page: 1, limit: 20, sort: 'createdAt', order: 'desc', userId: 1, canManageAll: false });
+    const detail = await service.getFile(shared.id, 1, false);
+    expect(repo.findUnitFilesByDockFileIds).toHaveBeenCalledWith([shared.id]);
+    expect(page.items[0].unitFiles).toEqual([member]);
+    expect(detail.unitFiles).toEqual([member]);
+  });
+
+  it('says whether a single EPUB is a read-along, and never opens anything else to ask', async () => {
+    const { service, repo } = makeService();
+    vi.mocked(inspectEpubMediaOverlayFields).mockResolvedValueOnce({
+      mediaOverlayAvailable: true,
+      mediaOverlayDurationSeconds: 3600,
+      mediaOverlayCheckedAt: new Date(),
+    });
+    repo.findUnitFiles.mockResolvedValue([]);
+
+    repo.findById.mockResolvedValue(row({ format: 'epub', absolutePath: '/dock/dune.epub' }));
+    expect((await service.getFile(1, 1, true, { readAlong: true })).readAlong).toBe(true);
+    expect(inspectEpubMediaOverlayFields).toHaveBeenCalledWith('/dock/dune.epub', 'epub', expect.any(Function));
+
+    vi.mocked(inspectEpubMediaOverlayFields).mockClear();
+    // An ordinary read, which the upload response is too, never opens the file.
+    expect((await service.getFile(1, 1, true)).readAlong).toBeUndefined();
+    repo.findById.mockResolvedValue(row({ format: 'm4b', absolutePath: '/dock/dune.m4b' }));
+    expect((await service.getFile(1, 1, true, { readAlong: true })).readAlong).toBeUndefined();
+    expect(inspectEpubMediaOverlayFields).not.toHaveBeenCalled();
+  });
+
+  it('discards a shared-folder book and its members without touching sibling books', async () => {
+    const { service, repo } = makeService();
+    repo.findById.mockResolvedValue(row({ unitDirectory: null }));
+    repo.findUnitFiles.mockResolvedValue([{ absolutePath: '/bucket/book.epub' }, { absolutePath: '/bucket/book.mobi' }]);
+    await service.discardFile(1, 1, false);
+    expect(new Set(vi.mocked(unlink).mock.calls.map(([path]) => path))).toEqual(new Set(['/bucket/book.epub', '/bucket/book.mobi']));
+    expect(rmdir).not.toHaveBeenCalled();
+    expect(repo.deleteById).toHaveBeenCalledWith(1);
   });
 
   it('normalizes legacy tainted metadata before returning it through the API', async () => {
@@ -329,13 +386,14 @@ describe('BookDockService', () => {
       .mockResolvedValueOnce([]);
 
     await service.discardFile(1, 1, false);
-    await service.bulkDiscard([], true);
+    await service.bulkDiscard([], true, [], undefined, undefined, 1, true, undefined, true);
 
     expect(vi.mocked(unlink)).toHaveBeenCalledWith('/bucket/book.epub');
     expect(vi.mocked(unlink)).toHaveBeenCalledWith('/covers/1.png');
     expect(vi.mocked(unlink)).toHaveBeenCalledWith('/covers/1_thumb.jpg');
     expect(repo.deleteById).toHaveBeenCalledWith(1);
     expect(repo.deleteByIds).toHaveBeenCalledWith([2]);
+    expect(repo.findSelectionBatch).toHaveBeenCalledWith(expect.objectContaining({ readyToFile: true }));
   });
 
   it('proxies summary and statistics repository queries', async () => {

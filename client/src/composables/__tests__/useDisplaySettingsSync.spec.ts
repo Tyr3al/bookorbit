@@ -30,6 +30,7 @@ function validDisplayPreferences(overrides: Partial<DisplayPreferences> = {}): D
     gridCardPrimaryLabel: 'hidden',
     gridCardSecondaryLabel: 'hidden',
     thumbnailClickAction: 'reader',
+    placeholderCoverStyle: 'bauhaus',
     ...overrides,
   }
 }
@@ -150,9 +151,18 @@ describe('useDisplaySettingsSync', () => {
       '/api/v1/user-preferences/display',
       expect.objectContaining({
         method: 'PUT',
-        body: expect.stringContaining('"bookCoverDisplayMode":"fill-crop"'),
+        body: expect.any(String),
       }),
     )
+
+    const request = apiMock.mock.calls[0]?.[1] as RequestInit
+    expect(JSON.parse(request.body as string)).toMatchObject({
+      settings: {
+        authorRowDensity: 'comfortable',
+        authorCoverFallback: false,
+        bookCoverDisplayMode: 'fill-crop',
+      },
+    })
   })
 
   it('cancels a pending debounced save', async () => {

@@ -27,6 +27,7 @@ function audioFile(overrides: Partial<BookFile> = {}): BookFile {
     isFixedLayout: null,
     createdAt: new Date('2024-01-01T00:00:00Z'),
     updatedAt: new Date('2024-01-01T00:00:00Z'),
+    capturedAt: new Date('2024-01-01T00:00:00Z'),
     ...overrides,
   };
 }
@@ -54,11 +55,17 @@ function makeService(overrides: { files?: BookFile[] } = {}) {
   const repository = {
     findProgressForAudiobookshelfUser: vi.fn().mockResolvedValue([]),
     findItemsInProgressForAudiobookshelfUser: vi.fn().mockResolvedValue([{ bookId: 7, progressLastUpdate: new Date('2024-01-02T00:00:00Z') }]),
-    findProgressByUserIdAndBookIds: vi
-      .fn()
-      .mockResolvedValue([
-        { userId: 1, bookId: 7, percentage: 25, currentFileId: 11, positionSeconds: 10, updatedAt: new Date('2024-01-01T00:00:00Z') },
-      ]),
+    findProgressByUserIdAndBookIds: vi.fn().mockResolvedValue([
+      {
+        userId: 1,
+        bookId: 7,
+        percentage: 25,
+        currentFileId: 11,
+        positionSeconds: 10,
+        updatedAt: new Date('2024-01-01T00:00:00Z'),
+        capturedAt: new Date('2024-01-01T00:00:00Z'),
+      },
+    ]),
     findAudioFilesByBookId: vi.fn().mockResolvedValue(files),
     findAudioFilesByBookIds: vi.fn().mockResolvedValue(files),
     findExposedAudioBooksByIds: vi.fn().mockImplementation((bookIds: number[]) => Promise.resolve(bookIds.map((id) => ({ id, libraryId: 3 })))),
@@ -107,7 +114,15 @@ describe('AudiobookshelfProgressService.getItemsInProgress', () => {
 describe('AudiobookshelfProgressService.toMediaProgress', () => {
   it('computes the absolute position across files and the progress fraction', () => {
     const { service } = makeService();
-    const row = { userId: 1, bookId: 7, percentage: 25, currentFileId: 12, positionSeconds: 10, updatedAt: new Date('2024-01-01T00:00:00Z') };
+    const row = {
+      userId: 1,
+      bookId: 7,
+      percentage: 25,
+      currentFileId: 12,
+      positionSeconds: 10,
+      updatedAt: new Date('2024-01-01T00:00:00Z'),
+      capturedAt: new Date('2024-01-01T00:00:00Z'),
+    };
     const progress = service.toMediaProgress(row, [audioFile(), audioFile({ id: 12, sortOrder: 1, durationSeconds: 60 })]);
 
     expect(progress.progress).toBe(0.25);
@@ -121,7 +136,15 @@ describe('AudiobookshelfProgressService.toMediaProgress', () => {
   it('marks progress as finished at the ABS threshold', () => {
     const { service } = makeService();
     const progress = service.toMediaProgress(
-      { userId: 1, bookId: 7, percentage: 99, currentFileId: 12, positionSeconds: 0, updatedAt: new Date('2024-01-01T00:00:00Z') },
+      {
+        userId: 1,
+        bookId: 7,
+        percentage: 99,
+        currentFileId: 12,
+        positionSeconds: 0,
+        updatedAt: new Date('2024-01-01T00:00:00Z'),
+        capturedAt: new Date('2024-01-01T00:00:00Z'),
+      },
       [audioFile(), audioFile({ id: 12, sortOrder: 1, durationSeconds: 60 })],
     );
     expect(progress.isFinished).toBe(true);
@@ -295,7 +318,15 @@ describe('AudiobookshelfProgressService.batchUpdateMediaProgress', () => {
     const { service, repository, bookService } = makeService();
     vi.mocked(repository.findExposedAudioBooksByIds).mockResolvedValue([{ id: 7 }] as never);
     vi.mocked(repository.findProgressByUserIdAndBookIds).mockResolvedValue([
-      { userId: 1, bookId: 7, percentage: 25, currentFileId: 11, positionSeconds: 10, updatedAt: new Date('2025-01-01T00:00:00Z') },
+      {
+        userId: 1,
+        bookId: 7,
+        percentage: 25,
+        currentFileId: 11,
+        positionSeconds: 10,
+        updatedAt: new Date('2025-01-01T00:00:00Z'),
+        capturedAt: new Date('2025-01-01T00:00:00Z'),
+      },
     ] as never);
 
     await service.batchUpdateMediaProgress(user(), [

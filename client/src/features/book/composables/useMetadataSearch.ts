@@ -1,13 +1,19 @@
-import { computed, onUnmounted, reactive, ref } from 'vue'
+import { computed, onUnmounted, reactive, ref, shallowReactive } from 'vue'
 import { api } from '@/lib/api'
 import { METADATA_PROVIDER_STATUS_EVENT } from '@bookorbit/types'
 import type {
+  ConcreteBookMediaKind,
+  MetadataCacheRequestPolicy,
   MetadataCandidate,
+  MetadataCandidateCacheInfo,
   MetadataProviderInfo,
   MetadataProviderKey,
   MetadataProviderSearchOutcome,
   MetadataProviderSearchStatus,
+  MetadataSearchCandidateEvent,
 } from '@bookorbit/types'
+import { METADATA_CACHE_REFRESH, splitCandidateCache, summarizeCandidateCache } from '@/features/metadata-cache/lib/metadata-cache'
+import { candidateKey } from '../lib/metadata-match'
 
 export interface SearchParams {
   title?: string
@@ -15,10 +21,22 @@ export interface SearchParams {
   isbn?: string
   bookId?: number
   isAudiobook?: boolean
+  /** Narrows the search to the providers that serve one medium; the server derives isAudiobook from it. */
+  mediaKind?: ConcreteBookMediaKind
+  /** Several media at once, ranked as for the first: the providers of every medium named are asked. */
+  mediaKinds?: ConcreteBookMediaKind[]
+  /** Asks exactly these providers, whatever the provider filter holds. */
+  providers?: MetadataProviderKey[]
+  /** `refresh` skips saved answers and asks every provider live. */
+  cache?: MetadataCacheRequestPolicy
+  /** Ranked results each provider may return, for a search that browses rather than matches one book. */
+  resultsPerProvider?: number
 }
 
 export function useMetadataSearch() {
   const results = ref<MetadataCandidate[]>([])
+  // Keyed by candidate rather than stored on it: the marker must never reach a form or request body.
+  const candidateCache = shallowReactive(new Map<string, MetadataCandidateCacheInfo>())
   const providerCounts = reactive<Partial<Record<MetadataProviderKey, number>>>({})
   // Providers that stopped early. Without this an interrupted search looks like an empty one.
   const providerStatuses = reactive<Partial<Record<MetadataProviderKey, MetadataProviderSearchOutcome>>>({})
@@ -27,7 +45,12 @@ export function useMetadataSearch() {
   const providers = ref<MetadataProviderInfo[]>([])
   const selectedProviders = ref<MetadataProviderKey[]>([])
 
+  // Providers asked again on their own after they stopped early, while the answer is on its way.
+  const retryingProviders = ref<MetadataProviderKey[]>([])
+
   let abortController: AbortController | null = null
+  const retryControllers = new Set<AbortController>()
+  let lastParams: SearchParams | null = null
 
   async function loadProviders(bookId?: number) {
     const query = bookId != null ? `?bookId=${bookId}` : ''
@@ -41,14 +64,80 @@ export function useMetadataSearch() {
   function cancel() {
     abortController?.abort()
     abortController = null
+    for (const controller of retryControllers) controller.abort()
+    retryControllers.clear()
+    retryingProviders.value = []
     isStreaming.value = false
   }
 
   onUnmounted(cancel)
 
+  function buildQuery(params: SearchParams): URLSearchParams {
+    const query = new URLSearchParams()
+    if (params.title) query.set('title', params.title)
+    if (params.author) query.set('author', params.author)
+    if (params.isbn) query.set('isbn', params.isbn)
+    if (params.bookId != null) query.set('bookId', String(params.bookId))
+    if (params.isAudiobook != null) query.set('isAudiobook', String(params.isAudiobook))
+    if (params.mediaKind) query.set('mediaKind', params.mediaKind)
+    if (params.mediaKinds?.length) query.set('mediaKinds', params.mediaKinds.join(','))
+    const onlyProvider = providers.value.length === 1 ? providers.value[0] : undefined
+    const requestedProviders = params.providers ?? (selectedProviders.value.length ? selectedProviders.value : onlyProvider ? [onlyProvider.key] : [])
+    if (requestedProviders.length) query.set('providers', requestedProviders.join(','))
+    if (params.cache === METADATA_CACHE_REFRESH) query.set('cache', METADATA_CACHE_REFRESH)
+    if (params.resultsPerProvider != null) query.set('resultsPerProvider', String(params.resultsPerProvider))
+    return query
+  }
+
+  /** Reads one search stream into the shared results; returns when it ends or is aborted. */
+  async function stream(query: URLSearchParams, controller: AbortController) {
+    const res = await api(`/api/v1/metadata-fetch/stream?${query}`, {
+      signal: controller.signal,
+    })
+    if (!res.ok || !res.body) return
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const events = buffer.split('\n\n')
+      buffer = events.pop() ?? ''
+      for (const event of events) {
+        const lines = event.split('\n')
+        const dataLine = lines.find((l) => l.startsWith('data:'))
+        if (!dataLine) continue
+        const eventName = lines
+          .find((l) => l.startsWith('event:'))
+          ?.slice(6)
+          .trim()
+        try {
+          const payload = JSON.parse(dataLine.slice(5).trim())
+          if (eventName === METADATA_PROVIDER_STATUS_EVENT) {
+            const status = payload as MetadataProviderSearchStatus
+            providerStatuses[status.provider] = status.outcome
+            continue
+          }
+          const { candidate, cache } = splitCandidateCache(payload as MetadataSearchCandidateEvent)
+          if (cache) candidateCache.set(candidateKey(candidate), cache)
+          else candidateCache.delete(candidateKey(candidate))
+          results.value.push(candidate)
+          providerCounts[candidate.provider] = (providerCounts[candidate.provider] ?? 0) + 1
+        } catch {
+          // ignore malformed events
+        }
+      }
+    }
+  }
+
   async function search(params: SearchParams) {
     cancel()
+    lastParams = params
     results.value = []
+    candidateCache.clear()
     for (const k of Object.keys(providerCounts)) delete providerCounts[k as MetadataProviderKey]
     for (const k of Object.keys(providerStatuses)) delete providerStatuses[k as MetadataProviderKey]
     hasSearched.value = true
@@ -56,55 +145,8 @@ export function useMetadataSearch() {
     const controller = new AbortController()
     abortController = controller
 
-    const query = new URLSearchParams()
-    if (params.title) query.set('title', params.title)
-    if (params.author) query.set('author', params.author)
-    if (params.isbn) query.set('isbn', params.isbn)
-    if (params.bookId != null) query.set('bookId', String(params.bookId))
-    if (params.isAudiobook != null) query.set('isAudiobook', String(params.isAudiobook))
-    const onlyProvider = providers.value.length === 1 ? providers.value[0] : undefined
-    const requestedProviders = selectedProviders.value.length ? selectedProviders.value : onlyProvider ? [onlyProvider.key] : []
-    if (requestedProviders.length) query.set('providers', requestedProviders.join(','))
-
     try {
-      const res = await api(`/api/v1/metadata-fetch/stream?${query}`, {
-        signal: controller.signal,
-      })
-      if (!res.ok || !res.body) return
-
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const events = buffer.split('\n\n')
-        buffer = events.pop() ?? ''
-        for (const event of events) {
-          const lines = event.split('\n')
-          const dataLine = lines.find((l) => l.startsWith('data:'))
-          if (!dataLine) continue
-          const eventName = lines
-            .find((l) => l.startsWith('event:'))
-            ?.slice(6)
-            .trim()
-          try {
-            const payload = JSON.parse(dataLine.slice(5).trim())
-            if (eventName === METADATA_PROVIDER_STATUS_EVENT) {
-              const status = payload as MetadataProviderSearchStatus
-              providerStatuses[status.provider] = status.outcome
-              continue
-            }
-            const candidate = payload as MetadataCandidate
-            results.value.push(candidate)
-            providerCounts[candidate.provider] = (providerCounts[candidate.provider] ?? 0) + 1
-          } catch {
-            // ignore malformed events
-          }
-        }
-      }
+      await stream(buildQuery(params), controller)
     } catch (e) {
       if (e instanceof Error && e.name === 'AbortError') return
     } finally {
@@ -112,6 +154,35 @@ export function useMetadataSearch() {
         isStreaming.value = false
         abortController = null
       }
+    }
+  }
+
+  /** Runs the last search again without saved answers. */
+  async function searchFresh() {
+    if (!lastParams) return
+    await search({ ...lastParams, cache: METADATA_CACHE_REFRESH })
+  }
+
+  /** Asks one provider again with the last search, replacing only its own results. Always live: a retry means the saved answer was not good enough. */
+  async function retryProvider(provider: MetadataProviderKey) {
+    if (!lastParams || retryingProviders.value.includes(provider)) return
+    results.value = results.value.filter((candidate) => candidate.provider !== provider)
+    for (const key of candidateCache.keys()) {
+      if (key.startsWith(`${provider}:`)) candidateCache.delete(key)
+    }
+    delete providerCounts[provider]
+    delete providerStatuses[provider]
+    retryingProviders.value = [...retryingProviders.value, provider]
+    const controller = new AbortController()
+    retryControllers.add(controller)
+
+    try {
+      await stream(buildQuery({ ...lastParams, providers: [provider], cache: METADATA_CACHE_REFRESH }), controller)
+    } catch (e) {
+      if (e instanceof Error && e.name === 'AbortError') return
+    } finally {
+      retryControllers.delete(controller)
+      retryingProviders.value = retryingProviders.value.filter((key) => key !== provider)
     }
   }
 
@@ -154,6 +225,30 @@ export function useMetadataSearch() {
     return sortResults(filtered)
   })
 
+  function cacheInfoFor(candidate: Pick<MetadataCandidate, 'provider' | 'providerId'>): MetadataCandidateCacheInfo | null {
+    return candidateCache.get(candidateKey(candidate)) ?? null
+  }
+
+  const cacheSummary = computed(() => summarizeCandidateCache(filteredResults.value.map((candidate) => cacheInfoFor(candidate))))
+
+  const coverProviderOrder = computed(() => providerOrderBy('coverPriority'))
+  const audioCoverProviderOrder = computed(() => providerOrderBy('audioCoverPriority'))
+
+  function providerOrderBy(priority: 'coverPriority' | 'audioCoverPriority'): MetadataProviderKey[] {
+    return providers.value
+      .filter((provider) => provider[priority] !== undefined)
+      .sort((a, b) => a[priority]! - b[priority]!)
+      .map((provider) => provider.key)
+  }
+
+  const resultProviderOrder = computed(() => {
+    const available = new Set(providers.value.map((provider) => provider.key))
+    return [
+      ...PROVIDER_ORDER.filter((provider) => available.has(provider)),
+      ...providers.value.map((provider) => provider.key).filter((provider) => !PROVIDER_ORDER.includes(provider)),
+    ]
+  })
+
   function toggleProvider(key: MetadataProviderKey) {
     const idx = selectedProviders.value.indexOf(key)
     if (idx === -1) selectedProviders.value.push(key)
@@ -183,16 +278,26 @@ export function useMetadataSearch() {
   )
 
   return {
+    results,
     filteredResults,
+    candidateCache,
+    cacheInfoFor,
+    cacheSummary,
+    coverProviderOrder,
+    audioCoverProviderOrder,
+    resultProviderOrder,
     providerCounts,
     providerStatuses,
     interruptedProviders,
+    retryingProviders,
     isStreaming,
     hasSearched,
     providers,
     selectedProviders,
     loadProviders,
     search,
+    searchFresh,
+    retryProvider,
     toggleProvider,
     selectAllProviders,
     selectFieldRuleProviders,

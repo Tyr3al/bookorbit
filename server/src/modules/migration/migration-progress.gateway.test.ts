@@ -29,17 +29,15 @@ function makeGateway() {
     verify: vi.fn(),
   };
   const authService = {
-    validateUser: vi.fn(),
+    validateSessionUser: vi.fn(),
   };
   const repo = {
     findRunById: vi.fn(),
     listRunMetrics: vi.fn(),
   };
-  const configService = {
-    get: vi.fn().mockReturnValue('http://localhost:5173'),
-  };
+  const appConfiguration = { appUrl: 'http://localhost:6263' };
 
-  const gateway = new MigrationProgressGateway(jwtService as never, authService as never, repo as never, configService as never);
+  const gateway = new MigrationProgressGateway(jwtService as never, authService as never, repo as never, appConfiguration as never);
   return { gateway, jwtService, authService, repo };
 }
 
@@ -64,7 +62,7 @@ describe('MigrationProgressGateway', () => {
 
     expect(server.engine.opts.cors).toEqual({
       methods: ['GET'],
-      origin: 'http://localhost:5173',
+      origin: 'http://localhost:6263',
       credentials: true,
     });
   });
@@ -78,12 +76,12 @@ describe('MigrationProgressGateway', () => {
     const { gateway, jwtService, authService } = makeGateway();
     const client = makeClient();
     jwtService.verify.mockReturnValue({ sub: 7, ver: 1 });
-    authService.validateUser.mockResolvedValue(makeUser({ permissions: [Permission.ManageAppSettings] }));
+    authService.validateSessionUser.mockResolvedValue(makeUser({ permissions: [Permission.ManageAppSettings] }));
 
     await gateway.handleConnection(client as never);
 
     expect(jwtService.verify).toHaveBeenCalledWith('token-1', { algorithms: ['HS256'] });
-    expect(authService.validateUser).toHaveBeenCalledWith(7, 1);
+    expect(authService.validateSessionUser).toHaveBeenCalledWith(7, 1, 'legacy', undefined);
     expect(client.disconnect).not.toHaveBeenCalled();
     expect((client.data as { user?: RequestUser }).user?.id).toBe(7);
   });
@@ -98,7 +96,7 @@ describe('MigrationProgressGateway', () => {
 
     const forbiddenClient = makeClient();
     jwtService.verify.mockReturnValue({ sub: 7, ver: 1 });
-    authService.validateUser.mockResolvedValue(makeUser({ permissions: [] }));
+    authService.validateSessionUser.mockResolvedValue(makeUser({ permissions: [] }));
 
     await gateway.handleConnection(forbiddenClient as never);
     expect(forbiddenClient.disconnect).toHaveBeenCalledTimes(1);
@@ -179,6 +177,38 @@ describe('MigrationProgressGateway', () => {
     await gateway.handleSubscribeRun(client as never, 4);
     expect(client.join).toHaveBeenCalledWith('run:4');
     expect(client.emit).not.toHaveBeenCalled();
+  });
+
+  it('holds a subscription that arrives mid-handshake until the session check finishes', async () => {
+    const { gateway, jwtService, authService, repo } = makeGateway();
+    jwtService.verify.mockReturnValue({ sub: 7, ver: 1, sid: 3 });
+    let finishSessionCheck!: (user: RequestUser) => void;
+    authService.validateSessionUser.mockReturnValue(new Promise((done) => (finishSessionCheck = done)));
+    repo.findRunById.mockResolvedValue(null);
+    const client = makeClient();
+
+    const connected = gateway.handleConnection(client as never);
+    const subscribed = gateway.handleSubscribeRun(client as never, 12);
+    await Promise.resolve();
+    expect(client.join).not.toHaveBeenCalled();
+
+    finishSessionCheck(makeUser({ permissions: [Permission.ManageAppSettings] }));
+    await Promise.all([connected, subscribed]);
+
+    expect(client.join).toHaveBeenCalledWith('run:12');
+    expect(client.disconnect).not.toHaveBeenCalled();
+  });
+
+  it('drops a mid-handshake subscription from a user the handshake turns away', async () => {
+    const { gateway, jwtService, authService } = makeGateway();
+    jwtService.verify.mockReturnValue({ sub: 7, ver: 1, sid: 3 });
+    authService.validateSessionUser.mockResolvedValue(makeUser());
+    const client = makeClient();
+
+    await Promise.all([gateway.handleConnection(client as never), gateway.handleSubscribeRun(client as never, 12)]);
+
+    expect(client.disconnect).toHaveBeenCalledTimes(1);
+    expect(client.join).not.toHaveBeenCalled();
   });
 
   it('emits progress updates to room-scoped subscribers', () => {

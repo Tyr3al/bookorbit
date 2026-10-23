@@ -1,6 +1,6 @@
 import { Injectable, OnApplicationBootstrap } from '@nestjs/common';
 import { HttpAdapterHost } from '@nestjs/core';
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { AudiobookshelfAuthService } from './audiobookshelf-auth.service';
 import { AUDIOBOOKSHELF_BASE_PATH } from '../audiobookshelf.constants';
@@ -30,9 +30,13 @@ export class AudiobookshelfRefreshRouteRegistrar implements OnApplicationBootstr
         return reply.status(403).send({ statusCode: 403, message: 'Audiobookshelf API is disabled' });
       }
       const header = request.headers['x-refresh-token'];
-      // The handler reply is typed by fastify/types/reply while the service expects the
-      // fastify/fastify export; they are structurally identical.
-      return this.authService.refresh(typeof header === 'string' ? header : undefined, reply as unknown as FastifyReply);
+      // The handler request/reply are typed by fastify/types while the service expects the
+      // fastify/fastify exports; they are structurally identical.
+      return this.authService.refresh(
+        typeof header === 'string' ? header : undefined,
+        request as unknown as FastifyRequest,
+        reply as unknown as FastifyReply,
+      );
     });
   }
 }

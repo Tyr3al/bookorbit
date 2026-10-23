@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { formatNumber, formatPercent, formatRelativeFromNow } from '@/i18n/formatters'
-import { formatColorVar } from '@/features/book/lib/format-colors'
+import BookFormatChip from '@/features/book/components/BookFormatChip.vue'
 import type { BookReadingSession, BookReadingSessionStats } from '@bookorbit/types'
 
 const props = withDefaults(
@@ -13,7 +13,7 @@ const props = withDefaults(
     /** Recent sessions listed under the summary. 0 hides the list entirely. */
     sessionRows?: number
   }>(),
-  { sessions: () => [], loading: false, sessionRows: 4 },
+  { sessions: () => [], loading: false, sessionRows: 3 },
 )
 
 const { t } = useI18n()
@@ -83,19 +83,10 @@ function relative(iso: string | null | undefined): string {
 function dayLabel(day: string, minutes: number): string {
   return t('book.detail.details.activityDayTooltip', { day, minutes: Math.round(minutes) })
 }
-
-function formatBadgeStyle(format: string) {
-  const color = formatColorVar(format)
-  return {
-    color,
-    borderColor: `color-mix(in oklch, ${color} 45%, transparent)`,
-    backgroundColor: `color-mix(in oklch, ${color} 12%, transparent)`,
-  }
-}
 </script>
 
 <template>
-  <section class="flex min-h-0 flex-col rounded-xl border border-border bg-card px-3.5 py-3" :aria-label="t('book.detail.details.yourReading')">
+  <section class="flex flex-col rounded-xl border border-border bg-card px-3.5 py-3" :aria-label="t('book.detail.details.yourReading')">
     <div class="flex items-baseline gap-2">
       <h3 class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
         {{ t('book.detail.details.yourReading') }}
@@ -113,7 +104,7 @@ function formatBadgeStyle(format: string) {
     </p>
 
     <template v-else>
-      <div class="mt-3 flex items-end gap-6">
+      <div class="mt-3 flex flex-wrap items-end gap-x-6 gap-y-2">
         <dl class="flex shrink-0 gap-6">
           <div v-for="stat in summaryStats" :key="stat.key">
             <dt class="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">{{ stat.label }}</dt>
@@ -140,13 +131,11 @@ function formatBadgeStyle(format: string) {
           <span class="min-w-0 flex-1 truncate text-[11px] tabular-nums text-muted-foreground">
             {{ t('book.detail.details.activityReached', { percent: formatPercent((session.endProgress ?? 0) / 100) }) }}
           </span>
-          <span
+          <BookFormatChip
             v-if="session.format"
-            class="inline-flex h-4.5 shrink-0 items-center rounded border px-1.5 text-[9px] font-bold uppercase leading-none tracking-wider"
-            :style="formatBadgeStyle(session.format)"
-          >
-            {{ session.source ?? session.format }}
-          </span>
+            :format-key="session.format"
+            class="h-4.5 shrink-0 rounded-xs px-1.5 text-[9px] leading-none tracking-wider"
+          />
         </li>
       </ul>
     </template>

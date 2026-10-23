@@ -1,5 +1,5 @@
 {
-  "id": "f1ac8a42-b3b9-40a7-a798-220b477ca566",
+  "id": "4766afdd-f1d7-4a41-acdb-ab9e2499154f",
   "prevId": "5a13ca17-bf50-4920-94be-f50ef05c681f",
   "version": "7",
   "dialect": "postgresql",
@@ -2813,13 +2813,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "enable_audiobookshelf_api": {
-          "name": "enable_audiobookshelf_api",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
         "metadata_fetch_preferences": {
           "name": "metadata_fetch_preferences",
           "type": "jsonb",
@@ -5629,6 +5622,54 @@
             },
             {
               "expression": "rating",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "book_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "book_community_ratings_count_book_idx": {
+          "name": "book_community_ratings_count_book_idx",
+          "columns": [
+            {
+              "expression": "rating_count",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "book_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "book_community_ratings_provider_count_book_idx": {
+          "name": "book_community_ratings_provider_count_book_idx",
+          "columns": [
+            {
+              "expression": "provider",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "rating_count",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

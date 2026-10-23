@@ -44,6 +44,12 @@ export const users = pgTable(
     provisioningMethod: varchar('provisioning_method', { length: 20 }).notNull().default('local'),
     lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
     lastAuthenticatedAt: timestamp('last_authenticated_at', { withTimezone: true }),
+    /**
+     * Lets a book that fulfilled this user's own request through their content filters. Off by
+     * default and settable only by an administrator, because for anyone without filters it is a
+     * no-op, and everyone it does affect is somebody an operator deliberately restricted.
+     */
+    seeOwnRequestedBooks: boolean('see_own_requested_books').notNull().default(false),
     readingInsightsSharingLevel: readingInsightsSharingLevelEnum('reading_insights_sharing_level').notNull().default('private'),
     readingInsightsConsentedAt: timestamp('reading_insights_consented_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -99,6 +105,29 @@ export const userLibraryAccess = pgTable(
   (t) => [primaryKey({ columns: [t.userId, t.libraryId] }), index('user_library_access_library_user_idx').on(t.libraryId, t.userId)],
 );
 
+export const authSessions = pgTable(
+  'auth_sessions',
+  {
+    id: serial('id').primaryKey(),
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    tokenVersion: integer('token_version').notNull(),
+    authenticationMethod: varchar('authentication_method', { length: 20 }).notNull(),
+    clientKind: varchar('client_kind', { length: 10 }).notNull().default('web'),
+    deviceLabel: varchar('device_label', { length: 100 }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('auth_sessions_user_id_idx').on(t.userId),
+    index('auth_sessions_expires_at_idx').on(t.expiresAt),
+    check('auth_sessions_client_kind_chk', sql`${t.clientKind} in ('web', 'native')`),
+    check('auth_sessions_authentication_method_chk', sql`${t.authenticationMethod} in ('password', 'oidc', 'magic_link', 'setup', 'legacy')`),
+  ],
+);
+
 export const refreshTokens = pgTable(
   'refresh_tokens',
   {
@@ -106,7 +135,9 @@ export const refreshTokens = pgTable(
     userId: integer('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
+    sessionId: integer('session_id').references(() => authSessions.id, { onDelete: 'cascade' }),
     tokenHash: varchar('token_hash', { length: 255 }).notNull().unique(),
+    authenticationMethod: varchar('authentication_method', { length: 20 }).notNull().default('legacy'),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
     rotatedAt: timestamp('rotated_at', { withTimezone: true }),
@@ -115,8 +146,10 @@ export const refreshTokens = pgTable(
   },
   (t) => [
     index('refresh_tokens_user_id_idx').on(t.userId),
+    index('refresh_tokens_session_id_idx').on(t.sessionId),
     index('refresh_tokens_expires_at_idx').on(t.expiresAt),
     check('refresh_tokens_expires_after_created_chk', sql`${t.expiresAt} > ${t.createdAt}`),
+    check('refresh_tokens_authentication_method_chk', sql`${t.authenticationMethod} in ('password', 'oidc', 'magic_link', 'setup', 'legacy')`),
   ],
 );
 

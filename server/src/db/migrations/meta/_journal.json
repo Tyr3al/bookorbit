@@ -579,15 +579,309 @@
     {
       "idx": 82,
       "version": "7",
-      "when": 1788109967198,
-      "tag": "0082_add_libraries_enable_audiobookshelf_api",
+      "when": 1788151243360,
+      "tag": "0082_add_community_rating_count_filter_indexes",
       "breakpoints": true
     },
     {
       "idx": 83,
       "version": "7",
-      "when": 1788208930752,
-      "tag": "0083_abs_listening_sessions",
+      "when": 1788194498208,
+      "tag": "0083_add_book_requests",
+      "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1788206528114,
+      "tag": "0084_add_scan_state_version",
+      "breakpoints": true
+    },
+    {
+      "idx": 85,
+      "version": "7",
+      "when": 1788321273908,
+      "tag": "0085_add_authentication_method",
+      "breakpoints": true
+    },
+    {
+      "idx": 86,
+      "version": "7",
+      "when": 1788884825211,
+      "tag": "0086_add_annotation_source_created_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1789055692244,
+      "tag": "0087_add_library_added_at_source",
+      "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1789098337223,
+      "tag": "0088_audiobook_contract_v2",
+      "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1789273281909,
+      "tag": "0089_add_newznab_nzbget",
+      "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1789316739511,
+      "tag": "0090_add_indexer_seed_goals",
+      "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "7",
+      "when": 1789366394767,
+      "tag": "0091_add_read_aloud_and_podcasts",
+      "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1789366475035,
+      "tag": "0092_narration_progress_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "7",
+      "when": 1789366529464,
+      "tag": "0093_add_device_auth_sessions",
+      "breakpoints": true
+    },
+    {
+      "idx": 94,
+      "version": "7",
+      "when": 1789930465236,
+      "tag": "0094_add_book_duplicate_dismissals_and_sort_keys",
+      "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "7",
+      "when": 1789949424697,
+      "tag": "0095_add_sabnzbd_and_prowlarr_support",
+      "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1790119788880,
+      "tag": "0096_add_android_reading_session_source",
+      "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "7",
+      "when": 1790137565077,
+      "tag": "0097_add_book_covers",
+      "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "7",
+      "when": 1790398181669,
+      "tag": "0098_add_subtitle_search_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 99,
+      "version": "7",
+      "when": 1790446233976,
+      "tag": "0099_fractional_finished_threshold",
+      "breakpoints": true
+    },
+    {
+      "idx": 100,
+      "version": "7",
+      "when": 1790634252132,
+      "tag": "0100_audio_bookmark_position_ignores_tombstones",
+      "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1790876695526,
+      "tag": "0101_refresh_unmeasured_media_overlay_durations",
+      "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1791126075111,
+      "tag": "0102_add_book_journal_and_annotation_stars",
+      "breakpoints": true
+    },
+    {
+      "idx": 103,
+      "version": "7",
+      "when": 1791330236442,
+      "tag": "0103_fix_kobo_koreader_download_matching",
+      "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "7",
+      "when": 1791351760200,
+      "tag": "0104_add_library_file_write_all_files",
+      "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1791388600818,
+      "tag": "0105_add_library_file_write_read_along",
+      "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1791429899868,
+      "tag": "0106_add_book_request_pairs",
+      "breakpoints": true
+    },
+    {
+      "idx": 107,
+      "version": "7",
+      "when": 1791658522588,
+      "tag": "0107_add_provider_metadata_cache",
+      "breakpoints": true
+    },
+    {
+      "idx": 108,
+      "version": "7",
+      "when": 1791684796856,
+      "tag": "0108_add_read_aloud_delivery",
+      "breakpoints": true
+    },
+    {
+      "idx": 109,
+      "version": "7",
+      "when": 1791821546946,
+      "tag": "0109_add_hardcover_match_basis",
+      "breakpoints": true
+    },
+    {
+      "idx": 110,
+      "version": "7",
+      "when": 1791838145626,
+      "tag": "0110_add_email_provider_test_result",
+      "breakpoints": true
+    },
+    {
+      "idx": 111,
+      "version": "7",
+      "when": 1791853301183,
+      "tag": "0111_add_koreader_session_tombstones",
+      "breakpoints": true
+    },
+    {
+      "idx": 112,
+      "version": "7",
+      "when": 1791941743914,
+      "tag": "0112_add_server_connection_identity",
+      "breakpoints": true
+    },
+    {
+      "idx": 113,
+      "version": "7",
+      "when": 1792002996105,
+      "tag": "0113_add_djvu_email_format",
+      "breakpoints": true
+    },
+    {
+      "idx": 114,
+      "version": "7",
+      "when": 1792163623360,
+      "tag": "0114_add_book_metadata_page_count_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 115,
+      "version": "7",
+      "when": 1792168359342,
+      "tag": "0115_add_audit_resource_label",
+      "breakpoints": true
+    },
+    {
+      "idx": 116,
+      "version": "7",
+      "when": 1792185442568,
+      "tag": "0116_regex_metadata",
+      "breakpoints": true
+    },
+    {
+      "idx": 117,
+      "version": "7",
+      "when": 1792191772317,
+      "tag": "0117_add_reading_session_sync_interval",
+      "breakpoints": true
+    },
+    {
+      "idx": 118,
+      "version": "7",
+      "when": 1792201109071,
+      "tag": "0118_add_kobo_bookmark_links",
+      "breakpoints": true
+    },
+    {
+      "idx": 119,
+      "version": "7",
+      "when": 1792206724086,
+      "tag": "0119_add_kobo_full_size_covers",
+      "breakpoints": true
+    },
+    {
+      "idx": 120,
+      "version": "7",
+      "when": 1792209194389,
+      "tag": "0120_record_kobo_snapshot_cover_ids",
+      "breakpoints": true
+    },
+    {
+      "idx": 121,
+      "version": "7",
+      "when": 1792444043652,
+      "tag": "0121_add_device_annotation_sync",
+      "breakpoints": true
+    },
+    {
+      "idx": 122,
+      "version": "7",
+      "when": 1792511452628,
+      "tag": "0122_add_release_info_url_and_review_hold",
+      "breakpoints": true
+    },
+    {
+      "idx": 123,
+      "version": "7",
+      "when": 1792512356419,
+      "tag": "0123_add_koreader_hide_audio_only_books",
+      "breakpoints": true
+    },
+    {
+      "idx": 124,
+      "version": "7",
+      "when": 1792516862510,
+      "tag": "0124_add_author_metadata_provider_pinned",
+      "breakpoints": true
+    },
+    {
+      "idx": 125,
+      "version": "7",
+      "when": 1792754743087,
+      "tag": "0125_add_audiobookshelf_api",
       "breakpoints": true
     }
   ]

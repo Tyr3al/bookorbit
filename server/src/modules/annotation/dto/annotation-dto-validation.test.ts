@@ -11,6 +11,7 @@ import {
   AnnotationPositionRetryDto,
 } from './annotation-hub.dto';
 import { CreateAnnotationDto } from './create-annotation.dto';
+import { AnnotationQueryDto } from './annotation-query.dto';
 import { UpdateAnnotationDto } from './update-annotation.dto';
 
 async function errorsFor<T extends object>(cls: new () => T, value: Record<string, unknown>) {
@@ -40,6 +41,93 @@ describe('Annotation DTO validation', () => {
     expect((await errorsFor(CreateAnnotationDto, { cfi: 'x', text: 'ok', chapterTitle: 'x'.repeat(501) })).length).toBeGreaterThan(0);
   });
 
+  it('accepts a pdf create payload without a cfi', async () => {
+    const errors = await errorsFor(CreateAnnotationDto, {
+      pdf: { page: 3, rect: { x: 1, y: 2, width: 3, height: 4 }, rects: [{ x: 1, y: 2, width: 3, height: 4 }] },
+      bookFileId: 12,
+      text: 'Selected text',
+      color: '#FACC15',
+    });
+
+    expect(errors).toHaveLength(0);
+  });
+
+  it('rejects a create payload missing both cfi and pdf', async () => {
+    expect((await errorsFor(CreateAnnotationDto, { text: 'ok' })).length).toBeGreaterThan(0);
+  });
+
+  it('rejects a pdf create payload with an empty rects array or negative page', async () => {
+    expect(
+      (await errorsFor(CreateAnnotationDto, { pdf: { page: 0, rect: { x: 1, y: 2, width: 3, height: 4 }, rects: [] }, text: 'ok' })).length,
+    ).toBeGreaterThan(0);
+    expect(
+      (
+        await errorsFor(CreateAnnotationDto, {
+          pdf: { page: -1, rect: { x: 1, y: 2, width: 3, height: 4 }, rects: [{ x: 1, y: 2, width: 3, height: 4 }] },
+          text: 'ok',
+        })
+      ).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it('rejects a pdf create payload without a bookFileId', async () => {
+    const errors = await errorsFor(CreateAnnotationDto, {
+      pdf: { page: 0, rect: { x: 1, y: 2, width: 3, height: 4 }, rects: [{ x: 1, y: 2, width: 3, height: 4 }] },
+      text: 'ok',
+    });
+
+    expect(errors.length).toBeGreaterThan(0);
+  });
+
+  it('rejects a create payload that supplies both cfi and pdf', async () => {
+    expect(
+      (
+        await errorsFor(CreateAnnotationDto, {
+          cfi: 'epubcfi(/6/4)',
+          pdf: { page: 0, rect: { x: 1, y: 2, width: 3, height: 4 }, rects: [{ x: 1, y: 2, width: 3, height: 4 }] },
+          text: 'ok',
+        })
+      ).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it('rejects a create payload with null cfi and null pdf', async () => {
+    expect((await errorsFor(CreateAnnotationDto, { cfi: null, pdf: null, text: 'ok' })).length).toBeGreaterThan(0);
+  });
+
+  it('rejects a pdf create payload missing its bounding rect', async () => {
+    expect(
+      (await errorsFor(CreateAnnotationDto, { pdf: { page: 0, rects: [{ x: 1, y: 2, width: 3, height: 4 }] }, text: 'ok' })).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it('rejects a pdf create payload with non-positive rect width or height', async () => {
+    expect(
+      (
+        await errorsFor(CreateAnnotationDto, {
+          pdf: { page: 0, rect: { x: 1, y: 2, width: 0, height: 4 }, rects: [{ x: 1, y: 2, width: 3, height: 4 }] },
+          text: 'ok',
+        })
+      ).length,
+    ).toBeGreaterThan(0);
+    expect(
+      (
+        await errorsFor(CreateAnnotationDto, {
+          pdf: { page: 0, rect: { x: 1, y: 2, width: 3, height: -1 }, rects: [{ x: 1, y: 2, width: 3, height: 4 }] },
+          text: 'ok',
+        })
+      ).length,
+    ).toBeGreaterThan(0);
+    expect(
+      (
+        await errorsFor(CreateAnnotationDto, {
+          pdf: { page: 0, rect: { x: 1, y: 2, width: 3, height: 4 }, rects: [{ x: 1, y: 2, width: 0, height: 4 }] },
+          text: 'ok',
+        })
+      ).length,
+    ).toBeGreaterThan(0);
+  });
+
   it('accepts update payload with nullable note and optional style', async () => {
     const nullNoteErrors = await errorsFor(UpdateAnnotationDto, { note: null, style: 'highlight' });
     const normalErrors = await errorsFor(UpdateAnnotationDto, { note: 'updated', color: '#38BDF8' });
@@ -52,6 +140,19 @@ describe('Annotation DTO validation', () => {
     expect((await errorsFor(UpdateAnnotationDto, { note: 123 })).length).toBeGreaterThan(0);
     expect((await errorsFor(UpdateAnnotationDto, { color: 'x'.repeat(21) })).length).toBeGreaterThan(0);
     expect((await errorsFor(UpdateAnnotationDto, { style: 'invalid' })).length).toBeGreaterThan(0);
+  });
+});
+
+describe('AnnotationQueryDto validation', () => {
+  it('coerces a positive bookFileId', async () => {
+    const dto = plainToInstance(AnnotationQueryDto, { page: '1', bookFileId: '42' });
+
+    expect(await validate(dto)).toHaveLength(0);
+    expect(dto.bookFileId).toBe(42);
+  });
+
+  it('rejects a non-positive bookFileId', async () => {
+    expect((await errorsFor(AnnotationQueryDto, { page: 1, bookFileId: 0 })).length).toBeGreaterThan(0);
   });
 });
 
@@ -159,5 +260,34 @@ describe('AnnotationHubBooksQueryDto validation', () => {
     expect(await errorsFor(AnnotationHubBooksQueryDto, { status: 'active' })).toHaveLength(0);
     expect(await errorsFor(AnnotationHubBooksQueryDto, { status: 'trashed' })).toHaveLength(0);
     expect((await errorsFor(AnnotationHubBooksQueryDto, { status: 'gone' })).length).toBeGreaterThan(0);
+  });
+
+  describe('notebook additions', () => {
+    async function strictErrors<T extends object>(cls: new () => T, value: Record<string, unknown>) {
+      return validate(plainToInstance(cls, value), { whitelist: true, forbidNonWhitelisted: true });
+    }
+
+    it('accepts a null note under the global whitelist settings, which is how a note is cleared', async () => {
+      const dto = plainToInstance(UpdateAnnotationDto, { note: null });
+      expect(await strictErrors(UpdateAnnotationDto, { note: null })).toHaveLength(0);
+      expect(dto.note).toBeNull();
+    });
+
+    it('accepts a boolean star toggle on its own or with content changes', async () => {
+      expect(await strictErrors(UpdateAnnotationDto, { starred: true })).toHaveLength(0);
+      expect(await strictErrors(UpdateAnnotationDto, { starred: false, note: null, color: '#4ADE80' })).toHaveLength(0);
+    });
+
+    it('rejects a non-boolean or null star toggle rather than reading null as unstar', async () => {
+      expect((await strictErrors(UpdateAnnotationDto, { starred: 'yes' })).map((error) => error.property)).toEqual(['starred']);
+      expect((await strictErrors(UpdateAnnotationDto, { starred: null })).map((error) => error.property)).toEqual(['starred']);
+    });
+
+    it('accepts star and unstar as bulk actions next to the existing ones', async () => {
+      for (const action of ['trash', 'restore', 'restyle', 'star', 'unstar']) {
+        expect(await strictErrors(AnnotationBulkDto, { ids: [1, 2], action })).toHaveLength(0);
+      }
+      expect((await strictErrors(AnnotationBulkDto, { ids: [1], action: 'favourite' })).map((error) => error.property)).toEqual(['action']);
+    });
   });
 });

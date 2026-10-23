@@ -18,6 +18,7 @@ function makeRow(overrides: Partial<HubAnnotationRow> = {}): HubAnnotationRow {
     deletedAt: null,
     deviceCreatedAt: null,
     deviceUpdatedAt: null,
+    sourceCreatedAt: null,
     createdAt: new Date('2026-06-01T10:00:00Z'),
     updatedAt: new Date('2026-06-01T10:00:00Z'),
     cfi: 'epubcfi(/6/2!/4/2,/1:0,/1:5)',
@@ -26,6 +27,7 @@ function makeRow(overrides: Partial<HubAnnotationRow> = {}): HubAnnotationRow {
     bookTitle: 'Test Book',
     jumpFileId: 10,
     pageno: null,
+    xpointer: null,
     ...overrides,
   } as HubAnnotationRow;
 }
@@ -52,6 +54,16 @@ describe('AnnotationExportService', () => {
     expect(result.content).toContain('koreader');
   });
 
+  it('quotes each paragraph of a multi-paragraph highlight without the source indentation', () => {
+    const rows = [makeRow({ text: 'Oh, the laundry.\n\t\t\tOh, the laundry.\r\n                  Again.', note: '\tfirst\n\n   second' })];
+
+    const result = service.export(rows, 'md', 'book-20');
+
+    expect(result.content).toContain('> Oh, the laundry.\n>\n> Oh, the laundry.\n>\n> Again.');
+    expect(result.content).toContain('Note: first\n\nsecond');
+    expect(result.content).not.toMatch(/\t|> {2}/);
+  });
+
   it('escapes CSV fields containing quotes, commas and newlines', () => {
     const rows = [makeRow({ text: 'He said "hi", twice\nand left', note: 'plain' })];
 
@@ -59,7 +71,7 @@ describe('AnnotationExportService', () => {
 
     expect(result.contentType).toContain('csv');
     expect(result.content).toContain('"He said ""hi"", twice\nand left"');
-    expect(result.content.split('\r\n')[0]).toBe('book,chapter,text,note,color,style,origin,createdAt');
+    expect(result.content.split('\r\n')[0]).toBe('book,chapter,text,note,color,style,origin,page,cfi,xpointer,highlightedAt,createdAt');
   });
 
   it('renders JSON with stable fields', () => {
@@ -74,5 +86,32 @@ describe('AnnotationExportService', () => {
       origin: 'web',
       cfi: 'epubcfi(/6/2!/4/2,/1:0,/1:5)',
     });
+  });
+
+  it('exports source time and KOReader position while preserving ingestion time', () => {
+    const result = service.export(
+      [
+        makeRow({
+          origin: 'koreader',
+          sourceCreatedAt: new Date('2026-01-15T16:30:00.000Z'),
+          createdAt: new Date('2026-09-06T17:10:19.332Z'),
+          cfi: null,
+          pageno: 123,
+          xpointer: '/body/DocFragment[5]/body/p[2]/text().0',
+        }),
+      ],
+      'json',
+      'library',
+    );
+
+    expect(JSON.parse(result.content)).toEqual([
+      expect.objectContaining({
+        page: 123,
+        cfi: null,
+        xpointer: '/body/DocFragment[5]/body/p[2]/text().0',
+        highlightedAt: '2026-01-15T16:30:00.000Z',
+        createdAt: '2026-09-06T17:10:19.332Z',
+      }),
+    ]);
   });
 });

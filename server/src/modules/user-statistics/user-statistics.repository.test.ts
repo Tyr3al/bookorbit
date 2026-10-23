@@ -128,6 +128,63 @@ describe('UserStatisticsRepository', () => {
     expect(calls[0]!.text).not.toContain('"reading_sessions"."end_progress"');
   });
 
+  it('counts completed reading attempts for the activity completion timeline', async () => {
+    const calls: Array<{ text: string; params: unknown[] }> = [];
+    const fakeClient = {
+      query: vi.fn().mockImplementation((cfg: { text: string }, params: unknown[]) => {
+        calls.push({ text: cfg.text, params });
+        const count = cfg.text.includes('"reading_attempts"') ? 5 : 2;
+        return Promise.resolve({ rows: [[2026, 9, count]] });
+      }),
+    };
+    const db = drizzle({ client: fakeClient as never, schema });
+    const repo = new UserStatisticsRepository(db as never);
+
+    await expect(repo.getActivityCompletionTimeline(5, [2])).resolves.toEqual([{ year: 2026, month: 9, count: 5 }]);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.text).toContain('"reading_attempts"');
+    expect(calls[0]!.text).not.toContain('"reading_sessions"."end_progress"');
+    expect(calls[0]!.text).not.toContain('AT TIME ZONE');
+  });
+
+  it('scopes and filters the activity completion timeline the way the reading-goal widget does', async () => {
+    const calls: Array<{ text: string; params: unknown[] }> = [];
+    const fakeClient = {
+      query: vi.fn().mockImplementation((cfg: { text: string }, params: unknown[]) => {
+        calls.push({ text: cfg.text, params });
+        return Promise.resolve({ rows: [] });
+      }),
+    };
+    const db = drizzle({ client: fakeClient as never, schema });
+    const repo = new UserStatisticsRepository(db as never);
+
+    await repo.getActivityCompletionTimeline(5, [2, 7]);
+
+    const { text, params } = calls[0]!;
+    expect(text).toContain('"reading_attempts"."outcome" =');
+    expect(text).toContain('"reading_attempts"."ended_on" is not null');
+    expect(text).toContain('"reading_attempts"."deleted_at" is null');
+    expect(text).toContain('"books"."library_id" in');
+    expect(params).toContain('completed');
+    expect(params).toEqual(expect.arrayContaining([5, 2, 7]));
+  });
+
+  it('returns nothing for the activity completion timeline when no library is in scope', async () => {
+    const calls: Array<{ text: string }> = [];
+    const fakeClient = {
+      query: vi.fn().mockImplementation((cfg: { text: string }) => {
+        calls.push({ text: cfg.text });
+        return Promise.resolve({ rows: [] });
+      }),
+    };
+    const db = drizzle({ client: fakeClient as never, schema });
+    const repo = new UserStatisticsRepository(db as never);
+
+    await expect(repo.getActivityCompletionTimeline(5, [])).resolves.toEqual([]);
+    expect(calls[0]!.text).toContain('false');
+  });
+
   it('uses completed reading attempt dates for completion latency', async () => {
     const calls: Array<{ text: string; params: unknown[] }> = [];
     const fakeClient = {
@@ -177,6 +234,33 @@ describe('UserStatisticsRepository', () => {
     expect(text).toContain('from (select');
     expect(text).toContain('group by "hour", "format", "session_buckets"."source"');
     expect(text.match(/AT TIME ZONE/g)).toHaveLength(1);
+  });
+
+  it('derives session archetype hour and weekday in the provided timezone', async () => {
+    const calls: Array<{ text: string; params: unknown[] }> = [];
+    const fakeClient = {
+      query: vi.fn().mockImplementation((cfg: { text: string }, params: unknown[]) => {
+        calls.push({ text: cfg.text, params });
+        return Promise.resolve({ rows: [] });
+      }),
+    };
+    const db = drizzle({ client: fakeClient as never, schema });
+    const repo = new UserStatisticsRepository(db as never);
+
+    await repo.getSessionArchetypePoints(5, true, [2], 30, 'Australia/Brisbane');
+    await repo.getSessionArchetypePoints(5, true, [2], 30, 'Not/AZone');
+    await repo.getSessionArchetypePoints(5, true, [2], 30);
+
+    expect(calls).toHaveLength(3);
+    const [brisbane, invalid, fallback] = calls;
+    expect(brisbane!.text).toMatch(/extract\(hour from \("reading_sessions"\."started_at" AT TIME ZONE \$\d+\)\)/);
+    expect(brisbane!.text).toMatch(/extract\(minute from \("reading_sessions"\."started_at" AT TIME ZONE \$\d+\)\)/);
+    expect(brisbane!.text).toMatch(/extract\(dow from \("reading_sessions"\."started_at" AT TIME ZONE \$\d+\)\)/);
+    expect(brisbane!.text).not.toMatch(/extract\(\w+ from "reading_sessions"\."started_at"\)/);
+    expect(brisbane!.params.filter((param) => param === 'Australia/Brisbane')).toHaveLength(3);
+    expect(invalid!.params).not.toContain('Not/AZone');
+    expect(invalid!.params.filter((param) => param === 'UTC')).toHaveLength(3);
+    expect(fallback!.params.filter((param) => param === 'UTC')).toHaveLength(3);
   });
 
   it('returns per-source daily reading seconds for the heatmap tooltip', async () => {

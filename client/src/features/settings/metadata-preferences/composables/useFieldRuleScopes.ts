@@ -4,7 +4,7 @@ import { ALL_METADATA_FIELDS } from '@bookorbit/types'
 import type { FieldPreference, FieldPreferenceOverrides, MetadataField, MetadataFetchPreferences, MetadataProviderKey } from '@bookorbit/types'
 import { useLibraries } from '@/features/library/composables/useLibraries'
 import { useMetadataPreferences } from './useMetadataPreferences'
-import { applyProviderAction, type ProviderBulkAction } from '../lib/field-rules'
+import { applyProviderAction, BULK_REORDER_EXEMPT_FIELDS, type ProviderBulkAction } from '../lib/field-rules'
 
 export const GLOBAL_SCOPE = 'global' as const
 export type FieldRuleScopeId = typeof GLOBAL_SCOPE | number
@@ -48,7 +48,12 @@ function draftKey(id: FieldRuleScopeId): string {
  */
 export function useFieldRuleScopes() {
   const { t } = useI18n()
-  const { libraries, fetchLibraries } = useLibraries()
+  const { libraries: allLibraries, fetchLibraries } = useLibraries()
+  /**
+   * Field rules belong to book libraries. A podcast library has none, and the server refuses to
+   * answer for one, so listing it gave a tab that spun forever.
+   */
+  const libraries = computed(() => allLibraries.value.filter((library) => library.type === 'books'))
   const prefs = useMetadataPreferences()
 
   const activeScopeId = ref<FieldRuleScopeId>(GLOBAL_SCOPE)
@@ -99,6 +104,7 @@ export function useFieldRuleScopes() {
         maxCount: source.options?.genres.maxCount ?? null,
       },
       saveProviderIds: source.options?.saveProviderIds ?? true,
+      providerIdMode: source.options?.providerIdMode ?? 'preferExisting',
     }
   }
 
@@ -191,13 +197,13 @@ export function useFieldRuleScopes() {
     writeDraft(activeScopeId.value, { fields: { ...draft.fields, [field]: { ...globalPref, providers: [...globalPref.providers] } }, pending })
   }
 
-  function updateEveryField(update: (pref: FieldPreference) => FieldPreference) {
+  function updateEveryField(update: (pref: FieldPreference, field: MetadataField) => FieldPreference) {
     const draft = activeDraft.value
     if (!draft || saving.value) return
     const fields = { ...draft.fields }
     const pending = new Map(draft.pending)
     for (const field of ALL_METADATA_FIELDS) {
-      const next = update(fields[field])
+      const next = update(fields[field], field)
       if (next === fields[field]) continue
       fields[field] = next
       pending.set(field, next)
@@ -211,7 +217,8 @@ export function useFieldRuleScopes() {
 
   /** Moves or removes one provider across every field in the active scope. */
   function applyProviderToAllFields(provider: MetadataProviderKey, action: ProviderBulkAction) {
-    updateEveryField((pref) => {
+    updateEveryField((pref, field) => {
+      if (action !== 'remove' && BULK_REORDER_EXEMPT_FIELDS.has(field)) return pref
       const providers = applyProviderAction(pref.providers, provider, action)
       return providers.length === pref.providers.length && providers.every((key, index) => key === pref.providers[index])
         ? pref

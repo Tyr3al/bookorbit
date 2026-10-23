@@ -1,4 +1,4 @@
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ReaderSidebar from '../ReaderSidebar.vue'
@@ -161,6 +161,7 @@ describe('ReaderSidebar', () => {
             origin: 'web',
             positionStatus: 'exact',
             chapterIndex: null,
+            highlightedAt: '2026-02-14T12:00:00.000Z',
             createdAt: '2026-02-14T12:00:00.000Z',
           },
           {
@@ -177,6 +178,7 @@ describe('ReaderSidebar', () => {
             origin: 'web',
             positionStatus: 'exact',
             chapterIndex: null,
+            highlightedAt: '2026-02-15T12:00:00.000Z',
             createdAt: '2026-02-15T12:00:00.000Z',
           },
         ],
@@ -218,6 +220,42 @@ describe('ReaderSidebar', () => {
     expect(wrapper.emitted('deleteAnnotation')?.[0]).toEqual([9])
   })
 
+  it('renames a bookmark and sets its note from an accessible dialog', async () => {
+    const wrapper = mount(ReaderSidebar, {
+      props: {
+        ...makeBaseProps(),
+        bookmarks: [{ id: 4, bookId: 1, cfi: 'epubcfi(/6/2)', title: 'Chapter 1', note: null, createdAt: '2026-02-14T12:00:00.000Z' }],
+      },
+      global,
+      attachTo: document.body,
+    })
+
+    await wrapper
+      .findAll('button')
+      .find((btn) => btn.text().includes('Marks'))
+      ?.trigger('click')
+    await wrapper.get('button[aria-label="Edit bookmark"]').trigger('click')
+    await flushPromises()
+
+    const dialog = document.body.querySelector<HTMLElement>('[role="dialog"]')
+    expect(dialog?.getAttribute('aria-modal')).toBe('true')
+    const [title] = dialog!.querySelectorAll('input')
+    const note = dialog!.querySelector('textarea')!
+    expect(title!.value).toBe('Chapter 1')
+    expect(document.querySelector(`label[for="${title!.id}"]`)?.textContent).toBe('Title')
+    title!.value = '  The storm  '
+    title!.dispatchEvent(new Event('input'))
+    note.value = 'Reread before the exam'
+    note.dispatchEvent(new Event('input'))
+    await flushPromises()
+    dialog!.querySelector('form')!.dispatchEvent(new Event('submit'))
+    await flushPromises()
+
+    expect(wrapper.emitted('editBookmark')?.[0]).toEqual([4, 'The storm', 'Reread before the exam'])
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull()
+    wrapper.unmount()
+  })
+
   it('applies highlight search, filters, and sorting controls', async () => {
     const wrapper = mount(ReaderSidebar, {
       props: {
@@ -237,6 +275,7 @@ describe('ReaderSidebar', () => {
             origin: 'web',
             positionStatus: 'exact',
             chapterIndex: null,
+            highlightedAt: '2026-02-13T12:00:00.000Z',
             createdAt: '2026-02-13T12:00:00.000Z',
           },
           {
@@ -253,6 +292,7 @@ describe('ReaderSidebar', () => {
             origin: 'web',
             positionStatus: 'exact',
             chapterIndex: null,
+            highlightedAt: '2026-02-16T12:00:00.000Z',
             createdAt: '2026-02-16T12:00:00.000Z',
           },
         ],
@@ -283,6 +323,29 @@ describe('ReaderSidebar', () => {
     await selects[0]?.setValue('oldest')
     const visibleRows = wrapper.findAll('li')
     expect(visibleRows[0]?.text()).toContain('Beta insight')
+  })
+
+  it('does not navigate chapters when navigation is locked', async () => {
+    const wrapper = mount(ReaderSidebar, {
+      props: {
+        ...makeBaseProps(),
+        chapters: [
+          {
+            label: 'Chapter 1',
+            href: 'ch1.xhtml#start',
+            subitems: [],
+          },
+        ],
+        navigationLocked: true,
+      },
+      global,
+    })
+
+    const chapterButton = wrapper.findAll('button').find((btn) => btn.text().includes('Chapter 1'))
+    await chapterButton?.trigger('click')
+
+    expect(chapterButton?.attributes('disabled')).toBeDefined()
+    expect(wrapper.emitted('navigateChapter')).toBeUndefined()
   })
 
   it('filters bookmarks, sorts by date, and skips bookmark navigation when CFI is missing', async () => {
@@ -348,6 +411,7 @@ describe('ReaderSidebar', () => {
             origin: 'web',
             positionStatus: 'exact',
             chapterIndex: null,
+            highlightedAt: '2026-02-11T12:00:00.000Z',
             createdAt: '2026-02-11T12:00:00.000Z',
           },
         ],

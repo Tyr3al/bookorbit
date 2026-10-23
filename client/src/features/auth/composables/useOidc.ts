@@ -1,4 +1,5 @@
 import type { OidcCallbackResponse, OidcProviderPublic } from '@bookorbit/types'
+import { fetchWithAuthProxyRecovery } from '@/lib/api'
 
 export async function generatePkce(): Promise<{ codeVerifier: string; codeChallenge: string }> {
   const array = new Uint8Array(32)
@@ -19,7 +20,7 @@ export async function generatePkce(): Promise<{ codeVerifier: string; codeChalle
   return { codeVerifier, codeChallenge }
 }
 
-function generateNonce(): string {
+export function generateNonce(): string {
   const array = new Uint8Array(16)
   crypto.getRandomValues(array)
   return btoa(String.fromCharCode(...array))
@@ -38,16 +39,6 @@ export class OidcLoginError extends Error {
 }
 
 export function useOidc() {
-  async function getPublicProviders(): Promise<OidcProviderPublic[]> {
-    try {
-      const res = await fetch('/api/v1/app-settings/oidc/providers/public')
-      if (!res.ok) return []
-      return res.json()
-    } catch {
-      return []
-    }
-  }
-
   async function initiateLogin(provider: OidcProviderPublic): Promise<void> {
     if (!provider.enabled) {
       throw new OidcLoginError(undefined, 'OIDC provider is not enabled')
@@ -62,7 +53,7 @@ export function useOidc() {
       sessionStorage.setItem('oidc_redirect', redirectTarget)
     }
 
-    const stateRes = await fetch(`/api/v1/auth/oidc/${provider.slug}/state`, { method: 'POST', credentials: 'include' })
+    const stateRes = await fetchWithAuthProxyRecovery(`/api/v1/auth/oidc/${provider.slug}/state`, { method: 'POST', credentials: 'include' })
     if (!stateRes.ok) throw new OidcLoginError(undefined, 'Failed to generate state')
     const { state, authorizationEndpoint } = (await stateRes.json()) as { state: string; authorizationEndpoint: string }
 
@@ -97,7 +88,7 @@ export function useOidc() {
 
     const redirectUri = `${window.location.origin}/oauth2-callback`
 
-    const res = await fetch('/api/v1/auth/oidc/callback', {
+    const res = await fetchWithAuthProxyRecovery('/api/v1/auth/oidc/callback', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -112,5 +103,5 @@ export function useOidc() {
     return res.json() as Promise<OidcCallbackResponse>
   }
 
-  return { getPublicProviders, initiateLogin, exchangeCode }
+  return { initiateLogin, exchangeCode }
 }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, toRef, useId, watch } from 'vue'
+import { computed, ref, toRef, useId, watch, type Component } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ArrowRight, GripVertical, Search, X } from '@lucide/vue'
 import { VueDraggable } from 'vue-draggable-plus'
@@ -10,8 +10,10 @@ import SidebarSectionHeader from '@/components/sidebar/SidebarSectionHeader.vue'
 import SidebarSectionBody from '@/components/sidebar/SidebarSectionBody.vue'
 import SidebarBadge from '@/components/sidebar/SidebarBadge.vue'
 import { formatCompactNumber, formatNumber } from '@/i18n/formatters'
+import { entityCount } from '@/lib/entity-count'
 import { useDraggableOrder } from '@/composables/useDraggableOrder'
 import { useSidebarPrefs } from '@/composables/useSidebarPrefs'
+import type { SidebarItemActivity } from '@/composables/useSidebarLibraryActivity'
 
 export interface SidebarEntity {
   id: number
@@ -19,6 +21,11 @@ export interface SidebarEntity {
   name: string
   icon?: string | null
   bookCount?: number | null
+  podcastCount?: number | null
+  episodeCount?: number | null
+  /** Libraries discriminate on `type`; scopes and collections on `mediaType`. */
+  type?: string
+  mediaType?: 'books' | 'podcasts'
 }
 
 const props = withDefaults(
@@ -27,9 +34,10 @@ const props = withDefaults(
     label: string
     items: SidebarEntity[]
     routeName: string
-    indexRouteName: string
+    /** Omit when the section has no index page; the see-all link is then suppressed. */
+    indexRouteName?: string
     activeId: number | null
-    fallbackIcon: string
+    fallbackIcon: Component | string
     emptyText: string
     filterLabel: string
     filterPlaceholder: string
@@ -41,8 +49,19 @@ const props = withDefaults(
     tourId?: string
     /** Rail popovers render the body regardless of the stored open state. */
     alwaysOpen?: boolean
+    /** A run in progress on the row, shown in place of its count. */
+    activity?: (item: SidebarEntity) => SidebarItemActivity | null
   }>(),
-  { canAdd: false, canReorder: false, addLabel: undefined, persistOrder: undefined, tourId: undefined, alwaysOpen: false },
+  {
+    indexRouteName: undefined,
+    canAdd: false,
+    canReorder: false,
+    addLabel: undefined,
+    persistOrder: undefined,
+    tourId: undefined,
+    alwaysOpen: false,
+    activity: undefined,
+  },
 )
 
 const emit = defineEmits<{ add: []; navigate: [] }>()
@@ -88,7 +107,7 @@ const matchedItems = computed(() => {
 
 const visibleItems = computed(() => (Number.isFinite(capValue.value) ? matchedItems.value.slice(0, capValue.value) : matchedItems.value))
 
-const showSeeAll = computed(() => total.value > capValue.value)
+const showSeeAll = computed(() => Boolean(props.indexRouteName) && total.value > capValue.value)
 
 /** Reordering is an explicit mode entered from the section menu. Grips are a rare action,
  *  so they stay out of the way until the user asks for them. */
@@ -145,12 +164,12 @@ function handleFilterKeydown(event: KeyboardEvent) {
   }
 }
 
-function itemRoute(id: number) {
-  return { name: props.routeName, params: { id } }
+function activityOf(item: SidebarEntity): SidebarItemActivity | null {
+  return props.activity?.(item) ?? null
 }
 
-function itemCount(item: SidebarEntity): number | null {
-  return typeof item.bookCount === 'number' ? item.bookCount : null
+function itemRoute(item: SidebarEntity) {
+  return { name: props.routeName, params: { id: item.id } }
 }
 
 function gripLabel(item: SidebarEntity): string {
@@ -228,21 +247,20 @@ function onGripBlur(id: number) {
               :key="item.id"
               :is-active="activeId === item.id"
               :tooltip="item.name"
-              :to="itemRoute(item.id)"
+              :to="itemRoute(item)"
               :icon="item.icon || fallbackIcon"
               :fallback-icon="fallbackIcon"
               :label="item.name"
               @navigate="handleNavigate"
             >
               <template #badge>
-                <slot name="itemBadge" :item="item">
-                  <SidebarBadge v-if="itemCount(item) !== null">{{ formatCompactNumber(itemCount(item) ?? 0) }}</SidebarBadge>
-                </slot>
+                <SidebarBadge v-if="activityOf(item)" variant="progress">{{ activityOf(item)?.pct }}%</SidebarBadge>
+                <SidebarBadge v-else-if="entityCount(item) !== null">{{ formatCompactNumber(entityCount(item) ?? 0) }}</SidebarBadge>
               </template>
               <template v-if="dragEnabled" #trailing>
                 <button
                   type="button"
-                  class="drag-handle flex h-8 w-4 shrink-0 cursor-grab items-center justify-center rounded-sm transition-colors duration-150 hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+                  class="drag-handle flex h-7 w-4 shrink-0 cursor-grab items-center justify-center rounded-sm transition-colors duration-150 hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring"
                   :class="liftedId === item.id ? 'text-primary' : 'text-muted-foreground'"
                   :aria-label="gripLabel(item)"
                   :aria-pressed="liftedId === item.id"
@@ -253,7 +271,12 @@ function onGripBlur(id: number) {
                 </button>
               </template>
               <template #extra>
-                <slot name="itemExtra" :item="item" />
+                <div v-if="activityOf(item)" class="px-2 pb-1.5 group-data-[collapsible=icon]:hidden">
+                  <div class="h-0.5 w-full overflow-hidden rounded-full bg-(--shell-accent-tint)">
+                    <div class="h-full rounded-full bg-primary" :style="{ width: activityOf(item)?.barWidth }" />
+                  </div>
+                  <p class="mt-0.5 text-[13px] text-muted-foreground">{{ activityOf(item)?.label }}</p>
+                </div>
               </template>
             </SidebarNavItem>
           </VueDraggable>
@@ -265,7 +288,7 @@ function onGripBlur(id: number) {
 
         <RouterLink
           v-if="showSeeAll && !isFiltering"
-          :to="{ name: indexRouteName }"
+          :to="{ name: indexRouteName as string }"
           class="mt-0.5 flex h-8 items-center gap-1 rounded-md px-2 text-[13px] font-normal text-muted-foreground outline-hidden transition-colors duration-150 hover:bg-(--shell-accent-wash) hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring"
           @click="handleNavigate"
         >

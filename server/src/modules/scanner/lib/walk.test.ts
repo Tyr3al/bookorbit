@@ -2,7 +2,8 @@ import { mkdir, mkdtemp, rm, writeFile, chmod } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
-import { findBookCandidates, buildSingleBookCandidate, findLooseFileCandidates, BookCandidate } from './walk';
+import { findBookCandidates, buildSingleBookCandidate, findLooseFileCandidates, earliestContentTime, BookCandidate, FileStat } from './walk';
+import type { FileRole } from './classify';
 
 let suiteRoot: string;
 let root: string;
@@ -376,6 +377,21 @@ describe('disc folder flattening', () => {
     expect(candidates).toHaveLength(1);
     expect(candidates[0].folderPath).toBe(join(root, 'Book'));
     expect(candidates[0].files).toHaveLength(3);
+  });
+
+  it('orders tracks disc by disc when the discs reuse file names', async () => {
+    await file('Book/CD 2/01.mp3');
+    await file('Book/CD 1/02.mp3');
+    await file('Book/CD 10/01.mp3');
+    await file('Book/CD 1/01.mp3');
+    await file('Book/CD 2/02.mp3');
+
+    const { candidates } = await findBookCandidates(root);
+    const expected = ['CD 1/01.mp3', 'CD 1/02.mp3', 'CD 2/01.mp3', 'CD 2/02.mp3', 'CD 10/01.mp3'].map((name) => join(root, 'Book', name));
+    expect(candidates[0].files.map((f) => f.absolutePath)).toEqual(expected);
+
+    const single = await buildSingleBookCandidate(join(root, 'Book'), root);
+    expect(single?.files.map((f) => f.absolutePath)).toEqual(expected);
   });
 
   it('flattens Disc, Disk, Part, Pt, Side patterns', async () => {
@@ -949,5 +965,70 @@ describe('incremental scan — findLooseFileCandidates', () => {
     // Author/ dir is unchanged - no candidates
     expect(second.candidates).toHaveLength(0);
     expect(second.unchangedDirs.size).toBeGreaterThan(0);
+  });
+});
+
+// ── earliestContentTime ───────────────────────────────────────────────────────
+
+describe('earliestContentTime', () => {
+  function fs(role: FileRole, mtime: Date, birthtime: Date): FileStat {
+    return {
+      absolutePath: `/lib/${role}-${mtime.getTime()}-${birthtime.getTime()}`,
+      relPath: `${role}`,
+      ino: 1n,
+      sizeBytes: 10,
+      mtime,
+      birthtime,
+      format: 'epub',
+      role,
+    };
+  }
+
+  const d = (iso: string) => new Date(iso);
+
+  it('file_modified returns the earliest content-file mtime', () => {
+    const files = [
+      fs('content', d('2022-05-01T00:00:00Z'), d('2023-01-01T00:00:00Z')),
+      fs('content', d('2021-03-01T00:00:00Z'), d('2020-01-01T00:00:00Z')),
+    ];
+    expect(earliestContentTime(files, 'file_modified')).toEqual(d('2021-03-01T00:00:00Z'));
+  });
+
+  it('file_modified ignores non-content files', () => {
+    const files = [
+      fs('content', d('2022-05-01T00:00:00Z'), d('2022-05-01T00:00:00Z')),
+      fs('cover', d('2019-01-01T00:00:00Z'), d('2019-01-01T00:00:00Z')),
+      fs('metadata', d('2018-01-01T00:00:00Z'), d('2018-01-01T00:00:00Z')),
+    ];
+    expect(earliestContentTime(files, 'file_modified')).toEqual(d('2022-05-01T00:00:00Z'));
+  });
+
+  it('file_created returns the earliest content-file birthtime', () => {
+    const files = [
+      fs('content', d('2022-05-01T00:00:00Z'), d('2020-06-01T00:00:00Z')),
+      fs('content', d('2021-03-01T00:00:00Z'), d('2019-02-01T00:00:00Z')),
+    ];
+    expect(earliestContentTime(files, 'file_created')).toEqual(d('2019-02-01T00:00:00Z'));
+  });
+
+  it('file_created falls back to mtime when birthtime is epoch-0/invalid', () => {
+    const files = [fs('content', d('2021-03-01T00:00:00Z'), new Date(0))];
+    expect(earliestContentTime(files, 'file_created')).toEqual(d('2021-03-01T00:00:00Z'));
+  });
+
+  it('file_created compares per-file birthtime-or-mtime fallbacks across files', () => {
+    const files = [
+      // birthtime invalid -> falls back to its mtime (2021)
+      fs('content', d('2021-03-01T00:00:00Z'), new Date(0)),
+      // valid birthtime (2022) later than the other file's fallback mtime
+      fs('content', d('2024-01-01T00:00:00Z'), d('2022-01-01T00:00:00Z')),
+    ];
+    expect(earliestContentTime(files, 'file_created')).toEqual(d('2021-03-01T00:00:00Z'));
+  });
+
+  it('returns undefined when no content file yields a usable time', () => {
+    const files = [fs('cover', d('2021-03-01T00:00:00Z'), d('2021-03-01T00:00:00Z')), fs('content', new Date(0), new Date(0))];
+    expect(earliestContentTime(files, 'file_modified')).toBeUndefined();
+    expect(earliestContentTime(files, 'file_created')).toBeUndefined();
   });
 });

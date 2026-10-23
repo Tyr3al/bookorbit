@@ -18,6 +18,13 @@ function makeService(lockedFields: string[] = []) {
 }
 
 describe('BookMetadataLockService', () => {
+  it('keeps ISBN locks independent during automated refreshes', async () => {
+    const { service } = makeService(['isbn13']);
+    const result = await service.filterResolvedMetadata(12, { isbn10: '0306406152', isbn13: '9780306406157' }, {});
+    expect(result.resolved).toEqual({ isbn10: '0306406152' });
+    expect(result.skippedFields).toEqual(['isbn13']);
+  });
+
   it('normalizes, deduplicates, and orders locked fields', () => {
     const { service } = makeService();
 
@@ -254,5 +261,24 @@ describe('BookMetadataLockService', () => {
       [MetadataProviderKey.GOOGLE]: 'g-id',
     });
     expect(result.skippedFields).toEqual(['authors', 'hardcoverEditionId', 'openLibraryId', 'librofmId', 'comicVolumeName', 'cover']);
+  });
+
+  it('filters each cover slot by its own lock, carrying the fallback choices along', async () => {
+    const { service } = makeService(['audioCover']);
+    const coverChoices = [{ url: 'https://example.com/book.jpg', provider: MetadataProviderKey.AMAZON, fit: 'match' as const }];
+
+    const result = await service.filterResolvedMetadata(
+      12,
+      {
+        coverUrl: 'https://example.com/book.jpg',
+        coverChoices,
+        audioCoverUrl: 'https://example.com/audio.jpg',
+        audioCoverChoices: [{ url: 'https://example.com/audio.jpg', provider: MetadataProviderKey.AUDIBLE, fit: 'match' }],
+      },
+      {},
+    );
+
+    expect(result.resolved).toEqual({ coverUrl: 'https://example.com/book.jpg', coverChoices });
+    expect(result.skippedFields).toEqual(['audioCover']);
   });
 });

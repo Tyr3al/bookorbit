@@ -5,6 +5,7 @@ import type { StringValue } from 'ms';
 
 import { AuthModule } from '../auth/auth.module';
 import { BookModule } from '../book/book.module';
+import { BookCoverStoreModule } from '../book-cover-store/book-cover-store.module';
 import { BookMetadataLockModule } from '../book-metadata-lock/book-metadata-lock.module';
 import { MetadataFetchModule } from '../metadata-fetch/metadata-fetch.module';
 import { MetadataModule } from '../metadata/metadata.module';
@@ -15,12 +16,14 @@ import { BookMetadataFetchController } from './book-metadata-fetch.controller';
 import { BookMetadataFetchEligibilityService } from './book-metadata-fetch-eligibility.service';
 import { BookMetadataFetchGateway } from './book-metadata-fetch.gateway';
 import { BookMetadataFetchOrchestratorService } from './book-metadata-fetch-orchestrator.service';
+import { BookMetadataFetchPreviewService } from './book-metadata-fetch-preview.service';
 import { BookMetadataFetchQueueRepository } from './book-metadata-fetch-queue.repository';
 import { BookMetadataFetchSessionService } from './book-metadata-fetch-session.service';
 
 @Module({
   imports: [
     forwardRef(() => BookModule),
+    BookCoverStoreModule,
     BookMetadataLockModule,
     MetadataModule,
     MetadataFetchModule,
@@ -42,6 +45,7 @@ import { BookMetadataFetchSessionService } from './book-metadata-fetch-session.s
     BookMetadataFetchEligibilityService,
     BookMetadataFetchConfigService,
     BookMetadataFetchOrchestratorService,
+    BookMetadataFetchPreviewService,
     BookMetadataFetchGateway,
   ],
   exports: [BookMetadataFetchOrchestratorService],

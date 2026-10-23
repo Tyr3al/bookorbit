@@ -1,3 +1,4 @@
+import { Readable } from 'stream';
 import { BadRequestException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { EmailSendOrchestrator } from './email-send-orchestrator.service';
@@ -148,7 +149,7 @@ describe('EmailSendOrchestrator', () => {
     bookService = module.get<BookService>(BookService);
     templateService = module.get<EmailTemplateService>(EmailTemplateService);
 
-    (fs.createReadStream as vi.Mock).mockReturnValue('mock-stream');
+    (fs.createReadStream as vi.Mock).mockImplementation(() => Readable.from([]));
   });
 
   describe('send', () => {
@@ -279,6 +280,20 @@ describe('EmailSendOrchestrator', () => {
       (transportService.buildTransporter as vi.Mock).mockReturnValue(mockTransporter);
     });
 
+    it('uses the streamed file path for the attachment filename when relPath is stale', async () => {
+      const task = { recipientEmail: 'test@test.com' } as any;
+      const file = { absolutePath: '/library/Author/new.epub', relPath: 'Author/old.epub', format: 'EPUB' } as any;
+
+      await (orchestrator as any).dispatchSend(400, {}, task, file, 'Subject', 'Body', 0);
+
+      expect(fs.createReadStream).toHaveBeenCalledWith('/library/Author/new.epub');
+      expect(mockTransporter.sendMail).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attachments: [{ filename: 'new.epub', content: expect.any(Readable) }],
+        }),
+      );
+    });
+
     it('should send email and mark log as sent', async () => {
       const task = { recipientEmail: 'test@test.com' } as any;
       const file = { absolutePath: '/test.mobi', relPath: 'test.mobi' } as any;
@@ -298,7 +313,7 @@ describe('EmailSendOrchestrator', () => {
     it('should retry on failure', async () => {
       vi.useFakeTimers();
       vi.spyOn(global, 'setTimeout');
-      mockTransporter.sendMail.mockRejectedValueOnce(new Error('SMTP Error'));
+      mockTransporter.sendMail.mockRejectedValueOnce(Object.assign(new Error('SMTP Error'), { command: 'MAIL FROM' }));
       (sendLogService.markFailed as vi.Mock).mockResolvedValue({ isFinal: false });
 
       const task = { recipientEmail: 'test@test.com' } as any;
@@ -362,7 +377,7 @@ describe('EmailSendOrchestrator', () => {
     it('should not retry if isFinal is true', async () => {
       vi.useFakeTimers();
       vi.spyOn(global, 'setTimeout');
-      mockTransporter.sendMail.mockRejectedValueOnce(new Error('SMTP Error'));
+      mockTransporter.sendMail.mockRejectedValueOnce(Object.assign(new Error('SMTP Error'), { command: 'MAIL FROM' }));
       (sendLogService.markFailed as vi.Mock).mockResolvedValue({ isFinal: true });
 
       const task = { recipientEmail: 'test@test.com' } as any;
@@ -377,20 +392,20 @@ describe('EmailSendOrchestrator', () => {
   });
 
   describe('buildAttachmentFilename', () => {
-    it('should build filename from relPath and format', () => {
-      const file = { relPath: 'Library/Author/Book.epub', format: 'EPUB' } as any;
+    it('should build filename from absolutePath instead of stale relPath', () => {
+      const file = { absolutePath: '/library/Author/New Name.epub', relPath: 'Library/Author/Old Name.epub', format: 'EPUB' } as any;
       const filename = (orchestrator as any).buildAttachmentFilename(file);
-      expect(filename).toBe('Book.epub');
+      expect(filename).toBe('New Name.epub');
     });
 
     it('should use "book" if relPath is missing', () => {
-      const file = { relPath: null, format: 'PDF' } as any;
+      const file = { absolutePath: '/library/book.pdf', relPath: null, format: 'PDF' } as any;
       const filename = (orchestrator as any).buildAttachmentFilename(file);
       expect(filename).toBe('book.pdf');
     });
 
     it('should handle missing format', () => {
-      const file = { relPath: 'some/book', format: null } as any;
+      const file = { absolutePath: '/library/some/book', relPath: 'some/old-book', format: null } as any;
       const filename = (orchestrator as any).buildAttachmentFilename(file);
       expect(filename).toBe('book');
     });

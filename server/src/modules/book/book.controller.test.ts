@@ -1,4 +1,4 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import type { MockedFunction } from 'vitest';
 import { ZipArchive } from 'archiver';
 import { createReadStream } from 'fs';
@@ -10,6 +10,7 @@ import { AUDITABLE_KEY } from '../../common/decorators/auditable.decorator';
 import { FORBIDDEN_PERMISSION_KEY } from '../../common/decorators/forbid-permission.decorator';
 import { PERMISSION_KEY } from '../../common/decorators/require-permission.decorator';
 import { BookController } from './book.controller';
+import { FASTIFY_ROUTE_CONFIG_METADATA } from '@nestjs/platform-fastify/constants.js';
 import { EMPTY_CONTENT_FILTER_RULES } from '@bookorbit/types';
 
 vi.mock('archiver', () => ({
@@ -134,6 +135,7 @@ function makeController() {
     globalQuery: vi.fn(),
     bulkRefreshMetadata: vi.fn(),
     bulkReExtractCover: vi.fn(),
+    reExtractCover: vi.fn(),
     bulkSetMetadata: vi.fn(),
     bulkEditMetadata: vi.fn(),
     bulkUpdateTags: vi.fn(),
@@ -147,10 +149,8 @@ function makeController() {
     resolveDownloadFilename: vi.fn(),
     getProgress: vi.fn(),
     getBookProgress: vi.fn(),
-    getAudioProgress: vi.fn(),
     saveProgress: vi.fn(),
     clearFileProgress: vi.fn(),
-    saveAudioProgress: vi.fn(),
     updatePersonalNote: vi.fn(),
     updateAddedAt: vi.fn(),
     updateMetadata: vi.fn(),
@@ -231,7 +231,7 @@ describe('BookController', () => {
     bookService.getCoverPath.mockResolvedValue('/tmp/cover.jpg');
     mockStat.mockResolvedValue({ mtimeMs: 1234 } as never);
 
-    await controller.getCover(7, makeUser(), reply, '1234567890', '"1234"');
+    await controller.getCover(7, makeUser(), reply, { t: '1234567890' }, '"1234"');
 
     expect(reply.status).toHaveBeenCalledWith(304);
     expect(headers['Cache-Control']).toBe('public, max-age=31536000, immutable');
@@ -258,7 +258,7 @@ describe('BookController', () => {
     bookService.getCoverPath.mockResolvedValue('/tmp/cover.jpg');
     mockStat.mockResolvedValue({ mtimeMs: 4321 } as never);
 
-    await controller.getCover(7, makeUser(), reply, '1234567890', undefined);
+    await controller.getCover(7, makeUser(), reply, { t: '1234567890' }, undefined);
 
     expect(headers['Cache-Control']).toBe('public, max-age=31536000, immutable');
     expect(reply.type).toHaveBeenCalledWith('image/jpeg');
@@ -337,6 +337,121 @@ describe('BookController', () => {
     expect(mockCreateReadStream).not.toHaveBeenCalled();
   });
 
+  describe('file byte routes', () => {
+    const MTIME_MS = Date.UTC(2026, 0, 2, 3, 4, 5);
+
+    function mockFile(bookService: ReturnType<typeof makeController>['bookService'], format = 'pdf') {
+      bookService.getFileInfo.mockResolvedValue({
+        path: `/tmp/book.${format}`,
+        size: 500,
+        mtimeMs: MTIME_MS,
+        format,
+        bookId: 5,
+        originalFilename: `book.${format}`,
+        mediaOverlayAvailable: false,
+      });
+      bookService.resolveDownloadFilename.mockResolvedValue(`book.${format}`);
+    }
+
+    it('sends validators and a revalidate-every-time cache policy with the whole file', async () => {
+      const { controller, bookService } = makeController();
+      const { reply, headers } = makeReply();
+      mockFile(bookService);
+
+      await controller.serveFile(1, makeUser(), undefined, reply);
+
+      expect(headers['ETag']).toMatch(/^"[0-9a-f]{64}"$/);
+      expect(headers['Last-Modified']).toBe('Fri, 02 Jan 2026 03:04:05 GMT');
+      expect(headers['Cache-Control']).toBe('private, no-cache');
+      expect(headers['Accept-Ranges']).toBe('bytes');
+      expect(headers['Content-Length']).toBe(500);
+      expect(reply.status).not.toHaveBeenCalled();
+      expect(mockCreateReadStream).toHaveBeenCalledWith('/tmp/book.pdf');
+    });
+
+    it('resumes from If-Range when it carries the current ETag', async () => {
+      const { controller, bookService } = makeController();
+      const first = makeReply();
+      mockFile(bookService);
+      await controller.serveFile(1, makeUser(), undefined, first.reply);
+      const etag = first.headers['ETag'] as string;
+      mockCreateReadStream.mockClear();
+
+      const { reply, headers } = makeReply();
+      await controller.serveFile(1, makeUser(), 'bytes=200-', reply, etag);
+
+      expect(reply.status).toHaveBeenCalledWith(206);
+      expect(headers['Content-Range']).toBe('bytes 200-499/500');
+      expect(headers['Content-Length']).toBe(300);
+      expect(mockCreateReadStream).toHaveBeenCalledWith('/tmp/book.pdf', { start: 200, end: 499 });
+    });
+
+    it('restarts with the whole file when If-Range names a file that has since changed', async () => {
+      const { controller, bookService } = makeController();
+      const { reply, headers } = makeReply();
+      mockFile(bookService);
+
+      await controller.serveFile(1, makeUser(), 'bytes=200-', reply, '"stale"');
+
+      expect(reply.status).not.toHaveBeenCalled();
+      expect(headers['Content-Range']).toBeUndefined();
+      expect(headers['Content-Length']).toBe(500);
+      expect(mockCreateReadStream).toHaveBeenCalledWith('/tmp/book.pdf');
+    });
+
+    it('serves suffix ranges and clamps an end past the file', async () => {
+      const { controller, bookService } = makeController();
+      mockFile(bookService);
+
+      const suffix = makeReply();
+      await controller.serveFile(1, makeUser(), 'bytes=-100', suffix.reply);
+      expect(suffix.headers['Content-Range']).toBe('bytes 400-499/500');
+
+      const clamped = makeReply();
+      await controller.serveFile(1, makeUser(), 'bytes=450-9999', clamped.reply);
+      expect(clamped.reply.status).toHaveBeenCalledWith(206);
+      expect(clamped.headers['Content-Range']).toBe('bytes 450-499/500');
+      expect(clamped.headers['Content-Length']).toBe(50);
+    });
+
+    it('answers 304 when If-None-Match matches on a plain GET', async () => {
+      const { controller, bookService } = makeController();
+      const first = makeReply();
+      mockFile(bookService);
+      await controller.serveFile(1, makeUser(), undefined, first.reply);
+      mockCreateReadStream.mockClear();
+
+      const { reply } = makeReply();
+      await controller.serveFile(1, makeUser(), undefined, reply, undefined, first.headers['ETag'] as string);
+
+      expect(reply.status).toHaveBeenCalledWith(304);
+      expect(mockCreateReadStream).not.toHaveBeenCalled();
+    });
+
+    it('honours Range on the download route with the same validators as serve', async () => {
+      const { controller, bookService } = makeController();
+      mockFile(bookService, 'epub');
+      const served = makeReply();
+      await controller.serveFile(1, makeUser(), undefined, served.reply);
+      mockCreateReadStream.mockClear();
+
+      const { reply, headers } = makeReply();
+      await controller.downloadFile(1, makeUser(), reply, 'bytes=100-199', served.headers['ETag'] as string);
+
+      expect(headers['ETag']).toBe(served.headers['ETag']);
+      expect(headers['Content-Disposition']).toContain('attachment');
+      expect(reply.status).toHaveBeenCalledWith(206);
+      expect(headers['Content-Range']).toBe('bytes 100-199/500');
+      expect(mockCreateReadStream).toHaveBeenCalledWith('/tmp/book.epub', { start: 100, end: 199 });
+    });
+
+    it('opts every raw file route out of response compression', () => {
+      for (const handler of ['serveFile', 'downloadFile', 'downloadAudiolessEpub', 'getCover', 'getThumbnail'] as const) {
+        expect(Reflect.getMetadata(FASTIFY_ROUTE_CONFIG_METADATA, BookController.prototype[handler])).toEqual({ compress: false });
+      }
+    });
+  });
+
   it('streams server-sent events for bulk metadata refresh progress', async () => {
     const { controller, bookService } = makeController();
     const { reply, raw } = makeReply();
@@ -363,6 +478,21 @@ describe('BookController', () => {
     expect(raw.write).toHaveBeenNthCalledWith(1, `data: ${JSON.stringify({ bookId: 9, success: true })}\n\n`);
     expect(raw.write).toHaveBeenNthCalledWith(2, `data: ${JSON.stringify({ done: true, processed: 1, failed: 0 })}\n\n`);
     expect(raw.end).toHaveBeenCalled();
+  });
+
+  it.each(['bulkRefreshMetadata', 'bulkReExtractCover'] as const)('rejects an unauthorized %s selection before starting SSE', async (method) => {
+    const { controller, bookService } = makeController();
+    const { reply, raw } = makeReply();
+    const user = makeUser();
+    const error = new ForbiddenException('Editor access required');
+    bookService.resolveSelectionToIds.mockRejectedValue(error);
+
+    await expect(controller[method]({ bookIds: [9] }, user, reply)).rejects.toBe(error);
+
+    expect(bookService.resolveSelectionToIds).toHaveBeenCalledWith({ bookIds: [9] }, user, 'editor');
+    expect(bookService[method]).not.toHaveBeenCalled();
+    expect(raw.writeHead).not.toHaveBeenCalled();
+    expect(raw.write).not.toHaveBeenCalled();
   });
 
   it('stops sending SSE done event when client disconnects', async () => {
@@ -734,7 +864,7 @@ describe('BookController', () => {
     bookService.getThumbnailPath.mockResolvedValue('/tmp/thumb.jpg');
     mockStat.mockResolvedValue({ mtimeMs: 1000 } as never);
 
-    await controller.getThumbnail(7, makeUser(), reply, '1234567890', undefined);
+    await controller.getThumbnail(7, makeUser(), reply, { t: '1234567890' }, undefined);
     expect(headers['Cache-Control']).toBe('public, max-age=31536000, immutable');
   });
 
@@ -746,14 +876,24 @@ describe('BookController', () => {
     await expect(controller.getThumbnail(7, makeUser(), reply, undefined, undefined)).rejects.toThrow(NotFoundException);
   });
 
-  it('delegates re-extract-cover endpoint to bulk cover flow', async () => {
+  it('delegates re-extract-cover endpoint to the single-book cover flow', async () => {
     const { controller, bookService } = makeController();
-    bookService.bulkReExtractCover.mockResolvedValue({ processed: 1, updated: 1 });
+    bookService.reExtractCover.mockResolvedValue({ processed: 1, updated: 1 });
     const user = makeUser();
 
-    await controller.reExtractCover(42, user);
+    await expect(controller.reExtractCover(42, user)).resolves.toEqual({ processed: 1, updated: 1 });
 
-    expect(bookService.bulkReExtractCover).toHaveBeenCalledWith([42], user);
+    expect(bookService.reExtractCover).toHaveBeenCalledWith(42, user, undefined);
+  });
+
+  it('passes an explicit medium through re-extract-cover', async () => {
+    const { controller, bookService } = makeController();
+    const user = makeUser();
+    bookService.reExtractCover.mockResolvedValue({ processed: 1, updated: 1 });
+
+    await controller.reExtractCover(42, user, { medium: 'audio' });
+
+    expect(bookService.reExtractCover).toHaveBeenCalledWith(42, user, 'audio');
   });
 
   it('logs and rethrows download failures', async () => {
@@ -773,11 +913,17 @@ describe('BookController', () => {
       cfi: null,
       pageNumber: null,
       percentage: 0,
+      positionSeconds: null,
+      mediaOverlayFragment: null,
+      mediaOverlaySectionIndex: null,
       koboLocationSource: null,
       koboLocationType: null,
       koboLocationValue: null,
       koboContentSourceProgressPercent: null,
       koreaderProgress: null,
+      narrationPercentage: null,
+      narrationUpdatedAt: null,
+      textUpdatedAt: null,
     });
     expect(bookService.getProgress).toHaveBeenCalledWith(user.id, 9, user);
   });
@@ -788,11 +934,9 @@ describe('BookController', () => {
 
     await controller.saveFileProgress(9, { percentage: 25 } as never, user);
     await controller.clearFileProgress(9, user);
-    await controller.saveAudioProgress(11, { currentFileId: 2, positionSeconds: 90, percentage: 20 } as never, user);
 
     expect(bookService.saveProgress).toHaveBeenCalledWith(user.id, 9, { percentage: 25 }, user);
     expect(bookService.clearFileProgress).toHaveBeenCalledWith(user.id, 9, user);
-    expect(bookService.saveAudioProgress).toHaveBeenCalledWith(user.id, 11, { currentFileId: 2, positionSeconds: 90, percentage: 20 }, user);
   });
 
   it('delegates remaining book endpoints to service methods', async () => {
@@ -808,7 +952,6 @@ describe('BookController', () => {
     bookService.refreshMetadata.mockResolvedValue({ id: 7 });
     bookService.getMetadataFromFile.mockResolvedValue({ title: 'File Title' });
     bookService.getKoboState.mockResolvedValue({ eligibleForKoboSync: false, syncCollections: [], readingState: null, snapshots: [] });
-    bookService.getAudioProgress.mockResolvedValue({ positionSeconds: 15 });
     bookService.getDetail.mockResolvedValue({ id: 7, title: 'Detail' });
 
     await controller.updateMetadata(7, { title: 'New' } as never, user);
@@ -820,7 +963,6 @@ describe('BookController', () => {
     await controller.getMetadataFromFile(7, user);
     await controller.getKoboState(7, user);
     await controller.setReadStatus(7, { status: 'reading' } as never, user);
-    await controller.getAudioProgress(7, user);
     await controller.getDetail(7, user);
 
     expect(bookService.updateMetadata).toHaveBeenCalledWith(7, { title: 'New' }, user, { postSaveMode: 'schedule' });
@@ -834,7 +976,6 @@ describe('BookController', () => {
     expect(bookService.getMetadataFromFile).toHaveBeenCalledWith(7, user);
     expect(bookService.getKoboState).toHaveBeenCalledWith(7, user);
     expect(bookService.setReadStatus).toHaveBeenCalledWith(7, { status: 'reading' }, user);
-    expect(bookService.getAudioProgress).toHaveBeenCalledWith(user.id, 7, user);
     expect(bookService.getDetail).toHaveBeenCalledWith(7, user);
   });
 
@@ -932,6 +1073,7 @@ describe('BookController', () => {
     const refreshAudit = Reflect.getMetadata(AUDITABLE_KEY, BookController.prototype.refreshMetadata) as {
       getResourceId: (req: { params: Record<string, string> }) => number;
       description: (req: { params: Record<string, string> }) => string;
+      when: (req: { query?: Record<string, string> }) => boolean;
     };
 
     const singleDeletion = { total: 1, books: [{ id: 1, title: 'Dune' }], omitted: 0 };
@@ -955,6 +1097,9 @@ describe('BookController', () => {
     expect(updateLocksAudit.description({ params: { id: '44' } })).toBe('Updated metadata locks for book #44');
     expect(refreshAudit.getResourceId({ params: { id: '44' } })).toBe(44);
     expect(refreshAudit.description({ params: { id: '44' } })).toBe('Refreshed metadata for book #44');
+    expect(refreshAudit.when({ query: {} })).toBe(true);
+    expect(refreshAudit.when({ query: { preview: 'false' } })).toBe(true);
+    expect(refreshAudit.when({ query: { preview: 'true' } })).toBe(false);
   });
 
   it('marks bulk-edit endpoints as demo-restricted', () => {
@@ -980,6 +1125,18 @@ describe('BookController', () => {
     expect(Reflect.getMetadata(FORBIDDEN_PERMISSION_KEY, BookController.prototype.refreshMetadata)).toBeUndefined();
   });
 
+  // Both routes previously verified library access only, so a library editor without delete
+  // rights could remove a file from disk, and the web client already assumed otherwise.
+  it('gates per-file mutations on the same permissions as the book-level routes', () => {
+    expect(Reflect.getMetadata(PERMISSION_KEY, BookController.prototype.deleteFile)).toBe(Permission.LibraryDeleteBooks);
+    expect(Reflect.getMetadata(PERMISSION_KEY, BookController.prototype.renameFile)).toBe(Permission.LibraryEditMetadata);
+  });
+
+  // Progress is the caller's own, so clearing it stays available to every account with access.
+  it('leaves per-file progress clearing ungated', () => {
+    expect(Reflect.getMetadata(PERMISSION_KEY, BookController.prototype.clearFileProgress)).toBeUndefined();
+  });
+
   it('marks bulk-download endpoints as demo-restricted', () => {
     const message = 'Demo-restricted account cannot perform bulk downloads';
     const bulkDownloadMethods = [BookController.prototype.exportBooks, BookController.prototype.exportBooksDownload];
@@ -990,6 +1147,11 @@ describe('BookController', () => {
         message,
       });
     }
+  });
+
+  it('requires mutation permissions for per-file rename and delete', () => {
+    expect(Reflect.getMetadata(PERMISSION_KEY, BookController.prototype.renameFile)).toBe(Permission.LibraryEditMetadata);
+    expect(Reflect.getMetadata(PERMISSION_KEY, BookController.prototype.deleteFile)).toBe(Permission.LibraryDeleteBooks);
   });
 
   it('preserves valid surrogate pairs while stripping lone surrogates in download filenames', async () => {

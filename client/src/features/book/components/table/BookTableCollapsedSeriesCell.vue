@@ -2,13 +2,20 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ChevronRight, LibraryBig } from '@lucide/vue'
-import { FORMAT_TO_GROUP, type BookCard } from '@bookorbit/types'
+import { FORMAT_TO_GROUP, isComicFormat, type BookCard } from '@bookorbit/types'
 import BookCoverSurface from '../BookCoverSurface.vue'
+import BookTableChipsCell from './BookTableChipsCell.vue'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useCoverVersions } from '@/features/book/composables/useCoverVersions'
 
 const props = defineProps<{
   book: BookCard
   colId: string
+  linkFn?: (chip: string) => string | null
+}>()
+
+const emit = defineEmits<{
+  'open-series': []
 }>()
 
 const { t } = useI18n()
@@ -20,18 +27,29 @@ const bookCount = computed(() => collapsed.value.bookCount)
 const coverIds = computed(() => collapsed.value.coverBookIds.filter((id) => id > 0).slice(0, 4))
 const primaryFile = computed(() => props.book.files.find((file) => file.role === 'primary') ?? props.book.files[0] ?? null)
 const isAudiobook = computed(() => primaryFile.value?.format != null && FORMAT_TO_GROUP[primaryFile.value.format] === 'audio')
-const isComic = computed(() => primaryFile.value?.format != null && FORMAT_TO_GROUP[primaryFile.value.format] === 'cbx')
+const isComic = computed(() => primaryFile.value?.format != null && isComicFormat(primaryFile.value.format))
 const { coverUrl } = useCoverVersions()
 
 function thumbnailUrl(bookId: number): string {
-  const version = bookId === props.book.id ? (props.book.updatedAt ?? props.book.addedAt) : collapsed.value.coverUpdatedAtByBookId?.[bookId]
+  const version = bookId === props.book.id ? props.book.coverVersion : collapsed.value.coverUpdatedAtByBookId?.[bookId]
   return coverUrl(bookId, 'thumbnail', version)
+}
+
+function handleOpenSeries() {
+  emit('open-series')
 }
 </script>
 
 <template>
   <div v-if="colId === 'lockRow'" class="flex h-6 w-6 items-center justify-center">
-    <LibraryBig :size="13" class="text-muted-foreground" />
+    <Tooltip>
+      <TooltipTrigger as-child>
+        <span role="img" tabindex="0" :aria-label="t('book.table.series.seriesRow')" class="rounded-sm focus-visible:ring-2 focus-visible:ring-ring">
+          <LibraryBig :size="13" class="text-muted-foreground" aria-hidden="true" />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{{ t('book.table.series.seriesRow') }}</TooltipContent>
+    </Tooltip>
   </div>
 
   <div v-else-if="colId === 'readStatus'" class="flex w-full items-center px-1 py-0.5">
@@ -79,8 +97,22 @@ function thumbnailUrl(bookId: number): string {
     >
   </div>
 
+  <BookTableChipsCell v-else-if="colId === 'authors'" :value="book.authors" :is-active="false" is-read-only :link-fn="linkFn" />
+
   <div v-else-if="colId === 'actions'" class="flex h-full w-6 items-center justify-center">
-    <ChevronRight :size="16" class="text-muted-foreground group-hover:text-foreground transition-colors" />
+    <Tooltip>
+      <TooltipTrigger as-child>
+        <button
+          type="button"
+          :aria-label="t('book.tableView.openSeries')"
+          class="flex h-7 w-7 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          @click.stop="handleOpenSeries"
+        >
+          <ChevronRight :size="16" aria-hidden="true" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>{{ t('book.tableView.openSeries') }}</TooltipContent>
+    </Tooltip>
   </div>
 
   <!-- Dash for all other columns -->

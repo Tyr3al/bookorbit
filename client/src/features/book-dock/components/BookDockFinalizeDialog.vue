@@ -6,13 +6,22 @@ import { X, Check, AlertCircle, Copy, Loader2, ExternalLink, ChevronDown, FileTe
 import type { BookDockDiscardDuplicatesResult, BookDockFinalizePreviewResult } from '@bookorbit/types'
 
 import { api } from '@/lib/api'
-import { useLibraries } from '@/features/library/composables/useLibraries'
+import { useBookDestination } from '@/features/library/composables/useBookDestination'
+import BookDestinationFields from '@/features/library/components/BookDestinationFields.vue'
 import { useBookDockFinalize } from '../composables/useBookDockFinalize'
 
 const { t } = useI18n()
 
 const props = defineProps<{
-  selectionPayload: { fileIds?: number[]; selectAll?: boolean; excludedIds?: number[]; status?: string; search?: string }
+  selectionPayload: {
+    fileIds?: number[]
+    selectAll?: boolean
+    excludedIds?: number[]
+    status?: string
+    needsReview?: boolean
+    readyToFile?: boolean
+    search?: string
+  }
   selectionCount: number
 }>()
 
@@ -21,6 +30,8 @@ type FinalizePayload = {
   selectAll?: boolean
   excludedIds?: number[]
   status?: string
+  needsReview?: boolean
+  readyToFile?: boolean
   search?: string
   defaultLibraryId?: number
   defaultFolderId?: number
@@ -32,11 +43,10 @@ const emit = defineEmits<{
 }>()
 
 const router = useRouter()
-const { libraries, fetchLibraries, refreshLibraries } = useLibraries()
+const destination = useBookDestination({ defaultToFirstLibrary: true })
+const { libraryId: defaultLibraryId, folderId: defaultFolderId, hasDestination, fetchLibraries, refreshLibraries } = destination
 const { result, loading, error, finalize, reset } = useBookDockFinalize()
 
-const defaultLibraryId = ref<number | null>(null)
-const defaultFolderId = ref<number | null>(null)
 const expandedErrors = ref<Set<number>>(new Set())
 const reimportingIds = reactive(new Set<number>())
 const renameInputs = ref<Map<number, string>>(new Map())
@@ -99,7 +109,7 @@ function effectiveSelectionPayload(): {
 function finalizePayload(): FinalizePayload {
   return {
     ...effectiveSelectionPayload(),
-    ...(requiresDefaultDestination.value && defaultLibraryId.value !== null && defaultFolderId.value !== null
+    ...(requiresDefaultDestination.value && hasDestination.value && defaultLibraryId.value !== null && defaultFolderId.value !== null
       ? {
           defaultLibraryId: defaultLibraryId.value,
           defaultFolderId: defaultFolderId.value,
@@ -147,45 +157,18 @@ const namePreview = ref<{ fileId: number; fileName: string; newName: string }[]>
 const previewLoading = ref(false)
 let previewReqSeq = 0
 
-const selectedLibrary = computed(() => libraries.value.find((l) => l.id === defaultLibraryId.value))
-const folders = computed(() => selectedLibrary.value?.folders ?? [])
-
 const requiresDefaultDestination = computed(() => (selectionSummary.value?.withoutDestination ?? props.selectionCount) > 0)
 const canStart = computed(() => {
   if (effectiveSelectionCount.value <= 0) return false
   if (!selectionSummary.value) return false
   if (!requiresDefaultDestination.value) return true
-  return defaultLibraryId.value !== null && defaultFolderId.value !== null
+  return hasDestination.value
 })
 
 onMounted(async () => {
   await Promise.all([fetchLibraries(), fetchSelectionSummary()])
-  const first = libraries.value[0]
-  if (requiresDefaultDestination.value && first) {
-    defaultLibraryId.value = first.id
-    const firstFolder = first.folders?.[0]
-    if (firstFolder) defaultFolderId.value = firstFolder.id
-  }
   void fetchFinalizePreview()
 })
-
-function onLibraryChange(event: Event) {
-  const raw = Number((event.target as HTMLSelectElement).value)
-  const id = Number.isFinite(raw) && raw > 0 ? raw : null
-  if (id === null) {
-    defaultLibraryId.value = null
-    defaultFolderId.value = null
-    return
-  }
-  defaultLibraryId.value = id
-  const lib = libraries.value.find((l) => l.id === id)
-  defaultFolderId.value = lib?.folders?.[0]?.id ?? null
-}
-
-function onFolderChange(event: Event) {
-  const raw = Number((event.target as HTMLSelectElement).value)
-  defaultFolderId.value = Number.isFinite(raw) && raw > 0 ? raw : null
-}
 
 function syncNamePreviewFromFinalizePreview(preview: BookDockFinalizePreviewResult | null) {
   namePreview.value =
@@ -193,7 +176,8 @@ function syncNamePreviewFromFinalizePreview(preview: BookDockFinalizePreviewResu
 }
 
 async function fetchFinalizePreview() {
-  if (requiresDefaultDestination.value && (defaultLibraryId.value === null || defaultFolderId.value === null)) {
+  if (!selectionSummary.value || (requiresDefaultDestination.value && !hasDestination.value)) {
+    ++previewReqSeq
     finalizePreview.value = null
     namePreview.value = []
     previewLoading.value = false
@@ -254,7 +238,7 @@ async function fetchSelectionSummary() {
   selectionSummary.value = { total: props.selectionCount, withDestination: 0, withoutDestination: props.selectionCount }
 }
 
-watch([defaultLibraryId, defaultFolderId, requiresDefaultDestination], () => {
+watch([defaultLibraryId, defaultFolderId, requiresDefaultDestination, hasDestination], () => {
   void fetchFinalizePreview()
 })
 
@@ -328,7 +312,7 @@ async function handleDiscardResultDuplicates() {
 <template>
   <Teleport to="body">
     <div class="fixed inset-0 z-50 flex items-center justify-center">
-      <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" @click="handleClose" />
+      <div class="absolute inset-0 bg-scrim" @click="handleClose" />
       <div class="relative z-10 w-full max-w-2xl mx-4 bg-card border border-border rounded-lg shadow-2xl overflow-hidden">
         <div class="flex items-center justify-between px-5 py-4 border-b border-border">
           <h2 class="text-base font-semibold text-foreground">
@@ -423,29 +407,12 @@ async function handleDiscardResultDuplicates() {
 
           <p v-if="finalizePreviewError" class="text-xs text-red-500 bg-red-500/10 rounded-lg p-2">{{ finalizePreviewError }}</p>
 
-          <div v-if="requiresDefaultDestination" class="space-y-3">
-            <label class="block">
-              <span class="text-xs font-medium text-muted-foreground">{{ t('bookDock.finalizeDialog.defaultDestinationLibrary') }}</span>
-              <select
-                class="mt-1 w-full h-9 rounded-lg border border-input bg-background px-3 text-sm outline-none focus:ring-1 focus:ring-ring"
-                :value="defaultLibraryId ?? ''"
-                @change="onLibraryChange"
-              >
-                <option v-for="lib in libraries" :key="lib.id" :value="lib.id">{{ lib.name }}</option>
-              </select>
-            </label>
-
-            <label class="block">
-              <span class="text-xs font-medium text-muted-foreground">{{ t('bookDock.finalizeDialog.defaultDestinationFolder') }}</span>
-              <select
-                class="mt-1 w-full h-9 rounded-lg border border-input bg-background px-3 text-sm outline-none focus:ring-1 focus:ring-ring"
-                :value="defaultFolderId ?? ''"
-                @change="onFolderChange"
-              >
-                <option v-for="folder in folders" :key="folder.id" :value="folder.id">{{ folder.path }}</option>
-              </select>
-            </label>
-          </div>
+          <BookDestinationFields
+            v-if="requiresDefaultDestination"
+            :destination="destination"
+            :library-label="t('bookDock.finalizeDialog.defaultDestinationLibrary')"
+            :folder-label="t('bookDock.finalizeDialog.defaultDestinationFolder')"
+          />
 
           <div v-if="namePreview.length || previewLoading" class="space-y-1.5">
             <div class="flex items-center gap-1.5">

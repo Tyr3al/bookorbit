@@ -2,6 +2,10 @@ import { BadRequestException, Inject, Injectable, Logger, NotFoundException } fr
 import { ConfigService, type ConfigType } from '@nestjs/config';
 
 import {
+  type BookRequestImportFormats,
+  BOOK_REQUEST_AUTOMATION_SETTING_KEYS,
+  BOOK_REQUEST_IMPORT_FORMATS,
+  DEFAULT_BOOK_REQUEST_AUTOMATION_SETTINGS,
   type DefaultLibraryAccessConfig,
   DEFAULT_DOWNLOAD_PATTERN,
   DEFAULT_UPLOAD_PATTERN_BOOK_PER_FILE,
@@ -20,9 +24,11 @@ import {
   BOOK_DOCK_MANAGED_SETTING_KEYS,
   DEFAULT_LIBRARY_ACCESS_CONFIG,
   DEFAULT_OIDC_CONFIG,
+  MAX_AUDIT_RETENTION_DAYS,
   type OidcFullConfig,
 } from '../../common/constants/app-settings.constants';
 import { ensureSafeUrl } from '../../common/utils/ssrf.utils';
+import { DEFAULT_MAX_UPLOAD_SIZE_MB, HARD_MAX_UPLOAD_SIZE_MB } from '../../common/constants/upload.constants';
 import { AppSettingsRepository } from './app-settings.repository';
 
 const OIDC_TEST_TIMEOUT_MS = 10_000;
@@ -64,6 +70,12 @@ export class AppSettingsService {
     return row?.value ?? null;
   }
 
+  /** One round trip for a group of related settings, rather than a query per key. */
+  async getValues(keys: string[]): Promise<Map<string, string>> {
+    const rows = await this.repo.findMany(keys);
+    return new Map(rows.map((row) => [row.key, row.value]));
+  }
+
   async setValue(key: string, value: string): Promise<void> {
     await this.repo.upsert(key, value);
     this.clearRuntimeSettingCache(key);
@@ -75,9 +87,16 @@ export class AppSettingsService {
     }
     if (key === APP_SETTING_KEYS.MAX_UPLOAD_SIZE_MB) {
       const parsed = parseInt(value, 10);
-      if (isNaN(parsed) || parsed <= 0) {
-        throw new BadRequestException('Upload size limit must be an integer greater than 0');
+      if (isNaN(parsed) || parsed <= 0 || parsed > HARD_MAX_UPLOAD_SIZE_MB) {
+        throw new BadRequestException(`Upload size limit must be an integer between 1 and ${HARD_MAX_UPLOAD_SIZE_MB}`);
       }
+    }
+    if (key === APP_SETTING_KEYS.AUDIT_RETENTION_DAYS) {
+      const days = /^\d+$/.test(value.trim()) ? parseInt(value, 10) : NaN;
+      if (!(days >= 1 && days <= MAX_AUDIT_RETENTION_DAYS)) {
+        throw new BadRequestException(`Audit retention must be a whole number of days between 1 and ${MAX_AUDIT_RETENTION_DAYS}`);
+      }
+      value = String(days);
     }
     const setting = await this.repo.updateByKey(key, value);
     if (!setting) throw new NotFoundException(`Setting '${key}' not found`);
@@ -146,6 +165,20 @@ export class AppSettingsService {
     const row = await this.repo.findByKey(APP_SETTING_KEYS.OIDC_CONFIG);
     const stored = parseSafe<Partial<OidcFullConfig>>(APP_SETTING_KEYS.OIDC_CONFIG, row?.value, {}, this.logger);
     return mergeOidcConfig(DEFAULT_OIDC_CONFIG, stored);
+  }
+
+  /**
+   * How many formats of one book to keep when a release carried several.
+   *
+   * Read here rather than through the book-request module's own settings service because the dock
+   * is where placement happens, and a folder dropped in by hand has no request behind it at all.
+   * Falls back to the shipped default, so a hand-edited row cannot stall a finalize.
+   */
+  async getBookRequestImportFormats(): Promise<BookRequestImportFormats> {
+    const row = await this.repo.findByKey(BOOK_REQUEST_AUTOMATION_SETTING_KEYS.IMPORT_FORMATS);
+    return BOOK_REQUEST_IMPORT_FORMATS.includes(row?.value as BookRequestImportFormats)
+      ? (row!.value as BookRequestImportFormats)
+      : DEFAULT_BOOK_REQUEST_AUTOMATION_SETTINGS.importFormats;
   }
 
   async getUploadPattern(): Promise<string> {
@@ -348,8 +381,8 @@ export class AppSettingsService {
 
   async getMaxUploadSizeMb(): Promise<number> {
     const row = await this.repo.findByKey(APP_SETTING_KEYS.MAX_UPLOAD_SIZE_MB);
-    const size = row?.value ? parseInt(row.value, 10) : 500;
-    return isNaN(size) || size <= 0 ? 500 : size;
+    const size = row?.value ? parseInt(row.value, 10) : DEFAULT_MAX_UPLOAD_SIZE_MB;
+    return isNaN(size) || size <= 0 ? DEFAULT_MAX_UPLOAD_SIZE_MB : Math.min(size, HARD_MAX_UPLOAD_SIZE_MB);
   }
 }
 

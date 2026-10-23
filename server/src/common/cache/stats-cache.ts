@@ -10,6 +10,7 @@ interface CacheEntry {
 }
 
 export class StatsCache {
+  private generation = 0;
   private readonly entries = new Map<string, CacheEntry>();
   private readonly inFlight = new Map<string, Promise<unknown>>();
   private readonly scopeIndex = new Map<string, Set<string>>();
@@ -36,11 +37,12 @@ export class StatsCache {
       return inFlight as Promise<T>;
     }
 
+    const generation = this.generation;
     const gen = this.scopeGen.get(scope) ?? 0;
 
     const pending = load()
       .then((value) => {
-        if ((this.scopeGen.get(scope) ?? 0) === gen) {
+        if (this.generation === generation && (this.scopeGen.get(scope) ?? 0) === gen) {
           const ts = Date.now();
           this.entries.set(fullKey, { value, expiresAt: ts + this.options.ttlMs, lastAccessedAt: ts });
           if (!this.scopeIndex.has(scope)) {
@@ -52,7 +54,7 @@ export class StatsCache {
         return value;
       })
       .finally(() => {
-        this.inFlight.delete(fullKey);
+        if (this.inFlight.get(fullKey) === pending) this.inFlight.delete(fullKey);
       });
 
     this.inFlight.set(fullKey, pending as Promise<unknown>);
@@ -77,7 +79,19 @@ export class StatsCache {
     this.scopeIndex.delete(scope);
   }
 
+  clearForScopePrefix(prefix: string): void {
+    const scopes = new Set([...this.scopeGen.keys(), ...this.scopeIndex.keys()]);
+    for (const fullKey of this.inFlight.keys()) {
+      const separatorIndex = fullKey.indexOf('::');
+      if (separatorIndex >= 0) scopes.add(fullKey.slice(0, separatorIndex));
+    }
+    for (const scope of scopes) {
+      if (scope.startsWith(prefix)) this.clearForScope(scope);
+    }
+  }
+
   clear(): void {
+    this.generation += 1;
     this.entries.clear();
     this.inFlight.clear();
     this.scopeIndex.clear();

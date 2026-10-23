@@ -4,11 +4,13 @@ import { useI18n } from 'vue-i18n'
 import { Check, ChevronDown, Clock, Minus, Plus, TrendingDown, TrendingUp } from '@lucide/vue'
 import type { BookDetail, BookReadingSessionStats, ReadStatus, UserBookStatus } from '@bookorbit/types'
 import { isAudioFormat } from '@bookorbit/types'
+import { bookFormatEntries, formatKeyName } from '@/features/book/lib/book-formats'
 import { api } from '@/lib/api'
 import { formatDate, formatNumber, formatRelativeFromNow } from '@/i18n/formatters'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { STATUS_COLORS, STATUS_ICONS, STATUS_OPTIONS, useBookStatus } from '@/features/book/composables/useBookStatus'
 import { useReadingLogInsights } from '@/features/book/composables/useReadingLogInsights'
+import { readingDateToDateKey } from '@/features/book/lib/reading-date'
 import AchievementProgressRing from '@/features/achievements/components/AchievementProgressRing.vue'
 import ReadingLogSourceSplit from './ReadingLogSourceSplit.vue'
 
@@ -31,21 +33,11 @@ const { setStatus, updateStatus } = useBookStatus()
 const statsRef = computed(() => props.stats)
 const { activeDays, spanDays, pacePercentPerHour, momentum } = useReadingLogInsights(statsRef)
 
-const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/
-
 function dateToDateKey(value: Date): string {
   const year = value.getFullYear()
   const month = String(value.getMonth() + 1).padStart(2, '0')
   const day = String(value.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
-}
-
-function toDateInputValue(value: string | null | undefined): string {
-  if (!value) return ''
-  if (DATE_KEY_RE.test(value)) return value
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return ''
-  return dateToDateKey(parsed)
 }
 
 function formatDisplayDate(dateKey: string): string {
@@ -73,8 +65,8 @@ const datesError = ref<string | null>(null)
 
 function normalizeDates(readStatus: UserBookStatus | null | undefined) {
   return {
-    startedAt: toDateInputValue(readStatus?.startedAt),
-    finishedAt: toDateInputValue(readStatus?.finishedAt),
+    startedAt: readingDateToDateKey(readStatus?.startedAt),
+    finishedAt: readingDateToDateKey(readStatus?.finishedAt),
   }
 }
 
@@ -188,14 +180,15 @@ function handleFinishedCancel() {
 const readerProgress = ref(0)
 const progressLoaded = ref(false)
 
-async function loadProgress() {
-  progressLoaded.value = false
+/** `silent` keeps the current figure on screen while it is reread, so the ring does not blank. */
+async function loadProgress(silent = false) {
+  if (!silent) progressLoaded.value = false
   const bookId = props.book.id
   const hasAudio = props.book.files.some((file) => file.format != null && isAudioFormat(file.format))
   try {
     const [progressRes, audioRes] = await Promise.all([
       api(`/api/v1/books/${bookId}/progress`).catch(() => null),
-      hasAudio ? api(`/api/v1/books/${bookId}/audio-progress`).catch(() => null) : Promise.resolve(null),
+      hasAudio ? api(`/api/v1/audiobooks/${bookId}/playback-state`).catch(() => null) : Promise.resolve(null),
     ])
     if (bookId !== props.book.id) return
 
@@ -218,7 +211,15 @@ async function loadProgress() {
   }
 }
 
-watch(() => props.book.id, loadProgress, { immediate: true })
+watch(
+  () => props.book.id,
+  () => loadProgress(),
+  { immediate: true },
+)
+
+// The stored position can move without the book changing, such as a held KOReader position being
+// accepted, so the tab asks for a reread rather than this card watching for it.
+defineExpose({ reloadProgress: () => loadProgress(true) })
 
 // The stored reading position only moves when a reader or a synced device writes it, so a book
 // whose progress was only ever logged by hand has none. Sessions are the other observation of how
@@ -266,8 +267,8 @@ const momentumTitle = computed(() => {
 })
 
 const formatLine = computed(() =>
-  [...new Set(props.book.files.map((file) => file.format).filter((format): format is string => format != null && format.length > 0))]
-    .map((format) => format.toUpperCase())
+  bookFormatEntries(props.book.files, props.book.formatPriority)
+    .map((entry) => formatKeyName(entry.key))
     .join(' · '),
 )
 
@@ -368,6 +369,10 @@ function handleAddSession() {
       </div>
     </div>
 
+    <div v-if="$slots.notice" class="mt-2.5 shrink-0">
+      <slot name="notice" />
+    </div>
+
     <dl class="mt-3 shrink-0">
       <div class="flex h-[26px] items-center gap-2">
         <dt class="text-xs leading-4 text-muted-foreground">{{ t('book.detail.readingLog.vitals.started') }}</dt>
@@ -378,7 +383,7 @@ function handleAddSession() {
             type="date"
             :max="todayDateInput"
             :disabled="savingDates"
-            class="h-6 rounded border border-input bg-background px-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+            class="h-6 rounded-xs border border-input bg-background px-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
             :aria-label="t('book.detail.readingLog.vitals.editStarted')"
             autofocus
             @blur="handleStartedSave"
@@ -404,7 +409,7 @@ function handleAddSession() {
             type="date"
             :max="todayDateInput"
             :disabled="savingDates"
-            class="h-6 rounded border border-input bg-background px-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+            class="h-6 rounded-xs border border-input bg-background px-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
             :aria-label="t('book.detail.readingLog.vitals.editFinished')"
             autofocus
             @blur="handleFinishedSave"

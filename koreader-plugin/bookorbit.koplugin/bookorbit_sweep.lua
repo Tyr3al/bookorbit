@@ -16,10 +16,7 @@ Every run carries a generation token, and every scheduled callback verifies it
 before touching shared state, which is what makes cancellation safe.
 ]]
 
-local ButtonDialog = require("ui/widget/buttondialog")
 local DocSettings = require("docsettings")
-local InfoMessage = require("ui/widget/infomessage")
-local Notification = require("ui/widget/notification")
 local ReadHistory = require("readhistory")
 local UIManager = require("ui/uimanager")
 local Trapper = require("ui/trapper")
@@ -33,6 +30,7 @@ local _ = require("gettext")
 local BookOrbitAnnotations = require("bookorbit_annotations")
 local BookOrbitBookmarks = require("bookorbit_bookmarks")
 local BookOrbitApi = require("bookorbit_api")
+local BookOrbitCapabilities = require("bookorbit_capabilities")
 local BookOrbitHighlightSummary = require("bookorbit_highlight_summary")
 local BookOrbitQueue = require("bookorbit_queue")
 local BookOrbitSidecar = require("bookorbit_sidecar")
@@ -115,11 +113,10 @@ local function closeStatsSession(ctx)
     end
 end
 
+-- The sync sheet stays up at the end to show the result; this only drops
+-- the run's hold on it.
 local function closeProgress(ctx)
-    if ctx.progress_dialog then
-        UIManager:close(ctx.progress_dialog)
-        ctx.progress_dialog = nil
-    end
+    ctx.progress_sheet_done = true
 end
 
 -- Interactive-only progress display, reused across phases. Identical text never
@@ -127,11 +124,12 @@ end
 -- so a long first run stays legible without flooding the e-ink screen. The
 -- dialog carries the cancel affordance and is not tap-dismissable, so a stray
 -- tap cannot silently drop the only way to stop the run.
-local function setProgress(ctx, text, force)
+-- short is the few words a BookOrbit page shows in place of the dialog.
+local function setProgress(ctx, text, force, short, done, total)
     if not ctx.interactive then return end
     if not force then
         if text == ctx.progress_shown_text then return end
-        if ctx.progress_dialog and os.time() - (ctx.progress_shown_at or 0) < PROGRESS_THROTTLE then
+        if (ctx.sync_sheet or ctx.quiet) and os.time() - (ctx.progress_shown_at or 0) < PROGRESS_THROTTLE then
             return
         end
     end
@@ -139,33 +137,38 @@ local function setProgress(ctx, text, force)
     ctx.progress_shown_at = os.time()
     ctx.progress_repainted = true
 
-    if ctx.progress_dialog then
-        ctx.progress_dialog:setTitle(text)
+    -- Started from a BookOrbit page: the page shows progress (and the way
+    -- to stop) where the sync was asked for, instead of a sheet over it.
+    if ctx.quiet then
+        if ctx.on_progress then pcall(ctx.on_progress, short or text) end
         return
     end
-    ctx.progress_dialog = ButtonDialog:new{
-        title = text,
-        title_align = "center",
-        dismissable = false,
-        buttons = {
-            {
-                {
-                    text = _("Cancel"),
-                    callback = function()
-                        BookOrbitSweep.cancel("user")
-                    end,
-                },
-            },
-        },
-    }
-    UIManager:show(ctx.progress_dialog)
+
+    if not ctx.sync_sheet then
+        ctx.sync_sheet = require("bookorbit_sync_sheet").open{
+            recheck = ctx.full_recheck,
+            on_stop = function() BookOrbitSweep.cancel("user") end,
+        }
+    end
+    ctx.sync_sheet:progressed(short or text, done, total)
+end
+
+-- How the run ended: in the sync sheet when one is up, else as a pill.
+local function report(ctx, result)
+    if ctx.sync_sheet and not ctx.sync_sheet.closed then
+        ctx.sync_sheet:finished(result)
+        return
+    end
+    local Toast = require("bookorbit_toast")
+    if result.error then Toast.error(result.title) else Toast.show(result.title) end
 end
 
 local function chunkSummary(ctx)
     return string.format(
-        "enumerateMs=%.0f partialMd5Ms=%.0f partialMd5Count=%d sidecarMs=%.0f slowestItemMs=%.0f statsSkipped=%d",
+        "enumerateMs=%.0f partialMd5Ms=%.0f partialMd5Count=%d sidecarMs=%.0f slowestItemMs=%.0f statsSkipped=%d ambiguousStats=%d",
         ctx.timing.enumerate_ms, ctx.timing.partial_md5_ms, ctx.timing.partial_md5_count,
-        ctx.timing.sidecar_ms, ctx.timing.max_item_ms, ctx.counts.stats_skipped or 0)
+        ctx.timing.sidecar_ms, ctx.timing.max_item_ms, ctx.counts.stats_skipped or 0,
+        ctx.counts.stats_ambiguous or 0)
 end
 
 local function finish(ctx, err)
@@ -185,8 +188,8 @@ local function finish(ctx, err)
     end
 
     if err == "cancelled" then
-        if ctx.interactive then
-            UIManager:show(InfoMessage:new{ text = _("BookOrbit sync cancelled."), timeout = 3 })
+        if ctx.interactive and not ctx.quiet then
+            report(ctx, { error = true, title = _("Sync stopped"), sub = _("What synced so far is kept. The rest syncs next time.") })
         end
         logger.info(string.format(
             "BookOrbit: sweep cancelled reason=%s matched=%d pageStats=%d annotations=%d %s",
@@ -204,10 +207,15 @@ local function finish(ctx, err)
         elseif not err and ctx.had_errors then
             ctx.plugin:recordSyncError("sweep", "partial_failure")
         elseif not err and ctx.plugin.recordSyncSuccess then
+            local message = T(_("%1 books, %2 reading events, %3 highlights"),
+                ctx.counts.books_matched, ctx.counts.page_stats, ctx.counts.annotations)
+            if (ctx.counts.stats_ambiguous or 0) > 0 then
+                message = message .. ". " .. T(_("%1 books need to be opened and synced once to recover their reading history."),
+                    ctx.counts.stats_ambiguous)
+            end
             ctx.plugin:recordSyncSuccess(
                 "sweep",
-                T(_("%1 books, %2 reading events, %3 highlights"),
-                    ctx.counts.books_matched, ctx.counts.page_stats, ctx.counts.annotations))
+                message)
         end
     end
 
@@ -221,10 +229,10 @@ local function finish(ctx, err)
     end
 
     if err == "auth" then
-        if ctx.interactive then
-            UIManager:show(InfoMessage:new{ text = _("BookOrbit sync: login failed. Check your credentials."), timeout = 4 })
-        else
-            Notification:notify(_("BookOrbit sync: login failed"))
+        if ctx.interactive and not ctx.quiet then
+            report(ctx, { error = true, title = _("Sign-in failed"), sub = _("Check your KOReader login in BookOrbit: Settings, KOReader.") })
+        elseif not ctx.quiet then
+            require("bookorbit_toast").error(_("BookOrbit sign-in failed"))
         end
         if ctx.on_finish then
             pcall(ctx.on_finish, err)
@@ -233,8 +241,8 @@ local function finish(ctx, err)
     end
 
     if err == "network" then
-        if ctx.interactive then
-            UIManager:show(InfoMessage:new{ text = _("BookOrbit sync: server not reachable."), timeout = 4 })
+        if ctx.interactive and not ctx.quiet then
+            report(ctx, { error = true, title = _("BookOrbit is not reachable"), sub = _("Check the connection and try again.") })
         end
         logger.dbg("BookOrbit: sweep aborted, server not reachable")
         if ctx.on_finish then
@@ -244,8 +252,8 @@ local function finish(ctx, err)
     end
 
     if err == "server" then
-        if ctx.interactive then
-            UIManager:show(InfoMessage:new{ text = _("BookOrbit sync: server request failed."), timeout = 4 })
+        if ctx.interactive and not ctx.quiet then
+            report(ctx, { error = true, title = _("The server could not finish the sync"), sub = _("Try again in a moment.") })
         end
         logger.warn("BookOrbit: sweep aborted, server request failed")
         if ctx.on_finish then
@@ -254,23 +262,34 @@ local function finish(ctx, err)
         return
     end
 
-    if ctx.interactive then
-        local text = T(_("BookOrbit sync done: %1 books matched, %2 reading events, %3 highlights."),
-            ctx.counts.books_matched, ctx.counts.page_stats, ctx.counts.annotations)
+    if ctx.interactive and not ctx.quiet then
+        local notes = {}
         if ctx.highlight_summary and BookOrbitHighlightSummary.hasRemoteChanges(ctx.highlight_summary) then
-            text = text .. "\n" .. T(_("Highlights updated: %1 applied, %2 deleted, %3 closed book(s)."),
-                ctx.highlight_summary.applied, ctx.highlight_summary.deleted, ctx.highlight_summary.touched_books)
+            table.insert(notes, T(_("Highlights updated: %1 applied, %2 deleted, %3 closed book(s)."),
+                ctx.highlight_summary.applied, ctx.highlight_summary.deleted, ctx.highlight_summary.touched_books))
         end
         if ctx.highlight_unsupported then
-            text = text .. "\n" .. _("BookOrbit server needs an update for two-way highlights.")
+            table.insert(notes, _("BookOrbit server needs an update for two-way highlights."))
         end
         if ctx.highlight_disabled_reported then
-            text = text .. "\n" .. _("Two-way highlight and bookmark sync is disabled.")
+            table.insert(notes, _("Two-way highlight and bookmark sync is disabled."))
         end
         if ctx.had_errors then
-            text = text .. "\n" .. _("Some books failed and will retry on the next sync.")
+            table.insert(notes, _("Some books failed and will retry on the next sync."))
         end
-        UIManager:show(InfoMessage:new{ text = text, timeout = 5 })
+        if (ctx.counts.stats_ambiguous or 0) > 0 then
+            table.insert(notes, T(_("%1 books need to be opened and synced once to recover their reading history."),
+                ctx.counts.stats_ambiguous))
+        end
+        report(ctx, {
+            title = ctx.full_recheck and _("Books rechecked") or _("Library synced"),
+            stats = {
+                { value = ctx.counts.books_matched, label = _("books matched") },
+                { value = ctx.counts.page_stats, label = _("reading events") },
+                { value = ctx.counts.annotations, label = _("highlights") },
+            },
+            notes = notes,
+        })
     end
     logger.info(string.format(
         "BookOrbit: sweep done matched=%d pageStats=%d annotations=%d applied=%d deleted=%d %s errors=%s",
@@ -405,7 +424,7 @@ local function stepEnumerateStats(ctx)
         if #rows < ENUM_PAGE then
             return step(ctx, ctx.steps.enumerateCandidates)
         end
-        setProgress(ctx, T(_("BookOrbit sync: reading local library (%1)"), rows_read))
+        setProgress(ctx, T(_("BookOrbit sync: reading local library (%1)"), rows_read), nil, _("Reading library"))
         chunk(ctx, pump)
     end
 
@@ -421,12 +440,13 @@ local function stepEnumerateCandidates(ctx)
         BookOrbitStatsReader.finalizeBookEntry(entry)
         chunk_ctx.candidates[entry.md5] = {
             stat_ids = entry.ids,
+            stats_rows = entry.rows,
             last_open = entry.last_open,
             title = entry.title,
             authors = entry.authors,
             source = "statistics",
             metadata_ambiguous = entry.metadata_ambiguous,
-            stats_metadata_ambiguous = entry.metadata_ambiguous,
+            stats_metadata_ambiguous = entry.stats_ambiguous,
         }
     end
 
@@ -445,6 +465,20 @@ local function historyEntry(ctx, file)
 
     local file_exists = lfs.attributes(file, "mode") == "file"
     local md5 = ctx.state.files[file]
+    local mapped_book = md5 and ctx.state:getBook(md5) or nil
+    local identity_conflict = mapped_book and mapped_book.file and mapped_book.file ~= file
+    if identity_conflict and file_exists then
+        local started = nowMs()
+        local ok, computed = pcall(util.partialMD5, file)
+        ctx.timing.partial_md5_ms = ctx.timing.partial_md5_ms + elapsedMs(started)
+        ctx.timing.partial_md5_count = ctx.timing.partial_md5_count + 1
+        if ok and computed then
+            if computed ~= md5 then
+                ctx.state:repairFileIdentity(file, md5, computed)
+            end
+            md5 = computed
+        end
+    end
     if not md5 and file_exists and DocSettings:hasSidecarFile(file) then
         local doc_settings = DocSettings:open(file)
         md5 = doc_settings:readSetting("partial_md5_checksum")
@@ -460,8 +494,9 @@ local function historyEntry(ctx, file)
     if not md5 then return end
 
     local cand = ctx.candidates[md5] or {}
-    if file_exists then
+    if file_exists and (not cand.file or (item.time or 0) > (cand.file_last_open or -1)) then
         cand.file = file
+        cand.file_last_open = item.time or 0
         cand.source = "file"
         if cand.metadata_ambiguous then
             cand.title = titleFromHistoryItem(item)
@@ -476,8 +511,15 @@ local function historyEntry(ctx, file)
     end
     ctx.candidates[md5] = cand
     local book = ctx.state:getBook(md5)
+    if book and file_exists then
+        cand.book_file_id = book.fileId
+    end
     if book and file_exists and not book.file then
         book.file = file
+    end
+    if book and cand.file and book.file ~= cand.file then
+        book.file = cand.file
+        book.sidecarMtime = nil
     end
 end
 
@@ -583,11 +625,30 @@ local function buildStatsQueue(ctx)
     local latest = ctx.stats_session and ctx.stats_session:latestEventTimes() or nil
     ctx.stats_queue = BookOrbitQueue.new()
     ctx.counts.stats_skipped = 0
+    ctx.counts.stats_ambiguous = 0
 
     for md5, cand in pairs(ctx.candidates) do
-        if cand.stat_ids and not cand.stats_metadata_ambiguous then
-            local book = ctx.state:getBook(md5)
-            if book then
+        local book = ctx.state:getBook(md5)
+        if cand.stat_ids and book then
+            if cand.stats_metadata_ambiguous then
+                for _, row in ipairs(cand.stats_rows or {}) do
+                    local target = ctx.state:getStatsRow(row.id, md5, row.title, row.authors)
+                    if target.bookFileId then
+                        if latest and not hasNewEvents(latest, { row.id }, target.statsWatermark or 0) then
+                            ctx.counts.stats_skipped = ctx.counts.stats_skipped + 1
+                        else
+                            ctx.stats_queue:push({
+                                md5 = md5,
+                                ids = { row.id },
+                                target = target,
+                                book_file_id = target.bookFileId,
+                            })
+                        end
+                    elseif not latest or (latest[row.id] or 0) > (target.statsWatermark or 0) then
+                        ctx.counts.stats_ambiguous = ctx.counts.stats_ambiguous + 1
+                    end
+                end
+            else
                 if latest and not hasNewEvents(latest, cand.stat_ids, book.statsWatermark or 0) then
                     ctx.counts.stats_skipped = ctx.counts.stats_skipped + 1
                 else
@@ -612,7 +673,7 @@ local function stepMatchNext(ctx)
         return
     end
 
-    setProgress(ctx, _("BookOrbit sync: matching books..."))
+    setProgress(ctx, _("BookOrbit sync: matching books..."), nil, _("Matching books"))
     local body, err = ctx.client:matchCheck(batch, ctx.candidates)
     if aborted(ctx) then return end
     if not body then
@@ -655,7 +716,7 @@ local function stepStatsNext(ctx)
     local total = ctx.stats_queue:total()
     if total > 0 then
         setProgress(ctx, T(_("BookOrbit sync: uploading reading data (%1/%2)"),
-            ctx.stats_queue:done(), total))
+            ctx.stats_queue:done(), total), nil, T(_("Reading data %1/%2"), ctx.stats_queue:done(), total), ctx.stats_queue:done(), total)
     end
 
     local book = ctx.state:getBook(item.md5)
@@ -664,7 +725,8 @@ local function stepStatsNext(ctx)
         return
     end
 
-    local watermark = book.statsWatermark or 0
+    local stats_target = item.target or book
+    local watermark = stats_target.statsWatermark or 0
     local events = ctx.stats_session
         and ctx.stats_session:eventsAfter(item.ids, watermark, STATS_BATCH)
         or BookOrbitStatsReader.getEventsAfter(item.ids, watermark, STATS_BATCH)
@@ -673,7 +735,9 @@ local function stepStatsNext(ctx)
         return
     end
 
-    local body, err = ctx.client:uploadPageStats({ { hash = item.md5, events = events } })
+    local upload = { hash = item.md5, events = events }
+    if item.book_file_id then upload.bookFileId = item.book_file_id end
+    local body, err = ctx.client:uploadPageStats({ upload })
     if aborted(ctx) then return end
     if not body then
         if isAuthError(err) then return finish(ctx, "auth") end
@@ -685,19 +749,68 @@ local function stepStatsNext(ctx)
 
     for _, unmatched in ipairs(body.unmatched or {}) do
         if unmatched == item.md5 then
-            ctx.state:setUnmatched(item.md5)
+            if item.book_file_id then
+                stats_target.bookFileId = nil
+                stats_target.bookId = nil
+                stats_target.statsWatermark = 0
+                ctx.had_errors = true
+            else
+                ctx.state:setUnmatched(item.md5)
+            end
             step(ctx, ctx.steps.statsNext)
             return
         end
     end
 
-    local more = BookOrbitState.applyStatsAck(book, events, body, item.md5, STATS_BATCH, watermark)
+    local more = BookOrbitState.applyStatsAck(stats_target, events, body, item.md5, STATS_BATCH, watermark)
     ctx.counts.page_stats = ctx.counts.page_stats + #events
     if more then
         ctx.current_stats = item
     end
 
     step(ctx, ctx.steps.statsNext)
+end
+
+local function currentlyOpenFile()
+    local ok, ReaderUI = pcall(require, "apps/reader/readerui")
+    if ok and ReaderUI and ReaderUI.instance and ReaderUI.instance.document then
+        return ReaderUI.instance.document.file
+    end
+end
+
+local PENDING_CHUNK = 500
+
+-- Only books whose sidecars changed are exchanged, so a highlight made
+-- elsewhere would never reach a closed book nobody opened. The server names
+-- the books with something waiting for this device; they join the queue. The
+-- open book is left out: its changes are applied live, not by the sweep. So is
+-- a book never opened here: it has no sidecar, and its first open delivers.
+local function fetchServerPending(ctx)
+    ctx.server_pending = {}
+    if not ctx.annotation_sync or ctx.use_legacy_annotations then return end
+    if BookOrbitCapabilities.supports(ctx.client, "annotationPendingBooks") ~= true then return end
+    local open_file = currentlyOpenFile()
+    local hashes = {}
+    for md5, book in pairs(ctx.state.books) do
+        if book.file and book.file ~= open_file and BookOrbitSidecar.sidecarMtime(book.file) then
+            table.insert(hashes, md5)
+        end
+    end
+    for start = 1, #hashes, PENDING_CHUNK do
+        local chunk = {}
+        for index = start, math.min(start + PENDING_CHUNK - 1, #hashes) do
+            table.insert(chunk, hashes[index])
+        end
+        local body, err = ctx.client:annotationPendingBooks(chunk)
+        if not body then
+            if err == 404 then BookOrbitCapabilities.markUnsupported(ctx.client, "annotationPendingBooks") end
+            logger.dbg("BookOrbit: pending annotation books unavailable:", err)
+            return
+        end
+        for _, md5 in ipairs(body.pending or {}) do
+            ctx.server_pending[md5] = true
+        end
+    end
 end
 
 -- Phase 4: read sidecars of matched books with known paths, mtime-gated, and
@@ -710,8 +823,8 @@ local function sidecarEntry(ctx, md5)
     local mtime = BookOrbitSidecar.sidecarMtime(book.file)
     if not mtime then return end
 
-    local sidecar_changed = mtime ~= book.sidecarMtime
-    local state_unknown = book.ratingSyncedKnown ~= true or book.reviewSyncedKnown ~= true
+    local sidecar_changed = mtime ~= book.sidecarMtime or (ctx.server_pending and ctx.server_pending[md5]) == true
+    local state_unknown = book.statusSyncedKnown ~= true or book.ratingSyncedKnown ~= true or book.reviewSyncedKnown ~= true
     local extract = nil
     if sidecar_changed or state_unknown then
         extract = BookOrbitSidecar.extract(book.file)
@@ -755,11 +868,16 @@ local function sidecarEntry(ctx, md5)
         ctx.ann_queue:push({
             md5 = md5,
             file = book.file,
+            -- When the sidecar was written: the open book's copy in memory can be newer.
+            captured_at = mtime,
             annotations = extract.annotations,
             ann_max_datetime = extract.annotations_max_datetime,
             ann_signature = extract.annotations_signature,
             bookmarks = extract.bookmarks,
             bm_signature = extract.bookmarks_signature,
+            sidecar_marked = extract.marked,
+            sidecar_state = BookOrbitSidecar.sidecarState(extract.marked,
+                (extract.annotations_count or 0) + (extract.bookmarks_count or 0)),
         })
     end
 
@@ -799,6 +917,7 @@ local function sidecarEntry(ctx, md5)
 end
 
 local function stepSidecars(ctx)
+    fetchServerPending(ctx)
     ctx.pending_books = {}
     ctx.ann_queue = BookOrbitQueue.new()
     ctx.ann_chunks = BookOrbitQueue.new()
@@ -814,7 +933,7 @@ local function stepSidecars(ctx)
         items = SIDECAR_CHUNK_ITEMS,
         elapsed_key = "sidecar_ms",
         progress = function(progress_ctx, done, total)
-            setProgress(progress_ctx, T(_("BookOrbit sync: checking books (%1/%2)"), done, total))
+            setProgress(progress_ctx, T(_("BookOrbit sync: checking books (%1/%2)"), done, total), nil, T(_("Checking %1/%2"), done, total), done, total)
         end,
     }, function()
         step(ctx, ctx.steps.annotationsNext)
@@ -823,25 +942,20 @@ end
 
 local buildLegacyAnnotationChunks
 
-local function currentlyOpenFile()
-    local ok, ReaderUI = pcall(require, "apps/reader/readerui")
-    if ok and ReaderUI and ReaderUI.instance and ReaderUI.instance.document then
-        return ReaderUI.instance.document.file
-    end
-end
-
 -- Dogears share the sidecar and the apply mode with highlights, so the sweep
 -- exchanges both for the same book in one pass. A server without the route is
 -- recorded once and skipped for the rest of the run.
+-- Returns true when the dogears are settled for this pass (exchanged cleanly,
+-- skipped as unchanged, or not synced at all), which the sidecar marker needs.
 local function exchangeBookmarksForEntry(ctx, entry, apply_mode, pending)
-    if not ctx.annotation_sync or ctx.bookmarks_unsupported then return end
+    if not ctx.annotation_sync or ctx.bookmarks_unsupported then return true end
     if not BookOrbitBookmarks.enabled(ctx.client, true) then
         ctx.bookmarks_unsupported = true
-        return
+        return true
     end
     local book = ctx.state:getBook(entry.md5)
-    if not book then return end
-    if not ctx.interactive and BookOrbitBookmarks.canSkipExchange(book, entry.bm_signature) then return end
+    if not book then return false end
+    if not ctx.interactive and BookOrbitBookmarks.canSkipExchange(book, entry.bm_signature) then return true end
 
     local result, err = BookOrbitBookmarks.exchangeBook({
         client = ctx.client,
@@ -849,6 +963,7 @@ local function exchangeBookmarksForEntry(ctx, entry, apply_mode, pending)
         digest = entry.md5,
         bookmarks = entry.bookmarks,
         bm_signature = entry.bm_signature,
+        sidecar_state = entry.sidecar_state,
         apply_mode = apply_mode,
         file = entry.file,
     })
@@ -856,13 +971,13 @@ local function exchangeBookmarksForEntry(ctx, entry, apply_mode, pending)
         if err == "unsupported_server" then
             BookOrbitBookmarks.markUnsupported(ctx.client)
             ctx.bookmarks_unsupported = true
-            return
+            return true
         end
         ctx.had_errors = true
         if pending then pending.failed = true end
         ctx.highlight_summary = BookOrbitHighlightSummary.addBookmarks(ctx.highlight_summary, { had_errors = true })
         logger.dbg("BookOrbit: bookmark exchange failed for", entry.md5, err)
-        return
+        return false
     end
     if result.had_errors then
         ctx.had_errors = true
@@ -870,6 +985,7 @@ local function exchangeBookmarksForEntry(ctx, entry, apply_mode, pending)
     end
     ctx.counts.bookmarks = (ctx.counts.bookmarks or 0) + result.uploaded
     ctx.highlight_summary = BookOrbitHighlightSummary.addBookmarks(ctx.highlight_summary, result)
+    return not result.had_errors
 end
 
 -- Phase 5: per-book annotation exchange. Uploads the local delta, reports the
@@ -889,7 +1005,7 @@ local function stepAnnotationsNext(ctx)
     local total = ctx.ann_queue:total()
     if total > 0 then
         setProgress(ctx, T(_("BookOrbit sync: syncing highlights (%1/%2)"),
-            ctx.ann_queue:done(), total))
+            ctx.ann_queue:done(), total), nil, T(_("Highlights %1/%2"), ctx.ann_queue:done(), total), ctx.ann_queue:done(), total)
     end
 
     local pending = ctx.pending_books[entry.md5]
@@ -908,6 +1024,8 @@ local function stepAnnotationsNext(ctx)
         annotations = entry.annotations,
         ann_max_datetime = entry.ann_max_datetime,
         ann_signature = entry.ann_signature,
+        captured_at = entry.captured_at,
+        sidecar_state = entry.sidecar_state,
         apply_mode = apply_mode,
         file = entry.file,
     })
@@ -943,8 +1061,14 @@ local function stepAnnotationsNext(ctx)
         closed_book = apply_mode == "sidecar",
     })
 
-    exchangeBookmarksForEntry(ctx, entry, apply_mode, pending)
+    local bookmarks_done = exchangeBookmarksForEntry(ctx, entry, apply_mode, pending)
     if aborted(ctx) then return end
+    if bookmarks_done and not result.had_errors and apply_mode == "sidecar" and entry.sidecar_marked == false
+            and BookOrbitSidecar.markFile(entry.file) and pending then
+        -- The marker is this sweep's own write; without this the next sweep would
+        -- see a changed sidecar and exchange the book again for nothing.
+        pending.mtime = BookOrbitSidecar.sidecarMtime(entry.file) or pending.mtime
+    end
     return step(ctx, ctx.steps.annotationsNext)
 end
 
@@ -1078,11 +1202,18 @@ local function stepStatesNext(ctx)
             local book = ctx.state:getBook(item.hash)
             local server_state = BookOrbitSidecar.stateFromServerResult(results[item.hash])
             if book and server_state then
+                if not server_state.status_known then
+                    local payload = pending.state_payload or {}
+                    BookOrbitSidecar.rememberUploadedState(book, {}, { status = payload.status, statusModified = payload.statusModified })
+                end
                 if book.file and book.file ~= currentlyOpenFile() then
                     local touched = BookOrbitSidecar.applyServerStateSidecar(book.file, server_state)
                     if touched then
                         pending.mtime = BookOrbitSidecar.sidecarMtime(book.file) or pending.mtime
                     end
+                elseif book.file and book.file == currentlyOpenFile() then
+                    local ui = require("apps/reader/readerui").instance
+                    BookOrbitSidecar.applyServerStateLive(ui, server_state)
                 end
                 BookOrbitSidecar.rememberServerState(book, server_state)
                 pending.state_used_server = true
@@ -1154,7 +1285,9 @@ local function stepDone(ctx)
                 book.annCount = pending.ann_count
                 BookOrbitAnnotations.advanceWatermark(book, pending.ann_max_datetime, device_now)
                 if state_done and pending.need_state then
-                    book.statusSyncedModified = pending.status_modified or book.statusSyncedModified
+                    if not pending.state_used_server then
+                        book.statusSyncedModified = pending.status_modified or book.statusSyncedModified
+                    end
                     -- The sweep always sends the forced-pull payload, so an
                     -- acknowledged book has current server state and the
                     -- lifecycle path can stay quiet until the bound expires.
@@ -1195,7 +1328,7 @@ end
 function BookOrbitSweep.run(opts)
     if BookOrbitSweep.running then
         if opts.interactive then
-            UIManager:show(InfoMessage:new{ text = _("BookOrbit sync is already running."), timeout = 2 })
+            require("bookorbit_toast").show(_("A sync is already running"), { icon = "hourglass" })
         end
         return false
     end
@@ -1203,7 +1336,7 @@ function BookOrbitSweep.run(opts)
     local BookOrbitBookSync = require("bookorbit_book_sync")
     if BookOrbitBookSync.isRunning() then
         if opts.interactive then
-            UIManager:show(InfoMessage:new{ text = _("BookOrbit is syncing the current book, try again shortly."), timeout = 2 })
+            require("bookorbit_toast").show(_("Syncing this book first. Try again shortly."), { icon = "hourglass" })
         end
         return false
     end
@@ -1211,7 +1344,7 @@ function BookOrbitSweep.run(opts)
     local client = BookOrbitApi.new(opts.api)
     if not client:isConfigured() then
         if opts.interactive then
-            UIManager:show(InfoMessage:new{ text = _("Please configure the BookOrbit server and login first."), timeout = 3 })
+            require("bookorbit_toast").error(_("Sign in to BookOrbit first."))
         end
         return false
     end
@@ -1232,6 +1365,8 @@ function BookOrbitSweep.run(opts)
         state = state,
         generation = run_generation,
         interactive = opts.interactive or false,
+        quiet = opts.quiet == true,
+        on_progress = opts.on_progress,
         annotation_sync = opts.annotation_sync ~= false,
         plugin = opts.plugin,
         -- An interactive run is no longer a reason on its own: "Sync all books"
@@ -1271,7 +1406,8 @@ function BookOrbitSweep.run(opts)
 
     setProgress(ctx, ctx.full_recheck
         and _("Rechecking every book against BookOrbit. This may take a while.")
-        or _("Syncing to BookOrbit. This may take a while on first run."), true)
+        or _("Syncing to BookOrbit. This may take a while on first run."), true,
+        ctx.full_recheck and _("Rechecking") or _("Starting"))
     logger.info("BookOrbit: sweep started, interactive:", ctx.interactive,
         "full recheck:", ctx.full_recheck)
 

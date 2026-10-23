@@ -1,3 +1,4 @@
+import { formatKeyRank, isAudioFormat, normalizeFormatPriority } from '@bookorbit/types';
 import type {
   ChallengeType,
   DiversityScoreWidgetData,
@@ -8,10 +9,33 @@ import type {
   YearProjectionWidgetData,
 } from '@bookorbit/types';
 
+import { addDateKeyDays } from '../../common/utils/reading-daily-stats.utils';
+import { resolveTimeZone, toDateKeyInTimeZone } from '../../common/utils/timezone.utils';
+
 // ── Date Helpers ─────────────────────────────────────────────────────
 
-export function formatDay(date: Date): string {
-  return date.toISOString().slice(0, 10);
+/**
+ * The reader's own calendar: which day, month and year it is where they are.
+ *
+ * Daily reading stats and attempt dates are stored as the reader's local days, so a widget that
+ * asks "today" or "this year" of the server's UTC clock reads tomorrow's empty row every evening
+ * west of Greenwich. Falls back to UTC, as the rest of the server does, when no zone is set.
+ */
+export interface ReaderClock {
+  timeZone: string;
+  today: string;
+  year: number;
+  month: number;
+}
+
+export function resolveReaderClock(timeZoneSetting: unknown, now: Date = new Date()): ReaderClock {
+  const timeZone = resolveTimeZone(timeZoneSetting, 'UTC');
+  const today = toDateKeyInTimeZone(now, timeZone);
+  return { timeZone, today, year: Number(today.slice(0, 4)), month: Number(today.slice(5, 7)) };
+}
+
+export function daysBetweenDateKeys(from: string, to: string): number {
+  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000);
 }
 
 export function computeLongestStreak(readDays: Set<string>): number {
@@ -37,14 +61,11 @@ export function computeLongestStreak(readDays: Set<string>): number {
   return longest;
 }
 
-export function computeStreakData(readDays: Set<string>, today: Date): ReadingStreakWidgetData {
-  const todayStr = formatDay(today);
-
+/** `today` is the reader's local date key, the same calendar the daily stats rows are keyed by. */
+export function computeStreakData(readDays: Set<string>, today: string): ReadingStreakWidgetData {
   const lastSevenDays: boolean[] = [];
   for (let i = 6; i >= 0; i--) {
-    const d = new Date(today);
-    d.setUTCDate(d.getUTCDate() - i);
-    lastSevenDays.push(readDays.has(formatDay(d)));
+    lastSevenDays.push(readDays.has(addDateKeyDays(today, -i)));
   }
 
   if (readDays.size === 0) {
@@ -52,18 +73,17 @@ export function computeStreakData(readDays: Set<string>, today: Date): ReadingSt
   }
 
   let currentStreak = 0;
-  const startDate = new Date(today);
-  if (!readDays.has(todayStr)) {
-    startDate.setUTCDate(startDate.getUTCDate() - 1);
-    if (!readDays.has(formatDay(startDate))) {
+  let cursor = today;
+  if (!readDays.has(cursor)) {
+    cursor = addDateKeyDays(cursor, -1);
+    if (!readDays.has(cursor)) {
       return { currentStreak: 0, longestStreak: computeLongestStreak(readDays), lastSevenDays };
     }
   }
 
-  const cursor = new Date(startDate);
-  while (readDays.has(formatDay(cursor))) {
+  while (readDays.has(cursor)) {
     currentStreak++;
-    cursor.setUTCDate(cursor.getUTCDate() - 1);
+    cursor = addDateKeyDays(cursor, -1);
   }
 
   return { currentStreak, longestStreak: computeLongestStreak(readDays), lastSevenDays };
@@ -393,18 +413,17 @@ export function computeDiversityScore(
 
 // ── Reading Rhythm Pulse ────────────────────────────────────────────
 
+/** `today` is the reader's local date key; the series ends on it. */
 export function buildDaysSeries(
   dailyData: { day: string; readingSeconds: number }[],
-  today: Date,
+  today: string,
   windowDays: number,
 ): { date: string; readingSeconds: number }[] {
   const lookup = new Map(dailyData.map((d) => [d.day, d.readingSeconds]));
   const result: { date: string; readingSeconds: number }[] = [];
 
   for (let i = windowDays - 1; i >= 0; i--) {
-    const d = new Date(today);
-    d.setUTCDate(d.getUTCDate() - i);
-    const dateStr = d.toISOString().slice(0, 10);
+    const dateStr = addDateKeyDays(today, -i);
     result.push({ date: dateStr, readingSeconds: lookup.get(dateStr) ?? 0 });
   }
 
@@ -425,5 +444,63 @@ export function computeRhythm(days: { readingSeconds: number }[]): Omit<ReadingR
     avgSecondsPerDay: Math.round(totalSeconds / totalDays),
     activeDays,
     totalDays,
+  };
+}
+
+// ── Currently Reading resume modes ──────────────────────────────────
+
+/**
+ * Formats a BookOrbit reader opens. KEPUB is deliberately absent: it is a Kobo delivery format that
+ * no reader in the product opens directly, so offering it as the read file would hand a client a
+ * file it cannot display. Which of them wins is the library's format priority.
+ */
+const READABLE_FORMATS = new Set(['epub', 'mobi', 'azw3', 'azw', 'fb2', 'pdf', 'cbz', 'cbr', 'cb7']);
+
+export type ResumeModeFile = {
+  id: number;
+  format: string | null;
+  mediaOverlayAvailable: boolean;
+};
+
+export type ResumeModes = {
+  readFileId: number | null;
+  readFileFormat: string | null;
+  readAlongFileId: number | null;
+  hasAudio: boolean;
+};
+
+function isReadable(format: string | null): boolean {
+  return READABLE_FORMATS.has((format ?? '').toLowerCase());
+}
+
+/**
+ * Which of read, read-along, and listen a book can offer, from its files alone.
+ *
+ * The primary file wins the read slot when it is readable at all, so the resumed file matches the
+ * one the book's own page leads with; otherwise the best readable file stands in, which is what
+ * lets an audiobook-primary book still be read. That stand-in follows the library's format priority,
+ * and a plain EPUB beats a read-along copy, which has a slot of its own. Read-along needs an EPUB with
+ * media overlays, and prefers the primary for the same reason.
+ */
+export function resolveResumeModes(files: ResumeModeFile[], primaryFileId: number | null, formatPriority?: readonly string[] | null): ResumeModes {
+  const primary = files.find((file) => file.id === primaryFileId) ?? null;
+  const priority = normalizeFormatPriority(formatPriority);
+  const rank = (file: ResumeModeFile) => formatKeyRank((file.format ?? '').toLowerCase(), priority);
+
+  const readFile =
+    primary && isReadable(primary.format)
+      ? primary
+      : ([...files.filter((file) => isReadable(file.format))].sort(
+          (a, b) => rank(a) - rank(b) || Number(a.mediaOverlayAvailable) - Number(b.mediaOverlayAvailable),
+        )[0] ?? null);
+
+  const overlayFiles = files.filter((file) => file.mediaOverlayAvailable && (file.format ?? '').toLowerCase() === 'epub');
+  const readAlongFile = overlayFiles.find((file) => file.id === primaryFileId) ?? overlayFiles[0] ?? null;
+
+  return {
+    readFileId: readFile?.id ?? null,
+    readFileFormat: readFile?.format ?? null,
+    readAlongFileId: readAlongFile?.id ?? null,
+    hasAudio: files.some((file) => file.format != null && isAudioFormat(file.format)),
   };
 }

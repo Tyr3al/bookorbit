@@ -1,10 +1,11 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import { Public } from '../../../common/decorators/public.decorator';
-import { AuthService } from '../../../modules/auth/auth.service';
+import { AudiobookshelfAuthService } from '../services/audiobookshelf-auth.service';
 import { AudiobookshelfOAuthStateStore } from '../services/audiobookshelf-oauth-state.store';
-import { AUDIOBOOKSHELF_BASE_PATH } from '../audiobookshelf.constants';
+import { AUDIOBOOKSHELF_BASE_PATH, AUDIOBOOKSHELF_LOGIN_THROTTLE_LIMIT, AUDIOBOOKSHELF_LOGIN_THROTTLE_TTL_MS } from '../audiobookshelf.constants';
 import { AudiobookshelfEnabledGuard } from '../audiobookshelf-enabled.guard';
 
 const BLOCKED_SCHEMES = new Set(['http', 'https', 'javascript', 'data', 'file', 'vbscript']);
@@ -27,7 +28,7 @@ const STATE_PATTERN = /^[a-zA-Z0-9_-]{8,512}$/;
 export class AudiobookshelfOAuthController {
   constructor(
     private readonly stateStore: AudiobookshelfOAuthStateStore,
-    private readonly authService: AuthService,
+    private readonly authService: AudiobookshelfAuthService,
   ) {}
 
   /** GET /auth/openid - starts the flow; redirects to the BookOrbit login page. */
@@ -63,6 +64,7 @@ export class AudiobookshelfOAuthController {
 
   /** POST /auth/openid/login - validates credentials and continues the flow. */
   @Post('login')
+  @Throttle({ default: { limit: AUDIOBOOKSHELF_LOGIN_THROTTLE_LIMIT, ttl: AUDIOBOOKSHELF_LOGIN_THROTTLE_TTL_MS } })
   @HttpCode(HttpStatus.OK)
   async login(@Body() body: { username?: string; password?: string; state?: string }, @Req() req: FastifyRequest, @Res() reply: FastifyReply) {
     const state = typeof body.state === 'string' ? body.state : '';
@@ -77,7 +79,7 @@ export class AudiobookshelfOAuthController {
     }
 
     try {
-      const { accessToken } = await this.authService.loginForAudiobookshelf({ username: body.username, password: body.password }, reply, req.ip);
+      const accessToken = await this.authService.issueOAuthCode({ username: body.username, password: body.password }, reply, req.ip);
       return reply
         .code(302)
         .redirect(

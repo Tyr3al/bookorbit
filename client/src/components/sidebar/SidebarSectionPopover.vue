@@ -21,12 +21,12 @@ defineProps<{
       <span
         v-if="count > 0"
         aria-hidden="true"
-        class="absolute -bottom-0.5 -right-0.5 rounded-md bg-(--shell-accent-tint) px-1 text-[11px] font-semibold leading-tight tabular-nums text-muted-foreground"
+        class="absolute -bottom-0.5 -right-0.5 rounded-md bg-(--shell-accent-tint) px-1 text-[11px] font-semibold leading-tight tabular-nums text-sidebar-count-foreground"
       >
         {{ formatCompactNumber(count) }}
       </span>
     </PopoverTrigger>
-    <PopoverContent side="right" align="start" :side-offset="8" class="w-72 border-(--shell-border) bg-(--shell-surface) p-1 backdrop-blur-xl">
+    <PopoverContent side="right" align="start" :side-offset="8" class="w-72 border-(--shell-border) bg-(--shell-surface) p-1 shell-backdrop">
       <slot />
     </PopoverContent>
   </Popover>

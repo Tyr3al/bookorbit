@@ -2,11 +2,20 @@ import { Body, Controller, Get, Param, ParseIntPipe, Post, Put, Query } from '@n
 import { type BookMetadataFetchConfig, type BookMetadataFetchConfigOverride, Permission } from '@bookorbit/types';
 
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
+import { RequireLibraryType } from '../../common/decorators/require-library-type.decorator';
 import { BookMetadataFetchConfigService } from './book-metadata-fetch-config.service';
 import { BookMetadataFetchOrchestratorService } from './book-metadata-fetch-orchestrator.service';
+import { BookMetadataFetchPreviewService } from './book-metadata-fetch-preview.service';
 import { BookMetadataFetchQueueRepository } from './book-metadata-fetch-queue.repository';
 import { BookMetadataFetchSessionService } from './book-metadata-fetch-session.service';
-import { PreviewCountDto, UpdateBookMetadataFetchConfigDto, UpdateLibraryBookMetadataFetchConfigDto } from './dto/update-config.dto';
+import { TriggerBookMetadataFetchRunDto } from './dto/trigger-run.dto';
+import {
+  PreviewBooksDto,
+  PreviewCountDto,
+  PreviewScopeDto,
+  UpdateBookMetadataFetchConfigDto,
+  UpdateLibraryBookMetadataFetchConfigDto,
+} from './dto/update-config.dto';
 
 @Controller('book-metadata-fetch')
 export class BookMetadataFetchController {
@@ -15,6 +24,7 @@ export class BookMetadataFetchController {
     private readonly orchestrator: BookMetadataFetchOrchestratorService,
     private readonly queueRepo: BookMetadataFetchQueueRepository,
     private readonly session: BookMetadataFetchSessionService,
+    private readonly preview: BookMetadataFetchPreviewService,
   ) {}
 
   @Get('config')
@@ -30,14 +40,22 @@ export class BookMetadataFetchController {
     return this.configService.getGlobalConfig();
   }
 
+  @Get('config/libraries')
+  @RequirePermission(Permission.ManageMetadataConfig)
+  listLibraryConfigs() {
+    return this.configService.listLibraryConfigs();
+  }
+
   @Get('config/libraries/:id')
   @RequirePermission(Permission.ManageMetadataConfig)
+  @RequireLibraryType('books')
   getLibraryConfig(@Param('id', ParseIntPipe) libraryId: number) {
     return this.configService.getLibraryConfigWithLastRun(libraryId);
   }
 
   @Put('config/libraries/:id')
   @RequirePermission(Permission.ManageMetadataConfig)
+  @RequireLibraryType('books')
   async updateLibraryConfig(@Param('id', ParseIntPipe) libraryId: number, @Body() dto: UpdateLibraryBookMetadataFetchConfigDto) {
     const override: BookMetadataFetchConfigOverride = Object.keys(dto).length === 0 ? null : dto;
     await this.configService.setLibraryOverride(libraryId, override);
@@ -53,15 +71,16 @@ export class BookMetadataFetchController {
 
   @Post('run')
   @RequirePermission(Permission.ManageMetadataConfig)
-  async triggerGlobal() {
-    const queued = await this.orchestrator.triggerGlobal();
+  async triggerGlobal(@Body() dto: TriggerBookMetadataFetchRunDto) {
+    const queued = await this.orchestrator.triggerGlobal(dto?.ignoreCache === true);
     return { queued };
   }
 
   @Post('run/:libraryId')
   @RequirePermission(Permission.ManageMetadataConfig)
-  async triggerForLibrary(@Param('libraryId', ParseIntPipe) libraryId: number) {
-    const queued = await this.orchestrator.triggerForLibrary(libraryId);
+  @RequireLibraryType('books')
+  async triggerForLibrary(@Param('libraryId', ParseIntPipe) libraryId: number, @Body() dto: TriggerBookMetadataFetchRunDto) {
+    const queued = await this.orchestrator.triggerForLibrary(libraryId, dto?.ignoreCache === true);
     return { queued };
   }
 
@@ -95,6 +114,7 @@ export class BookMetadataFetchController {
 
   @Post('preview-count')
   @RequirePermission(Permission.ManageMetadataConfig)
+  @RequireLibraryType('books', { optional: true })
   async previewCount(@Body() dto: PreviewCountDto) {
     const config: BookMetadataFetchConfig = {
       enabled: true,
@@ -103,6 +123,18 @@ export class BookMetadataFetchController {
     };
     const count = await this.queueRepo.countEligibleBooks(config, dto.libraryId);
     return { count };
+  }
+
+  @Post('preview-breakdown')
+  @RequirePermission(Permission.ManageMetadataConfig)
+  previewBreakdown(@Body() dto: PreviewScopeDto) {
+    return this.preview.breakdown(dto);
+  }
+
+  @Post('preview-books')
+  @RequirePermission(Permission.ManageMetadataConfig)
+  previewBooks(@Body() dto: PreviewBooksDto) {
+    return this.preview.previewBooks({ conditions: dto.conditions, libraryIds: dto.libraryIds }, dto.limit);
   }
 
   @Get('failed')

@@ -49,16 +49,32 @@ export function formatCompactNumber(value: number): string {
 }
 
 /** Joins values into a locale-aware list: "Audiobooks, Comics, Novels" in English. */
-export function formatList(values: string[]): string {
+function listFormatter(options: Intl.ListFormatOptions): Intl.ListFormat {
   const locale = activeLocale()
-  const options: Intl.ListFormatOptions = { style: 'short', type: 'unit' }
   const key = formatterKey(locale, options)
   let formatter = listFormatters.get(key)
   if (!formatter) {
     formatter = new Intl.ListFormat(locale, options)
     listFormatters.set(key, formatter)
   }
-  return formatter.format(values)
+  return formatter
+}
+
+export function formatList(values: string[]): string {
+  return listFormatter({ style: 'short', type: 'unit' }).format(values)
+}
+
+export interface ListPart {
+  type: 'element' | 'literal'
+  value: string
+}
+
+/**
+ * A sentence-style list ("A, B and C") split into its items and the locale's joining words,
+ * so a template can render each item as a control without hardcoding English separators.
+ */
+export function formatListParts(values: string[]): ListPart[] {
+  return listFormatter({ style: 'long', type: 'conjunction' }).formatToParts(values)
 }
 
 export function formatDate(value: Date | number, options: Intl.DateTimeFormatOptions = {}): string {
@@ -96,6 +112,28 @@ export function formatRelativeTime(
     relativeTimeFormatters.set(key, formatter)
   }
   return formatter.format(value, unit)
+}
+
+const MINUTE_MS = 60_000
+const HOUR_MS = 3_600_000
+const DAY_MS = 86_400_000
+const MONTH_MS = 2_592_000_000
+const YEAR_MS = 31_536_000_000
+
+/**
+ * Picks the unit a timestamp reads best in relative to now. Pass `now` to drive it from a
+ * reactive clock, and `smallestUnit: 'minute'` where second-by-second precision is noise.
+ */
+export function formatRelativeTimeFromNow(value: Date | number | string, options: { now?: number; smallestUnit?: 'second' | 'minute' } = {}): string {
+  const target = value instanceof Date ? value.getTime() : typeof value === 'number' ? value : new Date(value).getTime()
+  const difference = target - (options.now ?? Date.now())
+  const absolute = Math.abs(difference)
+  if (absolute < MINUTE_MS && options.smallestUnit !== 'minute') return formatRelativeTime(Math.round(difference / 1000), 'second')
+  if (absolute < HOUR_MS) return formatRelativeTime(Math.round(difference / MINUTE_MS), 'minute')
+  if (absolute < DAY_MS) return formatRelativeTime(Math.round(difference / HOUR_MS), 'hour')
+  if (absolute < MONTH_MS) return formatRelativeTime(Math.round(difference / DAY_MS), 'day')
+  if (absolute < YEAR_MS) return formatRelativeTime(Math.round(difference / MONTH_MS), 'month')
+  return formatRelativeTime(Math.round(difference / YEAR_MS), 'year')
 }
 
 export function formatLanguageName(value: string): string {

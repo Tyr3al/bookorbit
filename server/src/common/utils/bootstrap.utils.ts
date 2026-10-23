@@ -214,3 +214,31 @@ export function registerSocketErrorGuard(fastify: FastifyInstance, onUnexpectedE
     });
   });
 }
+
+/**
+ * Nest's `@RouteConfig({ bodyLimit })` only reaches Fastify's user-space `config` object, while
+ * Fastify reads `bodyLimit` from the route options. Without copying it across, a route that asks
+ * for a larger body silently keeps the 1 MiB default and its DTO length limit is unreachable.
+ */
+export function applyDeclaredBodyLimit(route: { config?: unknown; bodyLimit?: number }): void {
+  const declared = (route.config as { bodyLimit?: unknown } | undefined)?.bodyLimit;
+  if (typeof declared === 'number' && Number.isInteger(declared) && declared > 0) route.bodyLimit = declared;
+}
+
+export function registerDeclaredBodyLimits(fastify: FastifyInstance): void {
+  fastify.addHook('onRoute', applyDeclaredBodyLimit);
+}
+
+/**
+ * `@fastify/compress` reads its per-route opt-out from the route options, which Nest's
+ * `@RouteConfig({ compress: false })` cannot reach. Raw file routes need it: the plugin's default
+ * type check gzips `+xml` and `octet-stream` bodies (FB2, unknown formats) and drops Content-Length.
+ * Register before the compress plugin so this hook runs first.
+ */
+export function applyDeclaredCompressionOptOut(route: { config?: unknown; compress?: unknown }): void {
+  if ((route.config as { compress?: unknown } | undefined)?.compress === false) route.compress = false;
+}
+
+export function registerDeclaredCompressionOptOuts(fastify: FastifyInstance): void {
+  fastify.addHook('onRoute', applyDeclaredCompressionOptOut);
+}

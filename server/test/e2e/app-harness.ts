@@ -1,13 +1,17 @@
 import { randomUUID } from 'crypto';
+import { mkdtemp, rm } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { expect, vi } from 'vitest';
 import fastifyCookie from '@fastify/cookie';
+import fastifyMultipart from '@fastify/multipart';
 import { count, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { hash } from 'bcryptjs';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { ValidationPipe } from '@nestjs/common';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
-import { DEFAULT_FORMAT_PRIORITY } from '@bookorbit/types';
+import { DEFAULT_FORMAT_PRIORITY, type LibraryType } from '@bookorbit/types';
 
 import { AppModule } from '../../src/app.module';
 import { GlobalExceptionFilter } from '../../src/common/filters/http-exception.filter';
@@ -104,9 +108,21 @@ export interface E2EContext {
   app: NestFastifyApplication;
   db: Db;
   adminToken: string;
+  /** Set when the context owns a throwaway data folder, which close removes again. */
+  isolatedAppData: { path: string; previous: string | undefined } | null;
 }
 
-export async function createE2EContext(): Promise<E2EContext> {
+/**
+ * Scans write and prune covers under APP_DATA_PATH, which `.env` points at the developer's own
+ * data folder. Suites that scan and do not set their own path pass `isolateAppData`. Suites that
+ * upload files pass `multipart`, which `main.ts` registers for the real server.
+ */
+export async function createE2EContext(options: { isolateAppData?: boolean; multipart?: boolean } = {}): Promise<E2EContext> {
+  let isolatedAppData: E2EContext['isolatedAppData'] = null;
+  if (options.isolateAppData) {
+    isolatedAppData = { path: await mkdtemp(join(tmpdir(), 'bookorbit-e2e-data-')), previous: process.env.APP_DATA_PATH };
+    process.env.APP_DATA_PATH = isolatedAppData.path;
+  }
   const moduleFixture = await Test.createTestingModule({
     imports: [AppModule],
   })
@@ -138,21 +154,27 @@ export async function createE2EContext(): Promise<E2EContext> {
   );
   app.useGlobalFilters(new GlobalExceptionFilter());
   await app.register(fastifyCookie as never);
+  if (options.multipart) await app.register(fastifyMultipart as never);
   await app.init();
   await app.getHttpAdapter().getInstance().ready();
 
   const db = app.get<Db>(DB);
   const adminToken = await getAdminToken(app);
-  return { app, db, adminToken };
+  return { app, db, adminToken, isolatedAppData };
 }
 
 export async function closeE2EContext(ctx: E2EContext): Promise<void> {
   await ctx.app.close();
+  if (!ctx.isolatedAppData) return;
+  if (ctx.isolatedAppData.previous === undefined) delete process.env.APP_DATA_PATH;
+  else process.env.APP_DATA_PATH = ctx.isolatedAppData.previous;
+  await rm(ctx.isolatedAppData.path, { recursive: true, force: true });
 }
 
 export interface SeedLibraryInput {
   rootPath: string;
   mode: OrganizationMode;
+  type?: LibraryType;
   allowedFormats?: string[];
   excludePatterns?: string[];
   watch?: boolean;
@@ -163,6 +185,7 @@ export async function seedLibrary(db: Db, input: SeedLibraryInput): Promise<{ li
   const [library] = await db
     .insert(libraries)
     .values({
+      type: input.type ?? 'books',
       name: input.name ?? `e2e-${input.mode}-${randomUUID()}`,
       watch: input.watch ?? false,
       organizationMode: input.mode,

@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 import { sql } from 'drizzle-orm';
 import * as schema from '../../../db/schema';
+import { encodeSyncToken } from './kobo-sync-token';
 import { KoboSyncService } from './kobo-sync.service';
 
 // Recursively counts bound query params (drizzle-orm's `Param` chunks) in a built SQL tree,
@@ -511,7 +512,7 @@ describe('KoboSyncService', () => {
     expect(result).toEqual({
       entitlements: [{ ChangedTag: {} }],
       hasMore: false,
-      syncToken: expect.stringMatching(/^PX\./),
+      syncToken: encodeSyncToken(),
     });
   });
   it('getPageFromSnapshot returns page entitlements for removed/new/changed books', async () => {
@@ -638,7 +639,7 @@ describe('KoboSyncService', () => {
     });
     db.query.collections.findMany.mockResolvedValue([]);
     const filter = { type: 'group', join: 'AND', rules: [] };
-    smartScopeService.findKoboSyncScopes.mockResolvedValue([{ id: 5, name: 'To Read', filter, syncToKobo: true }]);
+    smartScopeService.findKoboSyncScopes.mockResolvedValue([{ id: 5, name: 'To Read', mediaType: 'books', filter, syncToKobo: true }]);
     bookAccessService.getAccessibleLibraryIds.mockResolvedValue([1, 2]);
     queryBuilder.buildWhere.mockReturnValue('WHERE_CLAUSE');
     const service = makeService(db);
@@ -664,7 +665,7 @@ describe('KoboSyncService', () => {
   it('buildTagItems excludes synced smart scopes without a filter instead of matching everything', async () => {
     const db = makeDb();
     db.query.collections.findMany.mockResolvedValue([]);
-    smartScopeService.findKoboSyncScopes.mockResolvedValue([{ id: 6, name: 'Empty Scope', filter: null, syncToKobo: true }]);
+    smartScopeService.findKoboSyncScopes.mockResolvedValue([{ id: 6, name: 'Empty Scope', mediaType: 'books', filter: null, syncToKobo: true }]);
     bookAccessService.getAccessibleLibraryIds.mockResolvedValue([1]);
     const service = makeService(db);
 
@@ -685,8 +686,8 @@ describe('KoboSyncService', () => {
     const filterA = { type: 'group', join: 'AND', rules: [] };
     const filterB = { type: 'group', join: 'OR', rules: [] };
     smartScopeService.findKoboSyncScopes.mockResolvedValue([
-      { id: 1, name: 'Scope A', filter: filterA, syncToKobo: true },
-      { id: 2, name: 'Scope B', filter: filterB, syncToKobo: true },
+      { id: 1, name: 'Scope A', mediaType: 'books', filter: filterA, syncToKobo: true },
+      { id: 2, name: 'Scope B', mediaType: 'books', filter: filterB, syncToKobo: true },
     ]);
     queryBuilder.buildWhere.mockReturnValue('WHERE_CLAUSE');
     const service = makeService(db);
@@ -705,7 +706,9 @@ describe('KoboSyncService', () => {
     const filter = { type: 'group', join: 'AND', rules: [] };
     // A shared scope: owned by user 1, opted into by user 9. Ownership and opt-in are the
     // smart scope module's rules, so sync must not re-filter by owner (issue #795).
-    smartScopeService.findKoboSyncScopes.mockResolvedValue([{ id: 7, userId: 1, name: 'Book Club', filter, isPublic: true, syncToKobo: false }]);
+    smartScopeService.findKoboSyncScopes.mockResolvedValue([
+      { id: 7, userId: 1, name: 'Book Club', mediaType: 'books', filter, isPublic: true, syncToKobo: false },
+    ]);
     bookAccessService.getAccessibleLibraryIds.mockResolvedValue([1]);
     queryBuilder.buildWhere.mockReturnValue('WHERE_CLAUSE');
     const service = makeService(db);
@@ -729,7 +732,7 @@ describe('KoboSyncService', () => {
   it('fetches synced smart scope book ids with the metadata join required by metadata-backed filters', async () => {
     const db = makeDb({ select: [[{ id: 10 }]] });
     const filter = { type: 'group', join: 'AND', rules: [{ type: 'rule', field: 'title', operator: 'contains', value: 'Dune' }] };
-    smartScopeService.findKoboSyncScopes.mockResolvedValue([{ id: 1, name: 'Dune Scope', filter, syncToKobo: true }]);
+    smartScopeService.findKoboSyncScopes.mockResolvedValue([{ id: 1, name: 'Dune Scope', mediaType: 'books', filter, syncToKobo: true }]);
     queryBuilder.buildWhere.mockReturnValue(sql`${schema.bookMetadata.title} ilike ${'%Dune%'}`);
     const service = makeService(db);
 
@@ -829,15 +832,15 @@ describe('KoboSyncService', () => {
       return [];
     }
 
-    it('issues only CREATE TEMP and 8 maintenance queries when eligibleBooks is empty', async () => {
+    it('issues only CREATE TEMP and 9 maintenance queries when eligibleBooks is empty', async () => {
       const { fn: txExecute } = makeTxExecute();
       const db = makeReconcileDb(txExecute);
       const service = makeService(db);
 
       await (service as any).reconcileSnapshot(42, []);
 
-      // CREATE TEMP + 8 maintenance queries (no batch insert when list is empty)
-      expect(txExecute).toHaveBeenCalledTimes(9);
+      // CREATE TEMP + 9 maintenance queries (no batch insert when list is empty)
+      expect(txExecute).toHaveBeenCalledTimes(10);
     });
 
     it('issues one batch INSERT when eligibleBooks fits in a single batch', async () => {
@@ -850,8 +853,8 @@ describe('KoboSyncService', () => {
         { bookId: 2, fileHash: null, deliveryHash: 'd2', metadataHash: 'm2' },
       ]);
 
-      // CREATE TEMP + 1 batch INSERT + 8 maintenance queries
-      expect(txExecute).toHaveBeenCalledTimes(10);
+      // CREATE TEMP + 1 batch INSERT + 9 maintenance queries
+      expect(txExecute).toHaveBeenCalledTimes(11);
 
       const batchInsert = captured[1];
       const sqlStrings = extractSqlStrings(batchInsert);
@@ -859,12 +862,14 @@ describe('KoboSyncService', () => {
       expect(sqlStrings.some((s) => s.includes('unnest'))).toBe(false);
     });
 
-    it('passes correct bookId, fileHash, deliveryHash, and metadataHash as individual params in VALUES rows', async () => {
+    it('passes correct bookId, fileHash, deliveryHash, metadataHash, and coverImageId as individual params in VALUES rows', async () => {
       const { fn: txExecute, captured } = makeTxExecute();
       const db = makeReconcileDb(txExecute);
       const service = makeService(db);
 
-      await (service as any).reconcileSnapshot(5, [{ bookId: 7, fileHash: 'abc', deliveryHash: 'delivery', metadataHash: 'xyz' }]);
+      await (service as any).reconcileSnapshot(5, [
+        { bookId: 7, fileHash: 'abc', deliveryHash: 'delivery', metadataHash: 'xyz', coverImageId: 'cover-7_1700000000000' },
+      ]);
 
       const batchInsert = captured[1];
       const params = extractSqlParams(batchInsert);
@@ -872,6 +877,7 @@ describe('KoboSyncService', () => {
       expect(params).toContain('abc');
       expect(params).toContain('delivery');
       expect(params).toContain('xyz');
+      expect(params).toContain('cover-7_1700000000000');
     });
 
     it('passes null fileHash correctly in VALUES rows', async () => {
@@ -901,8 +907,8 @@ describe('KoboSyncService', () => {
       }));
       await (service as any).reconcileSnapshot(99, eligible);
 
-      // CREATE TEMP + 2 batch INSERTs + 8 maintenance queries
-      expect(txExecute).toHaveBeenCalledTimes(11);
+      // CREATE TEMP + 2 batch INSERTs + 9 maintenance queries
+      expect(txExecute).toHaveBeenCalledTimes(12);
     });
 
     it('includes snapshotId as a param in all maintenance queries', async () => {
@@ -913,8 +919,8 @@ describe('KoboSyncService', () => {
       const snapshotId = 77;
       await (service as any).reconcileSnapshot(snapshotId, [{ bookId: 1, fileHash: 'f', deliveryHash: 'd', metadataHash: 'm' }]);
 
-      // Statements at index 2-9 are the 8 maintenance queries
-      const maintenanceStmts = captured.slice(2, 10);
+      // Statements at index 2-10 are the 9 maintenance queries
+      const maintenanceStmts = captured.slice(2, 11);
       for (const stmt of maintenanceStmts) {
         const params = extractSqlParams(stmt);
         expect(params).toContain(snapshotId);
@@ -985,7 +991,7 @@ describe('KoboSyncService', () => {
       expect(deleteStmt).toBeDefined();
     });
 
-    it('marks delivery changes as new entitlements and metadata-only changes as metadata updates', async () => {
+    it('marks delivery and cover changes as new entitlements and other metadata changes as metadata updates', async () => {
       const { fn: txExecute, captured } = makeTxExecute();
       const db = makeReconcileDb(txExecute);
       const service = makeService(db);
@@ -1005,8 +1011,28 @@ describe('KoboSyncService', () => {
       expect(extractSqlStrings(deliveryStmt).join(' ')).toContain('is_new = true');
       expect(metadataStmt).toBeDefined();
       const metadataSql = extractSqlStrings(metadataStmt).join(' ');
-      expect(metadataSql).toContain('is_new = false');
+      // A Kobo downloads a cover only for a new entitlement, so a moved cover id must re-announce the book.
+      expect(metadataSql).toContain('is_new = sb.cover_image_id IS NOT NULL AND sb.cover_image_id IS DISTINCT FROM e.cover_image_id');
+      expect(metadataSql).toContain('cover_image_id = e.cover_image_id');
       expect(metadataSql).toContain('sb.delivery_hash IS NOT DISTINCT FROM e.delivery_hash');
+    });
+
+    it('records cover ids on rows reconciled before they existed without re-announcing the book', async () => {
+      const { fn: txExecute, captured } = makeTxExecute();
+      const db = makeReconcileDb(txExecute);
+      const service = makeService(db);
+
+      await (service as any).reconcileSnapshot(5, [
+        { bookId: 7, fileHash: 'abc', deliveryHash: 'delivery', metadataHash: 'xyz', coverImageId: 'cover-7' },
+      ]);
+
+      const backfill = captured.find((stmt) => extractSqlStrings(stmt).join(' ').includes('sb.cover_image_id IS NULL'));
+      expect(backfill).toBeDefined();
+      const backfillSql = extractSqlStrings(backfill).join(' ');
+      expect(backfillSql).toContain('SET cover_image_id = e.cover_image_id');
+      expect(backfillSql).not.toContain('is_new');
+      expect(backfillSql).not.toContain('synced');
+      expect(captured.indexOf(backfill)).toBe(captured.length - 1);
     });
   });
 
@@ -1359,6 +1385,7 @@ describe('KoboSyncService', () => {
         bookId: 5,
         fileHash: 'file-hash',
         deliveryHash: expect.any(String),
+        coverImageId: 'cover-5',
         metadataHash: expect.any(String),
         needsLegacyNumericRemoval: true,
       },
@@ -1403,6 +1430,28 @@ describe('KoboSyncService', () => {
         ],
       };
     }
+
+    it('announces a read-along EPUB by its size without audio, as the download converts it', async () => {
+      const rows = comicRows(false);
+      for (const batch of rows.select.slice(0, 2)) {
+        for (const row of batch as Array<Record<string, unknown>>) {
+          row.fileSizeBytes = 900 * 1024 * 1024;
+          row.fileMediaOverlayAvailable = true;
+        }
+      }
+      const service = makeService(makeDb(rows));
+      vi.spyOn(service as any, 'buildEligibleBooksWhereClause').mockResolvedValue({ where: true });
+      vi.spyOn(service as any, 'getDeliverySettings').mockResolvedValue({
+        convertToKepub: true,
+        forceEnableHyphenation: false,
+        kepubConversionLimitMb: 100,
+      });
+
+      await (service as any).fetchEligibleSnapshotRows(8, false, new Map());
+      const books = await (service as any).fetchEligibleBooksByIds(8, [5], false, new Map());
+
+      expect(books.get(5)?.deliveryFormat).toBe('KEPUB');
+    });
 
     it('announces a stored fixed-layout book as EPUB3FL in the payload the device receives', async () => {
       const db = makeDb(comicRows(true));

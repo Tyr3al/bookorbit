@@ -4,7 +4,7 @@ import { JwtStrategy } from './jwt.strategy';
 
 function makeStrategy() {
   const authService = {
-    validateUser: vi.fn(),
+    validateSessionUser: vi.fn(),
   };
   const config = {
     get: vi.fn().mockReturnValue('test-jwt-secret'),
@@ -40,7 +40,14 @@ describe('JwtStrategy token extraction', () => {
     const { strategy } = makeStrategy();
     const extractor = (strategy as unknown as { _jwtFromRequest: (req: unknown) => string | null })._jwtFromRequest;
 
-    expect(extractor({ headers: {}, url: '/api/items/1/download?token=query-token', query: { token: 'query-token' } })).toBe('query-token');
+    expect(extractor({ headers: {}, url: '/abs/api/items/1/download?token=query-token', query: { token: 'query-token' } })).toBe('query-token');
+  });
+
+  it('ignores query-parameter tokens outside the ABS mount', () => {
+    const { strategy } = makeStrategy();
+    const extractor = (strategy as unknown as { _jwtFromRequest: (req: unknown) => string | null })._jwtFromRequest;
+
+    expect(extractor({ headers: {}, url: '/api/v1/books/1/download?token=query-token', query: { token: 'query-token' } })).toBeNull();
   });
 });
 
@@ -48,23 +55,32 @@ describe('JwtStrategy.validate', () => {
   it('returns user when validation passes', async () => {
     const { strategy, authService } = makeStrategy();
     const user = { id: 1, username: 'jdoe' };
-    authService.validateUser.mockResolvedValue(user);
+    authService.validateSessionUser.mockResolvedValue(user);
 
     const result = await strategy.validate({ sub: 1, ver: 2 });
     expect(result).toEqual(user);
-    expect(authService.validateUser).toHaveBeenCalledWith(1, 2);
+    expect(authService.validateSessionUser).toHaveBeenCalledWith(1, 2, 'legacy', undefined);
   });
 
-  it('throws UnauthorizedException when validateUser returns null', async () => {
+  it('passes the authentication method through to user validation', async () => {
     const { strategy, authService } = makeStrategy();
-    authService.validateUser.mockResolvedValue(null);
+    authService.validateSessionUser.mockResolvedValue({ id: 1 });
+
+    await strategy.validate({ sub: 1, ver: 2, amr: 'oidc' });
+
+    expect(authService.validateSessionUser).toHaveBeenCalledWith(1, 2, 'oidc', undefined);
+  });
+
+  it('throws UnauthorizedException when validateSessionUser returns null', async () => {
+    const { strategy, authService } = makeStrategy();
+    authService.validateSessionUser.mockResolvedValue(null);
 
     await expect(strategy.validate({ sub: 1, ver: 1 })).rejects.toThrow(UnauthorizedException);
   });
 
-  it('propagates UnauthorizedException from validateUser', async () => {
+  it('propagates UnauthorizedException from validateSessionUser', async () => {
     const { strategy, authService } = makeStrategy();
-    authService.validateUser.mockRejectedValue(new UnauthorizedException());
+    authService.validateSessionUser.mockRejectedValue(new UnauthorizedException());
 
     await expect(strategy.validate({ sub: 1, ver: 1 })).rejects.toThrow(UnauthorizedException);
   });

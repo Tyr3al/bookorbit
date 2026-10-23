@@ -1,1 +1,0 @@
-ALTER TABLE "libraries" ADD COLUMN "enable_audiobookshelf_api" boolean DEFAULT false NOT NULL;

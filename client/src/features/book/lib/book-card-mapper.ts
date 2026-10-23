@@ -7,12 +7,14 @@ function toBookFileRef(file: BookDetail['files'][number]): BookFileRef {
     format: file.format,
     role: file.role,
     sizeBytes: file.sizeBytes,
+    ...(file.mediaOverlay ? { mediaOverlay: file.mediaOverlay } : {}),
   }
 }
 
 export function mergeBookCardWithDetail(book: BookCard, detail: BookDetail): BookCard {
   return {
     ...book,
+    libraryId: detail.libraryId,
     status: detail.status,
     title: detail.title,
     subtitle: detail.subtitle,
@@ -34,6 +36,8 @@ export function mergeBookCardWithDetail(book: BookCard, detail: BookDetail): Boo
     readStatus: detail.readStatus,
     metadataScore: detail.metadataScore,
     hasCover: detail.coverSource !== null,
+    coverAspectRatio: detail.coverAspectRatio ?? book.coverAspectRatio,
+    coverVersion: detail.coverVersion,
     hasMetadataLocks: detail.lockedFields.length > 0,
     lockedFields: detail.lockedFields,
     narrators: detail.audioMetadata?.narrators.map((narrator) => narrator.name) ?? [],
@@ -50,7 +54,14 @@ function sameFiles(a: BookFileRef[], b: BookFileRef[]) {
   return a.every((file, index) => {
     const other = b[index]
     if (!other) return false
-    return file.id === other.id && file.format === other.format && file.role === other.role && file.sizeBytes === other.sizeBytes
+    return (
+      file.id === other.id &&
+      file.format === other.format &&
+      file.role === other.role &&
+      file.sizeBytes === other.sizeBytes &&
+      file.mediaOverlay?.available === other.mediaOverlay?.available &&
+      file.mediaOverlay?.durationSeconds === other.mediaOverlay?.durationSeconds
+    )
   })
 }
 
@@ -86,7 +97,7 @@ export function detectChangedColumns(previous: BookCard, next: BookCard): Column
   if (previous.updatedAt !== next.updatedAt) changed.add('updatedAt')
   if (previous.addedAt !== next.addedAt) changed.add('addedAt')
   if (previous.status !== next.status) changed.add('read')
-  if (previous.hasCover !== next.hasCover || !sameFiles(previous.files, next.files)) {
+  if (previous.hasCover !== next.hasCover || previous.coverVersion !== next.coverVersion || !sameFiles(previous.files, next.files)) {
     changed.add('cover')
     changed.add('format')
     changed.add('fileSize')

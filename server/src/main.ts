@@ -12,8 +12,9 @@ import fastifyMultipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import fastifyHelmet from '@fastify/helmet';
 import fastifyCompress from '@fastify/compress';
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import { appConfig } from './config/config';
+import { DEV_CLIENT_ORIGIN } from './config/dev-client-origin';
 import { setupSwaggerDocs } from './swagger';
 import { AUDIOBOOKSHELF_BASE_PATH } from './modules/audiobookshelf/audiobookshelf.constants';
 import {
@@ -23,6 +24,8 @@ import {
   buildEmptyJsonBodyStream,
   registerAbsConditionalGet,
   registerConditionalHsts,
+  registerDeclaredBodyLimits,
+  registerDeclaredCompressionOptOuts,
   registerEmptyBodyContentTypeParser,
   registerSocketErrorGuard,
   shouldInjectEmptyJsonBody,
@@ -48,6 +51,8 @@ async function bootstrap() {
   registerSocketErrorGuard(standardFastify, (error) => {
     process.stderr.write(`[socket] unexpected error: ${error.code ?? 'unknown'} ${error.message}\n`);
   });
+  registerDeclaredBodyLimits(fastify);
+  registerDeclaredCompressionOptOuts(fastify);
 
   // Fastify's default JSON parser rejects empty bodies, so we inject '{}' before parsing.
   fastify.addHook('preParsing', (request, _reply, payload, done) => {
@@ -57,7 +62,6 @@ async function bootstrap() {
     }
     done(null, payload);
   });
-
   // Reverse proxies can forward empty mutating requests with chunked transfer or an unsupported content type.
   registerEmptyBodyContentTypeParser(standardFastify);
 
@@ -113,7 +117,7 @@ async function bootstrap() {
 
   if (process.env.NODE_ENV !== 'production') {
     app.enableCors({
-      origin: process.env.CLIENT_URL ?? 'http://localhost:5173',
+      origin: process.env.CLIENT_URL ?? DEV_CLIENT_ORIGIN,
       credentials: true,
     });
   }
@@ -142,10 +146,10 @@ async function bootstrap() {
         );
       }
       if (process.env.NODE_ENV === 'production') {
-        // @fastify/static augments FastifyReply with sendFile, but the augmentation is not
-        // visible to this file's typecheck under TS 6 + nodenext in some environments. The cast
-        // preserves the runtime behavior (sendFile is registered below via app.register(fastifyStatic)).
-        return (reply as FastifyReply & { sendFile: (filename: string) => FastifyReply }).sendFile('index.html');
+        // Nest's SWC type checker does not retain @fastify/static's reply augmentation
+        // through the adapter callback, even though the plugin decorates this reply at runtime.
+        const staticReply = reply as typeof reply & { sendFile(filename: string): typeof reply };
+        return staticReply.sendFile('index.html');
       }
       return reply.status(404).send({ statusCode: 404, message: 'Not Found', path: request.url });
     });
@@ -159,7 +163,7 @@ async function bootstrap() {
   }
 
   app.enableShutdownHooks();
-  await app.listen(process.env.PORT ?? 3000, '0.0.0.0');
+  await app.listen(process.env.PORT ?? 3000, appConfiguration.host);
 }
 
 bootstrap().catch((err: unknown) => {

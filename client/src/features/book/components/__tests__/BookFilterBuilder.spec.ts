@@ -123,7 +123,26 @@ describe('BookFilterBuilder', () => {
 
     const operatorSelect = wrapper.findAll('select')[1]
     const operatorOptions = operatorSelect!.findAll('option').map((opt) => opt.text())
-    expect(operatorOptions).toEqual(expect.arrayContaining(['before', 'after', 'between', 'within last', 'is empty', 'is not empty']))
+    expect(operatorOptions).toEqual(expect.arrayContaining(['before', 'after', 'between', 'within last', 'more than', 'is empty', 'is not empty']))
+  })
+
+  it('emits a more-than-ago date rule as an unconverted day count', async () => {
+    const wrapper = mount(BookFilterBuilder, {
+      props: {
+        modelValue: { type: 'group', join: 'AND', rules: [{ type: 'rule', field: 'title', operator: 'contains', value: 'Dune' }] },
+      },
+    })
+
+    await wrapper.findAll('select')[0]!.setValue('finishedAt')
+    await wrapper.findAll('select')[1]!.setValue('moreThanAgo')
+    await wrapper.get('input[type="number"]').setValue('30')
+
+    expect(wrapper.text()).toContain('days ago')
+    expect(lastUpdate(wrapper)).toEqual({
+      type: 'group',
+      join: 'AND',
+      rules: [{ type: 'rule', field: 'finishedAt', operator: 'moreThanAgo', value: 30, valueTo: undefined }],
+    })
   })
 
   it('includes Lock Status in field options', () => {
@@ -152,6 +171,22 @@ describe('BookFilterBuilder', () => {
     const operatorOptions = operatorSelect!.findAll('option').map((opt) => opt.text())
     expect(operatorOptions).toEqual(['is locked', 'is unlocked'])
 
+    expect(wrapper.find('input').exists()).toBe(false)
+  })
+
+  it('offers Audiobook Cover as a missing or present rule with no value input', async () => {
+    const wrapper = mount(BookFilterBuilder, {
+      props: {
+        modelValue: { type: 'group', join: 'AND', rules: [{ type: 'rule', field: 'title', operator: 'contains', value: 'Dune' }] },
+      },
+    })
+
+    const [fieldSelect] = wrapper.findAll('select')
+    expect(fieldSelect!.findAll('option').map((opt) => opt.text())).toEqual(expect.arrayContaining(['Cover', 'Audiobook Cover']))
+    await fieldSelect!.setValue('audioCover')
+
+    const operatorSelect = wrapper.findAll('select')[1]
+    expect(operatorSelect!.findAll('option').map((opt) => opt.text())).toEqual(['is missing', 'is present'])
     expect(wrapper.find('input').exists()).toBe(false)
   })
 
@@ -234,6 +269,46 @@ describe('BookFilterBuilder', () => {
 
     expect((wrapper.get('select[aria-label="Community rating provider"]').element as HTMLSelectElement).value).toBe('any')
   })
+
+  it('serializes a provider-aware community review count rule', async () => {
+    const wrapper = mount(BookFilterBuilder, {
+      props: {
+        modelValue: { type: 'group', join: 'AND', rules: [{ type: 'rule', field: 'title', operator: 'contains', value: 'Dune' }] },
+      },
+    })
+
+    const [fieldSelect] = wrapper.findAll('select')
+    await fieldSelect!.setValue('communityRatingCount')
+    await wrapper.findAll('select')[1]!.setValue('gte')
+    await wrapper.get('select[aria-label="Community rating provider"]').setValue('hardcover')
+
+    const input = wrapper.get('input[type="number"]')
+    expect(input.attributes('min')).toBe('0')
+    expect(input.attributes('max')).toBeUndefined()
+    expect(input.attributes('step')).toBe('1')
+    await input.setValue('1000')
+
+    expect(lastUpdate(wrapper)).toEqual({
+      type: 'group',
+      join: 'AND',
+      rules: [{ type: 'rule', field: 'communityRatingCount', operator: 'gte', value: 1000, valueTo: undefined, provider: 'hardcover' }],
+    })
+  })
+
+  it('hydrates a saved community review count provider', () => {
+    const wrapper = mount(BookFilterBuilder, {
+      props: {
+        modelValue: {
+          type: 'group',
+          join: 'AND',
+          rules: [{ type: 'rule', field: 'communityRatingCount', operator: 'lt', value: 25, provider: 'goodreads' }],
+        },
+      },
+    })
+
+    expect((wrapper.get('select[aria-label="Community rating provider"]').element as HTMLSelectElement).value).toBe('goodreads')
+    expect((wrapper.get('input[type="number"]').element as HTMLInputElement).value).toBe('25')
+  })
 })
 
 describe('BookFilterBuilder custom metadata fields', () => {
@@ -302,7 +377,7 @@ describe('BookFilterBuilder custom metadata fields', () => {
     ['text', ['contains', 'does not contain', 'starts with', 'ends with', 'is', 'is not', 'is empty', 'is not empty']],
     ['url', ['contains', 'does not contain', 'starts with', 'ends with', 'is', 'is not', 'is empty', 'is not empty']],
     ['number', ['is', 'is not', 'greater than', 'at least', 'less than', 'at most', 'between', 'is empty', 'is not empty']],
-    ['date', ['before', 'after', 'between', 'within last', 'is empty', 'is not empty']],
+    ['date', ['before', 'after', 'between', 'within last', 'more than', 'is empty', 'is not empty']],
     ['boolean', ['is yes', 'is no', 'is empty', 'is not empty']],
   ] as const)('offers only the operators a %s custom field supports', async (type, expected) => {
     const wrapper = mountWithCustomFields([makeCustomField({ type })])
@@ -368,6 +443,20 @@ describe('BookFilterBuilder custom metadata fields', () => {
       type: 'group',
       join: 'AND',
       rules: [{ type: 'rule', field: 'custom:7', operator: 'withinLast', value: 14, valueTo: undefined }],
+    })
+  })
+
+  it('emits a more-than-ago day count for a date custom field', async () => {
+    const wrapper = mountWithCustomFields([makeCustomField({ type: 'date' })])
+
+    await fieldOptions(wrapper).setValue('custom:7')
+    await wrapper.findAll('select')[1]!.setValue('moreThanAgo')
+    await wrapper.get('input[type="number"]').setValue('45')
+
+    expect(lastUpdate(wrapper)).toEqual({
+      type: 'group',
+      join: 'AND',
+      rules: [{ type: 'rule', field: 'custom:7', operator: 'moreThanAgo', value: 45, valueTo: undefined }],
     })
   })
 

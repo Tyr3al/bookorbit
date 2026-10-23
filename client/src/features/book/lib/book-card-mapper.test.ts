@@ -119,6 +119,13 @@ describe('mergeBookCardWithDetail', () => {
     expect(result.metadataScore).toBe(95)
   })
 
+  it("takes the detail's cover frame, keeping the card's when the detail has none", () => {
+    const book = makeBook({ coverAspectRatio: '2/3' })
+
+    expect(mergeBookCardWithDetail(book, makeDetail({ coverAspectRatio: '1/1' })).coverAspectRatio).toBe('1/1')
+    expect(mergeBookCardWithDetail(book, makeDetail()).coverAspectRatio).toBe('2/3')
+  })
+
   it('maps authors from detail.authors[].name array', () => {
     const book = makeBook()
     const detail = makeDetail({
@@ -156,6 +163,35 @@ describe('mergeBookCardWithDetail', () => {
     expect(result.files[0]).toEqual({ id: 10, format: 'epub', role: 'primary', sizeBytes: 1024 })
     expect(result.files[0]).not.toHaveProperty('absolutePath')
     expect(result.files[0]).not.toHaveProperty('filename')
+  })
+
+  it('preserves mediaOverlay capability when mapping files', () => {
+    const book = makeBook()
+    const detail = makeDetail({
+      files: [
+        {
+          id: 10,
+          format: 'epub',
+          role: 'primary',
+          sizeBytes: 1024,
+          absolutePath: '/some/path.epub',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          filename: 'book.epub',
+          durationSeconds: null,
+          mediaOverlay: { available: true, durationSeconds: 42 },
+        },
+      ],
+    })
+
+    const result = mergeBookCardWithDetail(book, detail)
+
+    expect(result.files[0]).toEqual({
+      id: 10,
+      format: 'epub',
+      role: 'primary',
+      sizeBytes: 1024,
+      mediaOverlay: { available: true, durationSeconds: 42 },
+    })
   })
 
   it('sets hasCover = true when coverSource is non-null', () => {

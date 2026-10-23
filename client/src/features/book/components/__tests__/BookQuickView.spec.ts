@@ -29,8 +29,13 @@ vi.mock('vue-router', async (importOriginal) => {
   }
 })
 
+vi.mock('@/features/library/composables/useLibraries', () => ({
+  useLibraries: () => ({ libraries: ref([{ id: 1, accessLevel: 'editor' }]) }),
+}))
+
 vi.mock('@/features/auth/composables/usePermissions', () => ({
   usePermissions: () => ({
+    isSuperuser: { value: false },
     hasPermission: (name: string) => {
       if (name === 'library_delete_books') return permissionState.canDelete
       if (name === 'library_edit_metadata') return permissionState.canEditMetadata
@@ -87,6 +92,9 @@ function makeDetail(overrides: Partial<BookDetail> = {}): BookDetail {
     personalNoteUpdatedAt: null,
     communityRatings: [],
     coverSource: null,
+    coverMedia: [],
+    covers: { ebook: null, audio: null },
+    coverVersion: 'legacy:2026-01-01T00:00:00.000Z',
     hardcoverEditionId: null,
     providerIds: {},
     authors: [],
@@ -108,6 +116,17 @@ function makeDetail(overrides: Partial<BookDetail> = {}): BookDetail {
     metadataScore: null,
     readStatus: null,
     audioMetadata: null,
+    readAloudSync: {
+      mode: 'auto',
+      state: 'unavailable',
+      unavailableReason: 'no_media_overlay_epub',
+      overlayFileId: null,
+      audioDurationSeconds: null,
+      overlayDurationSeconds: null,
+      durationDifferenceSeconds: null,
+      durationDifferenceRatio: null,
+      koreaderDownloadAvailable: false,
+    },
     formatPriority: [],
     comicMetadata: null,
     customMetadata: [],

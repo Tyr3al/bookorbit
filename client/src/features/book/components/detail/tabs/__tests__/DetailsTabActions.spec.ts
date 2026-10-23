@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { shallowMount } from '@vue/test-utils'
+import { ref } from 'vue'
 import type { BookDetail } from '@bookorbit/types'
 
 const mocks = vi.hoisted(() => ({
@@ -16,7 +17,12 @@ vi.mock('vue-router', async (importOriginal) => {
 })
 
 vi.mock('@/lib/api', () => ({ api: mocks.api, setOnAuthFailure: vi.fn<(callback: () => void) => void>() }))
-vi.mock('@/features/auth/composables/usePermissions', () => ({ usePermissions: () => ({ hasPermission: mocks.hasPermission }) }))
+vi.mock('@/features/auth/composables/usePermissions', () => ({
+  usePermissions: () => ({ hasPermission: mocks.hasPermission, isSuperuser: ref(false) }),
+}))
+vi.mock('@/features/library/composables/useLibraries', () => ({
+  useLibraries: () => ({ libraries: ref([{ id: 3, accessLevel: 'editor' }]) }),
+}))
 
 vi.mock('@/features/book/composables/useDeleteBook', () => ({
   useDeleteBook: (onDeleted: (id: number) => void) => {
@@ -59,6 +65,9 @@ function makeBook(overrides: Partial<BookDetail> = {}): BookDetail {
     personalNoteUpdatedAt: null,
     communityRatings: [],
     coverSource: 'extracted',
+    coverMedia: ['ebook'],
+    covers: { ebook: null, audio: null },
+    coverVersion: 'legacy:2024-01-01T00:00:00.000Z',
     hardcoverEditionId: null,
     providerIds: {},
     authors: [{ id: 1, name: 'Author One', sortName: null }],
@@ -80,6 +89,17 @@ function makeBook(overrides: Partial<BookDetail> = {}): BookDetail {
     metadataScore: null,
     readStatus: null,
     audioMetadata: null,
+    readAloudSync: {
+      mode: 'auto',
+      state: 'unavailable',
+      unavailableReason: 'no_media_overlay_epub',
+      overlayFileId: null,
+      audioDurationSeconds: null,
+      overlayDurationSeconds: null,
+      durationDifferenceSeconds: null,
+      durationDifferenceRatio: null,
+      koreaderDownloadAvailable: false,
+    },
     formatPriority: [],
     comicMetadata: null,
     customMetadata: [],

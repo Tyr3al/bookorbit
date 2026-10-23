@@ -7,6 +7,7 @@ import type { CommunityRatingProviderKey } from "./metadata-fetch";
  * Most fields map directly to a DB column. The exceptions:
  * - `fileAvailability` - derived from `books.status` ('present' | 'missing')
  * - `communityRating` - from `book_community_ratings.rating` (optionally provider-specific)
+ * - `communityRatingCount` - from `book_community_ratings.rating_count` (optionally provider-specific)
  * - `readProgress` - aggregated from `reading_progress.percentage` (per-user, per-book-file)
  * - `readStatus` - stored in `user_book_status.status` (per-user)
  * - `startedAt` - from `user_book_status.started_at` (per-user)
@@ -16,10 +17,12 @@ import type { CommunityRatingProviderKey } from "./metadata-fetch";
  * - `tag` - resolved via `book_tags` join to `tags.name`
  * - `collection` - resolved via `collection_books` join to `collections.name`
  * - `library` - resolved via `books.library_id` join to `libraries.name`
- * - `format` - resolved via `book_files.format` (primary file)
+ * - `format` - matches `book_files.format` on any of the book's files, not only the primary one
  * - `fileSize` - resolved via `book_files.size_bytes` (primary file; rule values are bytes)
  * - `isbn` - matches both `isbn10` and `isbn13` in `book_metadata`
  * - `publishedDate` - uses full dates when available and falls back to published year
+ * - `cover` - either cover slot filled (`book_metadata.cover_source` is the summary of both)
+ * - `audioCover` - books whose cover media include audio, by whether their audio cover slot is filled
  * - `lockStatus` - derived from `book_metadata.locked_fields` (non-empty array = locked)
  * - `seriesStatus` - computed per-user: "up next in series" (next unstarted book whose earlier series entries are all finished)
  *
@@ -47,12 +50,14 @@ export type StaticRuleField =
   | "fileAvailability"
   | "rating"
   | "communityRating"
+  | "communityRatingCount"
   | "readProgress"
   | "readStatus"
   | "description"
   | "isbn"
   | "metadataScore"
   | "cover"
+  | "audioCover"
   | "lockStatus"
   | "seriesStatus";
 
@@ -89,6 +94,7 @@ export type RuleOperator =
   | "before"
   | "after"
   | "withinLast"
+  | "moreThanAgo"
   | "isMissing"
   | "isPresent"
   | "isUnread"
@@ -112,22 +118,24 @@ export const FIELD_OPERATORS: Record<StaticRuleField, RuleOperator[]> = {
   library: ["includesAny", "excludesAll"],
   format: ["includesAny", "excludesAll"],
   fileSize: ["eq", "notEq", "gt", "gte", "lt", "lte", "between", "isEmpty", "isNotEmpty"],
-  publishedDate: ["before", "after", "between", "withinLast", "isEmpty", "isNotEmpty"],
+  publishedDate: ["before", "after", "between", "withinLast", "moreThanAgo", "isEmpty", "isNotEmpty"],
   publishedYear: ["eq", "notEq", "gt", "gte", "lt", "lte", "between", "isEmpty", "isNotEmpty"],
   seriesIndex: ["eq", "notEq", "gt", "gte", "lt", "lte", "between", "isEmpty", "isNotEmpty"],
   pageCount: ["gt", "gte", "lt", "lte", "between", "isEmpty", "isNotEmpty"],
-  addedAt: ["before", "after", "between", "withinLast"],
-  startedAt: ["before", "after", "between", "withinLast", "isEmpty", "isNotEmpty"],
-  finishedAt: ["before", "after", "between", "withinLast", "isEmpty", "isNotEmpty"],
+  addedAt: ["before", "after", "between", "withinLast", "moreThanAgo"],
+  startedAt: ["before", "after", "between", "withinLast", "moreThanAgo", "isEmpty", "isNotEmpty"],
+  finishedAt: ["before", "after", "between", "withinLast", "moreThanAgo", "isEmpty", "isNotEmpty"],
   fileAvailability: ["isMissing", "isPresent"],
   rating: ["eq", "gt", "gte", "lt", "lte", "isEmpty", "isNotEmpty"],
   communityRating: ["eq", "notEq", "gt", "gte", "lt", "lte", "between", "isEmpty", "isNotEmpty"],
+  communityRatingCount: ["eq", "notEq", "gt", "gte", "lt", "lte", "between", "isEmpty", "isNotEmpty"],
   readProgress: ["isUnread", "isInProgress", "isFinished"],
   readStatus: ["includesAny", "excludesAll", "isEmpty", "isNotEmpty"],
   description: ["isEmpty", "isNotEmpty"],
   isbn: ["isEmpty", "isNotEmpty", "eq"],
   metadataScore: ["gt", "gte", "lt", "lte", "between", "isEmpty", "isNotEmpty"],
   cover: ["isMissing", "isPresent"],
+  audioCover: ["isMissing", "isPresent"],
   lockStatus: ["isLocked", "isUnlocked"],
   seriesStatus: ["isUpNext"],
 };
@@ -145,7 +153,7 @@ export const CUSTOM_FIELD_TYPE_OPERATORS: Record<CustomMetadataFieldType, RuleOp
   text: ["contains", "notContains", "startsWith", "endsWith", "eq", "notEq", "isEmpty", "isNotEmpty"],
   url: ["contains", "notContains", "startsWith", "endsWith", "eq", "notEq", "isEmpty", "isNotEmpty"],
   number: ["eq", "notEq", "gt", "gte", "lt", "lte", "between", "isEmpty", "isNotEmpty"],
-  date: ["before", "after", "between", "withinLast", "isEmpty", "isNotEmpty"],
+  date: ["before", "after", "between", "withinLast", "moreThanAgo", "isEmpty", "isNotEmpty"],
   boolean: ["isTrue", "isFalse", "isEmpty", "isNotEmpty"],
 };
 
@@ -176,6 +184,7 @@ export const RULE_OPERATORS: RuleOperator[] = [
   "before",
   "after",
   "withinLast",
+  "moreThanAgo",
   "isMissing",
   "isPresent",
   "isUnread",
@@ -189,11 +198,12 @@ export const RULE_OPERATORS: RuleOperator[] = [
 ];
 
 export type CommunityRatingProvider = CommunityRatingProviderKey | "any";
+export type CommunityRatingRuleField = "communityRating" | "communityRatingCount";
 export type RuleValue = string | number | string[] | number[];
 
 export type StandardRule = {
   type: "rule";
-  field: Exclude<StaticRuleField, "communityRating">;
+  field: Exclude<StaticRuleField, CommunityRatingRuleField>;
   operator: RuleOperator;
   value?: RuleValue;
   valueTo?: string | number;
@@ -201,7 +211,7 @@ export type StandardRule = {
 
 export type CommunityRatingRule = {
   type: "rule";
-  field: "communityRating";
+  field: CommunityRatingRuleField;
   operator: RuleOperator;
   provider?: CommunityRatingProvider;
   value?: RuleValue;
@@ -247,6 +257,7 @@ export type GroupRule = {
  * User-defined custom metadata fields are sortable too, as `CustomSortField`.
  */
 export type StaticSortField =
+  | "relevance"
   | "author"
   | "title"
   | "series"
@@ -285,6 +296,7 @@ export type SortField = StaticSortField | CustomSortField;
 
 /** Built-in sort fields only. Custom fields are resolved at runtime, not enumerable here. */
 export const SORT_FIELDS: StaticSortField[] = [
+  "relevance",
   "author",
   "title",
   "series",

@@ -1,4 +1,4 @@
-import { mount } from '@vue/test-utils'
+import { mount, RouterLinkStub } from '@vue/test-utils'
 import { describe, expect, it, vi } from 'vitest'
 import type { BookCard } from '@bookorbit/types'
 import BookTableCollapsedSeriesCell from '../BookTableCollapsedSeriesCell.vue'
@@ -12,7 +12,7 @@ vi.mock('@/features/book/composables/useCoverVersions', () => ({
   }),
 }))
 
-function makeBook(format: string | null): BookCard {
+function makeBook(format: string | null, overrides: Partial<BookCard> = {}): BookCard {
   return {
     id: 1,
     status: 'present',
@@ -32,6 +32,7 @@ function makeBook(format: string | null): BookCard {
     readStatus: null,
     addedAt: '2026-01-01T00:00:00.000Z',
     updatedAt: null,
+    coverVersion: 'legacy:2026-01-01T00:00:00.000Z',
     metadataScore: null,
     hasCover: false,
     hasMetadataLocks: false,
@@ -49,6 +50,7 @@ function makeBook(format: string | null): BookCard {
       coverUpdatedAtByBookId: { 10: '2024-01-01T00:00:00.000Z', 11: '2024-02-01T00:00:00.000Z' },
       seriesLatestAddedAt: null,
     },
+    ...overrides,
   } as BookCard
 }
 
@@ -58,10 +60,22 @@ const CoverSurfaceStub = {
   template: '<div data-testid="surface" :data-comic="isComic"><slot /></div>',
 }
 
-function mountCell(format: string | null) {
+function mountCell(
+  format: string | null,
+  colId = 'cover',
+  options: { overrides?: Partial<BookCard>; linkFn?: (chip: string) => string | null } = {},
+) {
   return mount(BookTableCollapsedSeriesCell, {
-    props: { book: makeBook(format), colId: 'cover' as never },
-    global: { stubs: { BookCoverSurface: CoverSurfaceStub } },
+    props: { book: makeBook(format, options.overrides), colId, linkFn: options.linkFn },
+    global: {
+      stubs: {
+        RouterLink: RouterLinkStub,
+        BookCoverSurface: CoverSurfaceStub,
+        Tooltip: { template: '<div><slot /></div>' },
+        TooltipTrigger: { template: '<div><slot /></div>' },
+        TooltipContent: { template: '<div data-testid="tooltip-content"><slot /></div>' },
+      },
+    },
   })
 }
 
@@ -87,5 +101,43 @@ describe('BookTableCollapsedSeriesCell comic flag', () => {
 
     expect(imgs[0]!.attributes('src')).toBe('/api/v1/books/10/thumbnail?t=1704067200000')
     expect(imgs[1]!.attributes('src')).toBe('/api/v1/books/11/thumbnail?t=1706745600000')
+  })
+
+  it('identifies the series marker with a keyboard-triggered tooltip', () => {
+    const wrapper = mountCell('epub', 'lockRow')
+    const marker = wrapper.get('[role="img"]')
+
+    expect(marker.attributes('aria-label')).toBe('Series row')
+    expect(marker.attributes('tabindex')).toBe('0')
+    expect(wrapper.get('[data-testid="tooltip-content"]').text()).toBe('Series row')
+  })
+
+  it('offers a labeled button to open the series', async () => {
+    const wrapper = mountCell('epub', 'actions')
+    const button = wrapper.get('button')
+
+    expect(button.attributes('aria-label')).toBe('Open series')
+    expect(wrapper.get('[data-testid="tooltip-content"]').text()).toBe('Open series')
+    await button.trigger('click')
+    expect(wrapper.emitted('open-series')).toEqual([[]])
+  })
+
+  it('links the series authors in the authors column', () => {
+    const wrapper = mountCell('epub', 'authors', {
+      overrides: { authors: ['Terry Pratchett', 'Neil Gaiman', 'Stephen Baxter'] },
+      linkFn: (name) => `/authors?q=${encodeURIComponent(name)}`,
+    })
+    const links = wrapper.findAllComponents(RouterLinkStub)
+
+    expect(links.map((link) => link.text())).toEqual(['Terry Pratchett', 'Neil Gaiman'])
+    expect(links.map((link) => link.props('to'))).toEqual(['/authors?q=Terry%20Pratchett', '/authors?q=Neil%20Gaiman'])
+    expect(wrapper.text()).toContain('+1')
+  })
+
+  it('shows a dash in the authors column when the series has no authors', () => {
+    const wrapper = mountCell('epub', 'authors', { linkFn: (name) => `/authors?q=${name}` })
+
+    expect(wrapper.findAllComponents(RouterLinkStub)).toHaveLength(0)
+    expect(wrapper.text()).toBe('-')
   })
 })
