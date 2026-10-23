@@ -1,7 +1,7 @@
 {
-  "totalRoutes": 667,
+  "totalRoutes": 723,
   "byPermission": {
-    "(none)": 287,
+    "(none)": 341,
     "Permission.ManageMetadataConfig": 41,
     "Permission.EmailSend": 34,
     "Permission.LibraryEditMetadata": 37,
@@ -18,7 +18,7 @@
     "Permission.ViewAuditLog": 4,
     "Permission.ViewUserActivity": 6,
     "Permission.LibraryDeleteBooks": 14,
-    "Permission.LibraryDownload": 4,
+    "Permission.LibraryDownload": 6,
     "Permission.LibraryUpload": 2,
     "Permission.ManageBookDock": 3,
     "Permission.ManageIcons": 1,
@@ -49,6 +49,7 @@
     "routes-07.json",
     "routes-08.json",
     "routes-09.json",
-    "routes-10.json"
+    "routes-10.json",
+    "routes-11.json"
   ]
 }
