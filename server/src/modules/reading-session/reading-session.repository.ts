@@ -159,7 +159,7 @@ export class ReadingSessionRepository {
     durationSeconds: number,
     progressDelta: number | null,
     endProgress: number | null,
-    source: ReadingSessionSource = 'web',
+    source: ReadingSessionSource | null = 'web',
     timeZone = 'UTC',
     sync?: ReadingSessionSyncOptions,
     sessionType: 'read' | 'tts' | 'listen' = 'read',
@@ -264,13 +264,13 @@ export class ReadingSessionRepository {
               eq(readingSessions.userId, userId),
               eq(readingSessions.bookId, bookId),
               eq(readingSessions.sessionId, sessionId),
-              eq(readingSessions.source, source),
+              source === null ? isNull(readingSessions.source) : eq(readingSessions.source, source),
               isNull(readingSessions.sourceDeviceKey),
             ),
           );
       }
 
-      if (sync?.estimateSessionIdPrefix) {
+      if (sync?.estimateSessionIdPrefix && source !== null) {
         await this.reconcileSyncEstimates(tx, {
           userId,
           bookId,
@@ -481,7 +481,6 @@ export class ReadingSessionRepository {
   async findLatestSourceSession(params: {
     userId: number;
     bookId: number;
-    source: ReadingSessionSource;
     sourceDeviceKey: string;
     sessionIdPrefix: string;
     endedAfter: Date;
@@ -500,7 +499,6 @@ export class ReadingSessionRepository {
         and(
           eq(readingSessions.userId, params.userId),
           eq(readingSessions.bookId, params.bookId),
-          eq(readingSessions.source, params.source),
           eq(readingSessions.sourceDeviceKey, params.sourceDeviceKey),
           like(readingSessions.sessionId, `${params.sessionIdPrefix}%`),
           gte(readingSessions.endedAt, params.endedAfter),

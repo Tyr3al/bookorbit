@@ -45,7 +45,7 @@ function row(overrides: Partial<ListeningSessionRow> = {}): ListeningSessionRow 
     id: 501,
     bookId: 7,
     libraryId: 2,
-    source: 'abs',
+    source: null,
     sourceDeviceKey: 'abs:phone-1',
     startedAt: new Date('2026-03-01T23:30:00Z'),
     endedAt: new Date('2026-03-01T23:50:00Z'),
@@ -65,7 +65,6 @@ describe('AudiobookshelfSessionsService.recordLiveListening', () => {
     expect(readingSessions.findLatestSourceSession).toHaveBeenCalledWith({
       userId: 3,
       bookId: 7,
-      source: 'abs',
       sourceDeviceKey: 'abs:phone-1',
       sessionIdPrefix: 'abs-live:',
       endedAfter: new Date(now.getTime() - AUDIOBOOKSHELF_LIVE_SESSION_GAP_MS),
@@ -80,7 +79,7 @@ describe('AudiobookshelfSessionsService.recordLiveListening', () => {
         durationSeconds: 15,
         progressDelta: 1.5,
         endProgress: 11.5,
-        source: 'abs',
+        source: null,
         sourceDeviceKey: 'abs:phone-1',
         timeZone: 'Europe/Berlin',
       }),
@@ -157,7 +156,7 @@ describe('AudiobookshelfSessionsService.recordLocalSessions', () => {
       durationSeconds: 2300,
       progressDelta: 11.25,
       endProgress: 31.25,
-      source: 'abs',
+      source: null,
       sourceDeviceKey: 'abs:tablet',
       timeZone: 'Europe/Berlin',
     });
@@ -224,13 +223,26 @@ describe('AudiobookshelfSessionsService reads', () => {
     expect(result).toEqual({ total: 0, numPages: 0, page: 1, itemsPerPage: 10, sessions: [] });
   });
 
-  it('labels sessions from other BookOrbit surfaces by their source', async () => {
+  it.each([
+    [{ source: 'web' as const, sourceDeviceKey: null }, 'web'],
+    [{ source: null, sourceDeviceKey: null }, 'bookorbit'],
+    [{ source: 'koreader' as const, sourceDeviceKey: 'abs:spoofed' }, 'koreader'],
+  ])('labels sessions from other BookOrbit surfaces by their source (%j)', async (overrides, mediaPlayer) => {
     const { service, repository } = makeService();
-    repository.findPage.mockResolvedValue({ rows: [row({ source: 'web', sourceDeviceKey: null })], total: 1 });
+    repository.findPage.mockResolvedValue({ rows: [row(overrides)], total: 1 });
 
     const result = await service.getSessionsPage(user, 0, 10);
 
-    expect(result.sessions[0]).toMatchObject({ mediaPlayer: 'web', deviceInfo: null });
+    expect(result.sessions[0]).toMatchObject({ mediaPlayer, deviceInfo: null });
+  });
+
+  it('omits the device for ABS sessions recorded without a device id', async () => {
+    const { service, repository } = makeService();
+    repository.findPage.mockResolvedValue({ rows: [row({ sourceDeviceKey: 'abs:default' })], total: 1 });
+
+    const result = await service.getSessionsPage(user, 0, 10);
+
+    expect(result.sessions[0]).toMatchObject({ mediaPlayer: 'audiobookshelf', deviceInfo: null });
   });
 
   it('scopes the item route through the exposed-book check', async () => {

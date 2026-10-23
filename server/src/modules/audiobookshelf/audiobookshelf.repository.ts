@@ -9,7 +9,9 @@ import { parseAudiobookshelfItemFilter } from '../../common/utils/audiobookshelf
 import { fromAudiobookshelfSeriesUuid, fromAudiobookshelfUuid } from '../../common/utils/audiobookshelf-id.utils';
 import { DB } from '../../db';
 import * as schema from '../../db/schema';
+import { audiobookshelfExposedLibraries } from '../../db/fork-schema';
 import { AUDIOBOOKSHELF_AUDIO_FORMATS, AUDIOBOOKSHELF_FINISHED_PROGRESS } from './audiobookshelf.constants';
+import { isAudiobookshelfExposedLibrary } from './audiobookshelf-exposure.sql';
 import type { AudiobookshelfSeriesSort } from './audiobookshelf.types';
 
 type Db = NodePgDatabase<typeof schema>;
@@ -40,7 +42,7 @@ export class AudiobookshelfRepository {
       return this.db
         .select()
         .from(schema.libraries)
-        .where(eq(schema.libraries.enableAudiobookshelfApi, true))
+        .where(isAudiobookshelfExposedLibrary(schema.libraries.id))
         .orderBy(asc(schema.libraries.displayOrder), asc(schema.libraries.name));
     }
     const rows = await this.db
@@ -50,9 +52,26 @@ export class AudiobookshelfRepository {
         schema.userLibraryAccess,
         and(eq(schema.userLibraryAccess.libraryId, schema.libraries.id), eq(schema.userLibraryAccess.userId, userId)),
       )
-      .where(eq(schema.libraries.enableAudiobookshelfApi, true))
+      .where(isAudiobookshelfExposedLibrary(schema.libraries.id))
       .orderBy(asc(schema.libraries.displayOrder), asc(schema.libraries.name));
     return rows.map((row) => row.library);
+  }
+
+  /** Every book library with whether it is exposed, for the settings page. Libraries are few. */
+  async findBookLibraryExposures(): Promise<{ id: number; name: string; exposed: boolean }[]> {
+    return this.db
+      .select({ id: schema.libraries.id, name: schema.libraries.name, exposed: isAudiobookshelfExposedLibrary(schema.libraries.id).mapWith(Boolean) })
+      .from(schema.libraries)
+      .where(eq(schema.libraries.type, 'books'))
+      .orderBy(asc(schema.libraries.displayOrder), asc(schema.libraries.name));
+  }
+
+  async setLibraryExposed(libraryId: number, exposed: boolean): Promise<void> {
+    if (exposed) {
+      await this.db.insert(audiobookshelfExposedLibraries).values({ libraryId }).onConflictDoNothing();
+    } else {
+      await this.db.delete(audiobookshelfExposedLibraries).where(eq(audiobookshelfExposedLibraries.libraryId, libraryId));
+    }
   }
 
   /** True when the library is opted in and the user can access it. */
@@ -60,7 +79,7 @@ export class AudiobookshelfRepository {
     const base = this.db
       .select({ id: schema.libraries.id })
       .from(schema.libraries)
-      .where(and(eq(schema.libraries.id, libraryId), eq(schema.libraries.enableAudiobookshelfApi, true)));
+      .where(and(eq(schema.libraries.id, libraryId), isAudiobookshelfExposedLibrary(schema.libraries.id)));
     if (isSuperuser) {
       return (await base.limit(1)).length > 0;
     }
@@ -121,7 +140,7 @@ export class AudiobookshelfRepository {
           eq(schema.bookmarks.userId, user.id),
           sql`${schema.bookmarks.deletedAt} is null`,
           sql`${schema.bookmarks.positionSeconds} is not null`,
-          eq(schema.libraries.enableAudiobookshelfApi, true),
+          isAudiobookshelfExposedLibrary(schema.libraries.id),
           BOOK_VISIBLE_WHERE,
           this.hasAudioFile(),
           accessClause,
@@ -252,7 +271,7 @@ export class AudiobookshelfRepository {
       .where(
         and(
           inArray(schema.books.id, bookIds),
-          eq(schema.libraries.enableAudiobookshelfApi, true),
+          isAudiobookshelfExposedLibrary(schema.libraries.id),
           BOOK_VISIBLE_WHERE,
           this.hasAudioFile(),
           accessClause,
@@ -354,7 +373,7 @@ export class AudiobookshelfRepository {
       .where(
         and(
           eq(schema.audiobookProgress.userId, user.id),
-          eq(schema.libraries.enableAudiobookshelfApi, true),
+          isAudiobookshelfExposedLibrary(schema.libraries.id),
           BOOK_VISIBLE_WHERE,
           this.hasAudioFile(),
           accessClause,
@@ -415,7 +434,7 @@ export class AudiobookshelfRepository {
         and(
           eq(schema.audiobookProgress.userId, user.id),
           eq(schema.books.libraryId, libraryId),
-          eq(schema.libraries.enableAudiobookshelfApi, true),
+          isAudiobookshelfExposedLibrary(schema.libraries.id),
           BOOK_VISIBLE_WHERE,
           this.hasAudioFile(),
           accessClause,
@@ -480,7 +499,7 @@ export class AudiobookshelfRepository {
         and(
           eq(schema.audiobookProgress.userId, user.id),
           libraryId === undefined ? undefined : eq(schema.books.libraryId, libraryId),
-          eq(schema.libraries.enableAudiobookshelfApi, true),
+          isAudiobookshelfExposedLibrary(schema.libraries.id),
           BOOK_VISIBLE_WHERE,
           this.hasAudioFile(),
           accessClause,

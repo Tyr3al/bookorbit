@@ -257,7 +257,6 @@ export class LibraryService {
       fileWriteReadAlongEnabled: libraryType === 'books' ? (dto.fileWriteReadAlongEnabled ?? false) : false,
       fileWriteReadAlongMaxFileSizeMb: libraryType === 'books' ? (dto.fileWriteReadAlongMaxFileSizeMb ?? 1000) : 1000,
       fileRenameEnabled: libraryType === 'books' ? (dto.fileRenameEnabled ?? false) : false,
-      enableAudiobookshelfApi: libraryType === 'books' ? (dto.enableAudiobookshelfApi ?? false) : false,
     });
 
     const folders = await this.libraryRepo.insertFolders(folderInputs.map(({ path, role }) => ({ libraryId: library.id, path, role })));

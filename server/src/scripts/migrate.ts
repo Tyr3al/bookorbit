@@ -5,6 +5,7 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { Pool } from 'pg';
 
+import { FORK_MIGRATIONS_FOLDER_NAME, FORK_MIGRATIONS_TABLE } from '../db/fork-migrations.constants';
 import { createPostgresClientConfig } from '../db/postgres-connection-config';
 import { dropUnreleasedMigrationRows, reconcileMigrationLedgerTimestamps } from './migration-ledger-compatibility';
 import { installPostgresExtensions } from './postgres-extensions';
@@ -48,6 +49,8 @@ async function runMigrations() {
     await prepareLegacySeriesIndexColumns(pool);
 
     await migrate(drizzle(pool), { migrationsFolder });
+    // Fork-owned tables migrate on their own ledger, after the upstream tables they reference.
+    await migrate(drizzle(pool), { migrationsFolder: join(migrationsFolder, FORK_MIGRATIONS_FOLDER_NAME), migrationsTable: FORK_MIGRATIONS_TABLE });
 
     console.log(`Migrations applied successfully from ${migrationsFolder}`);
   } finally {

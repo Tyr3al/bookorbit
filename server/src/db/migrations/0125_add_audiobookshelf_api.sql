@@ -1,3 +1,0 @@
-ALTER TABLE "reading_sessions" DROP CONSTRAINT "reading_sessions_source_chk";--> statement-breakpoint
-ALTER TABLE "libraries" ADD COLUMN "enable_audiobookshelf_api" boolean DEFAULT false NOT NULL;--> statement-breakpoint
-ALTER TABLE "reading_sessions" ADD CONSTRAINT "reading_sessions_source_chk" CHECK ("reading_sessions"."source" in ('web', 'ios', 'watchos', 'android', 'koreader', 'manual', 'kobo', 'abs'));

@@ -89,7 +89,6 @@ export interface Library {
   fileWriteReadAlongEnabled: boolean;
   fileWriteReadAlongMaxFileSizeMb: number;
   fileRenameEnabled: boolean;
-  enableAudiobookshelfApi: boolean;
   folders: LibraryFolder[];
   bookCount?: number;
   /** Non-archived shows in a podcast library. Null for book libraries, which hold no shows. */

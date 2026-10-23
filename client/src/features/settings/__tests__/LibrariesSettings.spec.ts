@@ -108,7 +108,6 @@ function makeLibrary(overrides: Partial<Library> = {}): Library {
     fileWriteReadAlongEnabled: false,
     fileWriteReadAlongMaxFileSizeMb: 1000,
     fileRenameEnabled: false,
-    enableAudiobookshelfApi: false,
     folders: [{ id: 1, path: '/books', role: 'downloads' as const, createdAt: '2024-01-01T00:00:00.000Z' }],
     createdAt: '2024-01-01T00:00:00.000Z',
     updatedAt: '2024-01-01T00:00:00.000Z',

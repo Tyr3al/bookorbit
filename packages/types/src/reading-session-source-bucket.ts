@@ -1,6 +1,6 @@
 import type { ReadingSessionSource } from "./reading-session";
 
-export const READING_SESSION_SOURCE_BUCKETS = ["bookorbit", "ios", "watchos", "android", "koreader", "kobo", "audiobookshelf"] as const;
+export const READING_SESSION_SOURCE_BUCKETS = ["bookorbit", "ios", "watchos", "android", "koreader", "kobo"] as const;
 export type ReadingSessionSourceBucket = (typeof READING_SESSION_SOURCE_BUCKETS)[number];
 
 export const READING_SESSION_SOURCE_BUCKET_LABELS: Record<ReadingSessionSourceBucket, string> = {
@@ -10,7 +10,6 @@ export const READING_SESSION_SOURCE_BUCKET_LABELS: Record<ReadingSessionSourceBu
   android: "Android app",
   koreader: "KOReader",
   kobo: "Kobo",
-  audiobookshelf: "Audiobookshelf",
 };
 
 // Web/manual and null/unknown history collapse into the general BookOrbit bucket.
@@ -21,10 +20,9 @@ export function toReadingSessionSourceBucket(source: ReadingSessionSource | null
   if (source === "android") return "android";
   if (source === "koreader") return "koreader";
   if (source === "kobo") return "kobo";
-  if (source === "abs") return "audiobookshelf";
   return "bookorbit";
 }
 
 export function emptySourceBucketRecord(): Record<ReadingSessionSourceBucket, number> {
-  return { bookorbit: 0, ios: 0, watchos: 0, android: 0, koreader: 0, kobo: 0, audiobookshelf: 0 };
+  return { bookorbit: 0, ios: 0, watchos: 0, android: 0, koreader: 0, kobo: 0 };
 }

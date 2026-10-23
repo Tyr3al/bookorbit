@@ -12,7 +12,6 @@ import {
   FileCode,
   FilePenLine,
   FolderOpen,
-  Headphones,
   Images,
   Info,
   Library as LibraryIcon,
@@ -40,7 +39,6 @@ import LibraryCreatorAccess from './LibraryCreatorAccess.vue'
 import LibraryCreatorDetails from './LibraryCreatorDetails.vue'
 import LibraryCreatorFileWrite from './LibraryCreatorFileWrite.vue'
 import LibraryCreatorFolders from './LibraryCreatorFolders.vue'
-import LibraryCreatorIntegration from './LibraryCreatorIntegration.vue'
 import LibraryCreatorMetadata from './LibraryCreatorMetadata.vue'
 import LibraryCreatorReading from './LibraryCreatorReading.vue'
 import LibraryCreatorScanner from './LibraryCreatorScanner.vue'
@@ -75,7 +73,6 @@ const SECTION_ICONS: Record<LibraryCreatorSectionId, Component> = {
   reading: BookOpen,
   schedule: Clock,
   fileWrite: FilePenLine,
-  integration: Headphones,
   access: Users,
 }
 const SECTION_COMPONENTS: Record<LibraryCreatorSectionId, Component> = {
@@ -86,20 +83,9 @@ const SECTION_COMPONENTS: Record<LibraryCreatorSectionId, Component> = {
   reading: LibraryCreatorReading,
   schedule: LibraryCreatorSchedule,
   fileWrite: LibraryCreatorFileWrite,
-  integration: LibraryCreatorIntegration,
   access: LibraryCreatorAccess,
 }
-const BOOK_SECTIONS: LibraryCreatorSectionId[] = [
-  'details',
-  'folders',
-  'scanner',
-  'metadata',
-  'reading',
-  'schedule',
-  'fileWrite',
-  'integration',
-  'access',
-]
+const BOOK_SECTIONS: LibraryCreatorSectionId[] = ['details', 'folders', 'scanner', 'metadata', 'reading', 'schedule', 'fileWrite', 'access']
 
 const creator = useLibraryCreator()
 const { form, mode, editingLibraryId, loading, folderChecks, stats, error, validationErrors } = creator
@@ -217,8 +203,6 @@ function summaryFor(id: LibraryCreatorSectionId): string {
       if (form.fileWriteEnabled) return t('library.creator.summary.writes', { count: writtenKinds.value })
       if (form.fileRenameEnabled) return t('library.creator.summary.renames')
       return t('library.creator.summary.untouched')
-    case 'integration':
-      return form.enableAudiobookshelfApi ? t('library.creator.summary.absExposed') : t('library.creator.summary.absHidden')
     case 'access':
       if (editingLibraryId.value === null) {
         return access.pending.value.length > 0
@@ -339,7 +323,6 @@ const sectionProps = computed(() => ({
     fileWriteReadAlongMaxFileSizeMb: form.fileWriteReadAlongMaxFileSizeMb,
     formatCounts: stats.value?.formatCounts ?? null,
   },
-  integration: { enableAudiobookshelfApi: form.enableAudiobookshelfApi },
   access: { libraryId: editingLibraryId.value },
 }))
 
@@ -540,7 +523,6 @@ const sectionListeners = {
   'update:fileWriteKindleMaxFileSizeMb': (value: number) => (form.fileWriteKindleMaxFileSizeMb = value),
   'update:fileWriteAudioEnabled': (value: boolean) => (form.fileWriteAudioEnabled = value),
   'update:fileWriteAudioMaxFileSizeMb': (value: number) => (form.fileWriteAudioMaxFileSizeMb = value),
-  'update:enableAudiobookshelfApi': (value: boolean) => (form.enableAudiobookshelfApi = value),
   'update:fileWriteAllFiles': (value: boolean) => (form.fileWriteAllFiles = value),
   'update:fileWriteReadAlongEnabled': (value: boolean) => (form.fileWriteReadAlongEnabled = value),
   'update:fileWriteReadAlongMaxFileSizeMb': (value: number) => (form.fileWriteReadAlongMaxFileSizeMb = value),

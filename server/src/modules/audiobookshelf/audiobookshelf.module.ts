@@ -22,6 +22,8 @@ import { AudiobookshelfSeriesController } from './controllers/audiobookshelf-ser
 import { AudiobookshelfCollectionsController } from './controllers/audiobookshelf-collections.controller';
 import { AudiobookshelfSessionController } from './controllers/audiobookshelf-session.controller';
 import { AudiobookshelfPublicSessionController } from './controllers/audiobookshelf-public-session.controller';
+import { AudiobookshelfLibrarySettingsController } from './controllers/audiobookshelf-library-settings.controller';
+import { AudiobookshelfLibrarySettingsService } from './services/audiobookshelf-library-settings.service';
 import { AudiobookshelfLibraryItemMapperService } from './services/audiobookshelf-library-item-mapper.service';
 import { AudiobookshelfAuthService } from './services/audiobookshelf-auth.service';
 import { AudiobookshelfLibrariesService } from './services/audiobookshelf-libraries.service';
@@ -56,8 +58,10 @@ import { AudiobookshelfSessionsService } from './services/audiobookshelf-session
     AudiobookshelfCollectionsController,
     AudiobookshelfSessionController,
     AudiobookshelfPublicSessionController,
+    AudiobookshelfLibrarySettingsController,
   ],
   providers: [
+    AudiobookshelfLibrarySettingsService,
     AudiobookshelfRepository,
     AudiobookshelfLibraryItemMapperService,
     AudiobookshelfAuthService,

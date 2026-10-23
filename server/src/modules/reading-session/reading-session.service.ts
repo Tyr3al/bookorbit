@@ -30,7 +30,8 @@ export interface RecordListeningSessionParams {
   durationSeconds: number;
   progressDelta: number | null;
   endProgress: number | null;
-  source: ReadingSessionSource;
+  /** Null for integrations that have no source of their own; the device key identifies them. */
+  source: ReadingSessionSource | null;
   sourceDeviceKey: string;
   timeZone: string;
 }
@@ -168,7 +169,6 @@ export class ReadingSessionService {
         progressDelta: params.progressDelta,
         endProgress: params.endProgress,
         timezone: params.timeZone,
-        source: params.source,
       });
     }
     return result;

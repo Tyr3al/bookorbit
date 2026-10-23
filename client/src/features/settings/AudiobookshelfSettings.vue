@@ -9,10 +9,14 @@ import ToggleSwitch from '@/components/ui/ToggleSwitch.vue'
 import { api } from '@/lib/api'
 import { copyToClipboard } from '@/lib/clipboard'
 import { usePermissions } from '@/features/auth/composables/usePermissions'
+import type { AudiobookshelfLibraryExposure } from '@bookorbit/types'
+import { useAudiobookshelfLibraries } from './composables/useAudiobookshelfLibraries'
 
 const { t } = useI18n()
 const { hasPermission } = usePermissions()
 const canManageSettings = computed(() => hasPermission('manage_app_settings'))
+const canManageLibraries = computed(() => hasPermission('manage_libraries'))
+const { libraries, pendingIds, load: loadLibraries, setExposed } = useAudiobookshelfLibraries()
 
 const audiobookshelfEnabled = ref(false)
 const loading = ref(true)
@@ -27,6 +31,9 @@ onMounted(async () => {
       const settings = await res.json()
       const row = settings.find((s: { key: string; value: string }) => s.key === 'audiobookshelf_enabled')
       audiobookshelfEnabled.value = row?.value === 'true'
+    }
+    if (canManageLibraries.value && !(await loadLibraries())) {
+      error.value = t('settings.reader.audiobookshelf.loadFailed')
     }
   } catch (e) {
     error.value = e instanceof Error ? e.message : t('settings.reader.audiobookshelf.loadFailed')
@@ -52,6 +59,19 @@ async function toggleAudiobookshelf() {
   } catch {
     toast.error(t('settings.reader.audiobookshelf.updateSettingsFailed'))
   }
+}
+
+async function toggleLibrary(library: AudiobookshelfLibraryExposure, exposed: boolean) {
+  const saved = await setExposed(library, exposed)
+  if (!saved) {
+    toast.error(t('settings.reader.audiobookshelf.updateLibraryFailed', { name: library.name }))
+    return
+  }
+  toast.success(
+    exposed
+      ? t('settings.reader.audiobookshelf.libraryEnabled', { name: library.name })
+      : t('settings.reader.audiobookshelf.libraryDisabled', { name: library.name }),
+  )
 }
 
 async function copyUrl() {
@@ -86,9 +106,28 @@ async function copyUrl() {
               {{ t('settings.reader.audiobookshelf.apiServerHint') }}
             </p>
           </div>
-          <ToggleSwitch :model-value="audiobookshelfEnabled" class="self-start md:self-auto" @update:model-value="toggleAudiobookshelf()" />
+          <ToggleSwitch :model-value="audiobookshelfEnabled" class="self-start md:self-auto" @update:model-value="toggleAudiobookshelf" />
         </div>
       </div>
+    </div>
+
+    <div v-if="canManageLibraries" class="mb-6">
+      <p class="settings-group-label">{{ t('settings.reader.audiobookshelf.libraries') }}</p>
+      <div class="settings-card divide-y divide-border">
+        <p v-if="libraries.length === 0" class="px-4 py-3.5 bg-card settings-hint md:px-5 md:py-4">
+          {{ t('settings.reader.audiobookshelf.librariesEmpty') }}
+        </p>
+        <div v-for="library in libraries" :key="library.id" class="flex items-center justify-between gap-3 px-4 py-3.5 bg-card md:px-5 md:py-4">
+          <p class="settings-label min-w-0 truncate">{{ library.name }}</p>
+          <ToggleSwitch
+            :model-value="library.exposed"
+            :disabled="pendingIds.has(library.id)"
+            :aria-label="library.name"
+            @update:model-value="(value: boolean) => toggleLibrary(library, value)"
+          />
+        </div>
+      </div>
+      <p class="settings-hint mt-2">{{ t('settings.reader.audiobookshelf.librariesHint') }}</p>
     </div>
 
     <!-- Endpoint URL -->

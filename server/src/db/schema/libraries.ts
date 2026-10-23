@@ -75,9 +75,6 @@ export const libraries = pgTable(
     // File naming pattern for uploads (null = use global default)
     fileNamingPattern: varchar('file_naming_pattern', { length: 500 }),
 
-    // Expose this library through the Audiobookshelf-compatible API (Prologue and other ABS clients)
-    enableAudiobookshelfApi: boolean('enable_audiobookshelf_api').notNull().default(false),
-
     // Metadata fetch preferences override (null = inherit global defaults)
     metadataFetchPreferences: jsonb('metadata_fetch_preferences').$type<FieldPreferenceOverrides>(),
 

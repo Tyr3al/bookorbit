@@ -6,10 +6,11 @@ import type { ContentFilterRules, ReadingSessionSource } from '@bookorbit/types'
 import { buildContentFilterClauses } from '../../../common/utils/content-filter-sql.utils';
 import { DB } from '../../../db';
 import * as schema from '../../../db/schema';
+import { isAudiobookshelfExposedLibrary } from '../audiobookshelf-exposure.sql';
 
 type Db = NodePgDatabase<typeof schema>;
 
-const { readingSessions, books, libraries, userLibraryAccess } = schema;
+const { readingSessions, books, userLibraryAccess } = schema;
 
 export interface AudiobookshelfSessionsScope {
   id: number;
@@ -73,17 +74,11 @@ export class AudiobookshelfSessionsRepository {
         .select(LISTENING_SESSION_COLUMNS)
         .from(readingSessions)
         .innerJoin(books, eq(books.id, readingSessions.bookId))
-        .innerJoin(libraries, eq(libraries.id, books.libraryId))
         .where(where)
         .orderBy(desc(readingSessions.endedAt), desc(readingSessions.id))
         .limit(limit)
         .offset(offset),
-      this.db
-        .select({ total: count() })
-        .from(readingSessions)
-        .innerJoin(books, eq(books.id, readingSessions.bookId))
-        .innerJoin(libraries, eq(libraries.id, books.libraryId))
-        .where(where),
+      this.db.select({ total: count() }).from(readingSessions).innerJoin(books, eq(books.id, readingSessions.bookId)).where(where),
     ]);
     return { rows, total: totalRows[0]?.total ?? 0 };
   }
@@ -106,20 +101,17 @@ export class AudiobookshelfSessionsRepository {
         })
         .from(readingSessions)
         .innerJoin(books, eq(books.id, readingSessions.bookId))
-        .innerJoin(libraries, eq(libraries.id, books.libraryId))
         .where(where),
       this.db
         .select({ date: localDate, seconds })
         .from(readingSessions)
         .innerJoin(books, eq(books.id, readingSessions.bookId))
-        .innerJoin(libraries, eq(libraries.id, books.libraryId))
         .where(where)
         .groupBy(sql`1`),
       this.db
         .select({ dayOfWeek: localWeekday, seconds })
         .from(readingSessions)
         .innerJoin(books, eq(books.id, readingSessions.bookId))
-        .innerJoin(libraries, eq(libraries.id, books.libraryId))
         .where(where)
         .groupBy(sql`1`),
       this.db
@@ -130,7 +122,6 @@ export class AudiobookshelfSessionsRepository {
         })
         .from(readingSessions)
         .innerJoin(books, eq(books.id, readingSessions.bookId))
-        .innerJoin(libraries, eq(libraries.id, books.libraryId))
         .where(where)
         .groupBy(readingSessions.bookId),
     ]);
@@ -157,7 +148,7 @@ export class AudiobookshelfSessionsRepository {
       eq(readingSessions.userId, user.id),
       eq(readingSessions.sessionType, 'listen'),
       bookId === undefined ? undefined : eq(readingSessions.bookId, bookId),
-      eq(libraries.enableAudiobookshelfApi, true),
+      isAudiobookshelfExposedLibrary(books.libraryId),
       sql`${books.status} <> 'processing'`,
       accessClause,
       ...filterClauses,

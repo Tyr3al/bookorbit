@@ -1,16 +1,16 @@
 import { hash } from 'bcryptjs';
-import { eq, sql } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createFixtureTree, file, type FixtureTree } from './e2e/scanner/scanner-fixture-builder';
 import { ADMIN_SETUP_DTO, closeE2EContext, createE2EContext, seedLibrary, triggerAndWaitForLibraryScan, type E2EContext } from './e2e/app-harness';
 import { toAudiobookshelfUuid } from '../src/common/utils/audiobookshelf-id.utils';
+import { audiobookshelfExposedLibraries } from '../src/db/fork-schema';
 import {
   appSettings,
   authors,
   bookAuthors,
   bookMetadata,
-  libraries,
   userLibraryAccess,
   userPermissions,
   users,
@@ -44,7 +44,7 @@ describe('Audiobookshelf-compatible API', () => {
     hiddenFixture = await createFixtureTree([file('only.epub')], 'abs-hidden-');
 
     const abs = await seedLibrary(ctx.db, { rootPath: fixture.rootPath, mode: 'book_per_folder', name: 'Audiobooks' });
-    await ctx.db.update(libraries).set({ enableAudiobookshelfApi: true }).where(eq(libraries.id, abs.libraryId));
+    await ctx.db.insert(audiobookshelfExposedLibraries).values({ libraryId: abs.libraryId });
     absLibraryId = abs.libraryId;
 
     const hidden = await seedLibrary(ctx.db, {
@@ -308,7 +308,7 @@ describe('Audiobookshelf-compatible API', () => {
   describe('listening sessions and stats', () => {
     function absListenRows(bookId: number) {
       return ctx.db.query.readingSessions.findMany({
-        where: (rs, { and: andOp, eq: eqOp }) => andOp(eqOp(rs.bookId, bookId), eqOp(rs.source, 'abs')),
+        where: (rs, { and: andOp, eq: eqOp, like }) => andOp(eqOp(rs.bookId, bookId), like(rs.sourceDeviceKey, 'abs:%')),
       });
     }
 
@@ -371,11 +371,13 @@ describe('Audiobookshelf-compatible API', () => {
       expect(typeof session.updatedAt).toBe('number');
     });
 
-    it('shows ABS listening in the BookOrbit reading log under the Audiobookshelf source', async () => {
+    it('shows ABS listening in the BookOrbit reading log', async () => {
+      const [row] = await absListenRows(bookOneId);
+      expect(row!.source).toBeNull();
+
       const response = await ctx.app.inject({ method: 'GET', url: `/api/v1/books/${bookOneId}/sessions`, headers: authorized() });
       expect(response.statusCode).toBe(200);
-      const body = response.json();
-      expect(body.items.some((item: { source: string }) => item.source === 'abs')).toBe(true);
+      expect(response.json().items).toContainEqual(expect.objectContaining({ id: row!.id, durationSeconds: row!.durationSeconds }));
     });
 
     it('stores offline sessions keyed by the client id so a re-upload grows the session instead of duplicating it', async () => {
@@ -514,6 +516,54 @@ describe('Audiobookshelf-compatible API', () => {
 
       const item = await ctx.app.inject({ method: 'GET', url: `/abs/api/items/${bookOneId}`, headers: { authorization: `Bearer ${outsiderToken}` } });
       expect(item.statusCode).toBe(404);
+    });
+
+    it('lets a library manager choose exposed libraries and hides an unexposed one from ABS clients', async () => {
+      const settingsUrl = '/api/v1/abs/settings/libraries';
+      const list = await ctx.app.inject({ method: 'GET', url: settingsUrl, headers: authorized() });
+      expect(list.statusCode).toBe(200);
+      expect(list.json()).toEqual(
+        expect.arrayContaining([
+          { id: absLibraryId, name: 'Audiobooks', exposed: true },
+          { id: hiddenLibraryId, name: 'Hidden Library', exposed: false },
+        ]),
+      );
+
+      const hide = await ctx.app.inject({ method: 'PUT', url: `${settingsUrl}/${absLibraryId}`, headers: authorized(), payload: { exposed: false } });
+      expect(hide.statusCode).toBe(200);
+      expect(hide.json()).toEqual({ id: absLibraryId, name: 'Audiobooks', exposed: false });
+      const hidden = await ctx.app.inject({ method: 'GET', url: '/abs/api/libraries', headers: authorized() });
+      expect(hidden.json().libraries).toEqual([]);
+
+      const show = await ctx.app.inject({ method: 'PUT', url: `${settingsUrl}/${absLibraryId}`, headers: authorized(), payload: { exposed: true } });
+      expect(show.statusCode).toBe(200);
+      const shown = await ctx.app.inject({ method: 'GET', url: '/abs/api/libraries', headers: authorized() });
+      expect(shown.json().libraries).toHaveLength(1);
+
+      const invalid = await ctx.app.inject({
+        method: 'PUT',
+        url: `${settingsUrl}/${absLibraryId}`,
+        headers: authorized(),
+        payload: { exposed: 'yes' },
+      });
+      expect(invalid.statusCode).toBe(400);
+      const unknown = await ctx.app.inject({ method: 'PUT', url: `${settingsUrl}/999999`, headers: authorized(), payload: { exposed: true } });
+      expect(unknown.statusCode).toBe(404);
+    });
+
+    it('refuses library exposure settings to users without the manage-libraries permission', async () => {
+      const login = await absLogin('abs-outsider', 'Outsider123');
+      const outsider = { authorization: `Bearer ${login.json().user.token}` };
+
+      const list = await ctx.app.inject({ method: 'GET', url: '/api/v1/abs/settings/libraries', headers: outsider });
+      expect(list.statusCode).toBe(403);
+      const update = await ctx.app.inject({
+        method: 'PUT',
+        url: `/api/v1/abs/settings/libraries/${hiddenLibraryId}`,
+        headers: outsider,
+        payload: { exposed: true },
+      });
+      expect(update.statusCode).toBe(403);
     });
 
     it('gates download routes on the library_download permission', async () => {

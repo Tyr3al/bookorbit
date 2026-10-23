@@ -3,10 +3,10 @@
 ## Status
 
 The active branch is `BO-650-audiobookshelf-api`, merged up to date with upstream
-`bookorbit/bookorbit` main. ABS login and refresh run on upstream's session-bound auth (see the
-merge commit), and ABS listening is recorded in BookOrbit's reading history (see "Listening
-sessions and stats" below). The schema delta is one migration, `0125_add_audiobookshelf_api`:
-the per-library opt-in column and the `abs` reading-session source.
+`bookorbit/bookorbit` main. Upstream closed this feature as not planned, so this is a long-lived
+fork: read [FORK.md](FORK.md) for the migration rules and the release sync procedure before
+changing the schema. ABS login and refresh run on upstream's session-bound auth, and ABS listening
+is recorded in BookOrbit's reading history (see "Listening sessions and stats" below).
 
 The working tree should contain only these user-owned untracked paths in addition to this
 document:
@@ -196,8 +196,10 @@ The duplication is deliberate: `AudiobookshelfAuthorsService` already injects
 
 ## Listening sessions and stats
 
-ABS listening is stored in BookOrbit's own `reading_sessions` table (`sessionType: 'listen'`,
-`source: 'abs'`), not in a separate ABS table. The earlier `abs_listening_sessions` table never
+ABS listening is stored in BookOrbit's own `reading_sessions` table (`sessionType: 'listen'`, no
+source, device key `abs:<deviceId>`), not in a separate ABS table. The source stays null because the
+source check constraint belongs to upstream (see FORK.md), so BookOrbit's statistics count ABS
+listening in the general BookOrbit bucket. The earlier `abs_listening_sessions` table never
 shipped and was removed when the branch was brought up to date with upstream main. As a result ABS
 listening feeds the reading log, statistics, daily stats, achievements and Hardcover/StoryGraph
 sync, and ABS clients see listening from the web player and native apps too.

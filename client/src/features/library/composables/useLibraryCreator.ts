@@ -20,7 +20,7 @@ export const METADATA_LABELS: Record<string, string> = {
   regex: 'Regex metadata',
 }
 
-export type LibraryCreatorSectionId = 'details' | 'folders' | 'scanner' | 'metadata' | 'reading' | 'schedule' | 'fileWrite' | 'integration' | 'access'
+export type LibraryCreatorSectionId = 'details' | 'folders' | 'scanner' | 'metadata' | 'reading' | 'schedule' | 'fileWrite' | 'access'
 
 /** The result of checking one folder: whether the server can read it, and what it would import. */
 export type FolderCheck =
@@ -68,7 +68,6 @@ function blankForm() {
     fileWriteReadAlongEnabled: false,
     fileWriteReadAlongMaxFileSizeMb: 1000,
     fileRenameEnabled: false,
-    enableAudiobookshelfApi: false,
   }
 }
 
@@ -192,7 +191,6 @@ export function useLibraryCreator() {
     form.fileWriteReadAlongEnabled = library.fileWriteReadAlongEnabled
     form.fileWriteReadAlongMaxFileSizeMb = library.fileWriteReadAlongMaxFileSizeMb
     form.fileRenameEnabled = library.fileRenameEnabled
-    form.enableAudiobookshelfApi = library.enableAudiobookshelfApi
   }
 
   /**

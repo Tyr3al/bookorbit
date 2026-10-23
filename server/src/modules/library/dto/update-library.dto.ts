@@ -226,8 +226,4 @@ export class UpdateLibraryDto {
   @IsOptionalNotNull()
   @IsBoolean()
   fileRenameEnabled?: boolean;
-
-  @IsOptional()
-  @IsBoolean()
-  enableAudiobookshelfApi?: boolean;
 }

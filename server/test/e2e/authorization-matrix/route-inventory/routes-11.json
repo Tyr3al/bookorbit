@@ -670,5 +670,29 @@
     "isPublic": true,
     "allowDefault": false,
     "useGuards": ["AudiobookshelfEnabledGuard"]
+  },
+  {
+    "file": "server/src/modules/audiobookshelf/controllers/audiobookshelf-library-settings.controller.ts",
+    "className": "AudiobookshelfLibrarySettingsController",
+    "methodName": "list",
+    "httpMethod": "GET",
+    "path": "/abs/settings/libraries",
+    "permissions": ["Permission.ManageLibraries"],
+    "libraryAccess": [],
+    "isPublic": false,
+    "allowDefault": false,
+    "useGuards": []
+  },
+  {
+    "file": "server/src/modules/audiobookshelf/controllers/audiobookshelf-library-settings.controller.ts",
+    "className": "AudiobookshelfLibrarySettingsController",
+    "methodName": "update",
+    "httpMethod": "PUT",
+    "path": "/abs/settings/libraries/:id",
+    "permissions": ["Permission.ManageLibraries"],
+    "libraryAccess": [],
+    "isPublic": false,
+    "allowDefault": false,
+    "useGuards": []
   }
 ]

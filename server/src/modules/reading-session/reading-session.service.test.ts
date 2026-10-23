@@ -598,7 +598,7 @@ describe('ReadingSessionService.recordListeningSession', () => {
     durationSeconds: 200,
     progressDelta: 2,
     endProgress: 12,
-    source: 'abs' as const,
+    source: null,
     sourceDeviceKey: 'abs:phone',
     timeZone: 'UTC',
   };
@@ -634,16 +634,13 @@ describe('ReadingSessionService.recordListeningSession', () => {
       200,
       2,
       12,
-      'abs',
+      null,
       'UTC',
       { sourceDeviceKey: 'abs:phone' },
       'listen',
     );
     expect(mockUserStatistics.invalidateUser).toHaveBeenCalledWith(7);
-    expect(emit).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ userId: 7, bookFileId: 42, durationSeconds: 200, source: 'abs' }),
-    );
+    expect(emit).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ userId: 7, bookFileId: 42, durationSeconds: 200 }));
   });
 
   it('caps the reported listening at the wall-clock span', async () => {

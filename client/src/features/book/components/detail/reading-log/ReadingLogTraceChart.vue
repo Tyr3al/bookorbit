@@ -25,7 +25,6 @@ const BUCKET_TOKEN: Record<ReadingSessionSourceBucket, string> = {
   android: '--pill-android',
   koreader: '--pill-koreader',
   kobo: '--pill-kobo',
-  audiobookshelf: '--pill-abs',
 }
 
 function localDayKey(iso: string): string {

@@ -42,7 +42,6 @@ function library(overrides: Partial<Library> & Pick<Library, 'id' | 'name'>): Li
     fileWriteReadAlongEnabled: false,
     fileWriteReadAlongMaxFileSizeMb: 1000,
     fileRenameEnabled: false,
-    enableAudiobookshelfApi: false,
     folders: [],
     createdAt: '2024-01-01T00:00:00.000Z',
     updatedAt: '2024-01-01T00:00:00.000Z',

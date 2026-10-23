@@ -3612,7 +3612,13 @@
         "endpoint": "Endpoint",
         "endpointHint": "Enter this address as the server URL in the app.",
         "notes": "Notes",
-        "notesBody": "Turn on individual libraries under each library's settings to expose their audiobooks through this endpoint. This integration is experimental and its behavior may change.",
+        "notesBody": "Only audiobooks in the libraries turned on below are visible to these apps. This integration is experimental and its behavior may change.",
+        "libraries": "Libraries",
+        "librariesHint": "Choose which libraries Audiobookshelf-compatible apps can see. Only their audiobooks appear.",
+        "librariesEmpty": "No libraries yet.",
+        "libraryEnabled": "{name} is now visible in Audiobookshelf apps",
+        "libraryDisabled": "{name} is no longer visible in Audiobookshelf apps",
+        "updateLibraryFailed": "Failed to update {name}",
         "serverEnabled": "Audiobookshelf API enabled",
         "serverDisabled": "Audiobookshelf API disabled",
         "updateSettingsFailed": "Failed to update Audiobookshelf settings",
@@ -4615,7 +4621,6 @@
         "koreader": "KOReader",
         "manual": "Manual",
         "kobo": "Kobo",
-        "abs": "Audiobookshelf",
         "unknown": "Unknown"
       },
       "formats": "Formats",
@@ -10443,8 +10448,7 @@
         "fileWrite": "File Write",
         "reading": "Reading",
         "schedule": "Schedule",
-        "access": "Access",
-        "integration": "Integration"
+        "access": "Access"
       },
       "actions": {
         "saving": "Saving…",
@@ -10913,12 +10917,6 @@
           "body": "The library was created. Try adding {names} again, or add them later from this section."
         }
       },
-      "integration": {
-        "audiobookshelf": {
-          "title": "Audiobookshelf API",
-          "hint": "Expose this library to Audiobookshelf-compatible apps (Prologue, Plappa). Only audiobooks appear."
-        }
-      },
       "optional": "Optional",
       "nav": {
         "details": "Library",
@@ -10928,7 +10926,6 @@
         "reading": "Reading",
         "schedule": "Automation",
         "fileWrite": "File updates",
-        "integration": "Integration",
         "access": "Access",
         "descriptions": {
           "details": "What the library is called and how its covers look.",
@@ -10938,7 +10935,6 @@
           "reading": "When a book moves from unread to reading to read.",
           "schedule": "Keep the library current without pressing Scan.",
           "fileWrite": "Optional changes BookOrbit may make to the files on disk.",
-          "integration": "Expose this library to Audiobookshelf-compatible apps.",
           "access": "Who else can see and work with this library."
         }
       },
@@ -10983,8 +10979,6 @@
         "writes": "{count, plural, =0 {Writes nothing} one {Writes # kind of file} other {Writes # kinds of file}}",
         "renames": "Renames files",
         "untouched": "Files left untouched",
-        "absExposed": "Visible in Audiobookshelf apps",
-        "absHidden": "Not exposed to Audiobookshelf apps",
         "onlySuperusers": "Only superusers",
         "accessQueued": "{count, plural, one {# person to add} other {# people to add}}",
         "accessPeople": "{count, plural, =0 {Only superusers} one {# person} other {# people}}"

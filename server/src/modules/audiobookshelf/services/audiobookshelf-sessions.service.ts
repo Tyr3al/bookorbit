@@ -22,6 +22,9 @@ import { AudiobookshelfSessionsRepository, type ListeningSessionRow } from './au
 const LIVE_SESSION_ID_PREFIX = 'abs-live:';
 const LOCAL_SESSION_ID_PREFIX = 'abs-local:';
 const DEFAULT_DEVICE_KEY = 'default';
+/** ABS sessions carry no source of their own (see the class comment); this device-key prefix is
+ * what identifies them. */
+const SOURCE_DEVICE_KEY_PREFIX = 'abs:';
 
 export interface LiveListeningReport {
   bookId: number;
@@ -56,9 +59,14 @@ interface BookDisplay {
 
 /**
  * Bridges ABS listening into BookOrbit's reading history. Every write lands in reading_sessions
- * as a 'listen' session with source 'abs', so it feeds the reading log, statistics, daily stats,
- * achievements and external trackers like any other session. Reads serve the ABS
- * listening-session and stats routes from the same table.
+ * as a 'listen' session, so it feeds the reading log, statistics, daily stats, achievements and
+ * external trackers like any other session. Reads serve the ABS listening-session and stats routes
+ * from the same table.
+ *
+ * Sessions are written with no source: the reading_sessions source list is upstream's, and adding
+ * a value to it from this fork would break the next upstream migration that recreates that check
+ * constraint. BookOrbit therefore counts ABS listening under its general bucket, and the `abs:`
+ * device key is what tells these sessions apart.
  *
  * Write methods never throw: listening history is a side effect of play/sync, and a failure here
  * must not fail the progress write the client is waiting on.
@@ -89,7 +97,6 @@ export class AudiobookshelfSessionsService {
       const open = await this.readingSessions.findLatestSourceSession({
         userId: user.id,
         bookId: report.bookId,
-        source: 'abs',
         sourceDeviceKey,
         sessionIdPrefix: LIVE_SESSION_ID_PREFIX,
         endedAfter: new Date(report.now.getTime() - AUDIOBOOKSHELF_LIVE_SESSION_GAP_MS),
@@ -105,7 +112,7 @@ export class AudiobookshelfSessionsService {
         durationSeconds: (open?.durationSeconds ?? 0) + listened,
         progressDelta: progressDelta(startProgress, report.endProgress),
         endProgress: report.endProgress,
-        source: 'abs',
+        source: null,
         sourceDeviceKey,
         timeZone: userTimeZone(user),
       });
@@ -145,7 +152,7 @@ export class AudiobookshelfSessionsService {
           durationSeconds: session.timeListening,
           progressDelta: progressDelta(session.startProgress, session.endProgress),
           endProgress: session.endProgress,
-          source: 'abs',
+          source: null,
           sourceDeviceKey: toSourceDeviceKey(session.deviceKey),
           timeZone,
         });
@@ -302,7 +309,7 @@ function toPlaybackSession(
 ): AudiobookshelfPlaybackSession {
   const startPercent = sessionStartProgress(row.endProgress, row.progressDelta, null);
   const positionAt = (percent: number | null) => (percent !== null && duration ? Math.max(0, (percent / 100) * duration) : 0);
-  const isAbs = row.source === 'abs';
+  const isAbs = row.source === null && row.sourceDeviceKey?.startsWith(SOURCE_DEVICE_KEY_PREFIX) === true;
   return {
     id: toAudiobookshelfUuid(row.id),
     userId: toAudiobookshelfUuid(userId),
@@ -319,7 +326,8 @@ function toPlaybackSession(
     duration,
     playMethod: 0,
     mediaPlayer: isAbs ? 'audiobookshelf' : (row.source ?? 'bookorbit'),
-    deviceInfo: isAbs && row.sourceDeviceKey && row.sourceDeviceKey !== toSourceDeviceKey(null) ? { deviceId: row.sourceDeviceKey.slice(4) } : null,
+    deviceInfo:
+      isAbs && row.sourceDeviceKey !== toSourceDeviceKey(null) ? { deviceId: row.sourceDeviceKey!.slice(SOURCE_DEVICE_KEY_PREFIX.length) } : null,
     serverVersion: AUDIOBOOKSHELF_SERVER_VERSION,
     date: toDateKeyInTimeZone(row.startedAt, timeZone),
     dayOfWeek: new Intl.DateTimeFormat('en-US', { weekday: 'long', timeZone }).format(row.startedAt),
@@ -349,7 +357,7 @@ function localSessionId(session: LocalListeningSession): string {
 }
 
 function toSourceDeviceKey(deviceKey: string | null): string {
-  return `abs:${(deviceKey || DEFAULT_DEVICE_KEY).slice(0, 120)}`;
+  return `${SOURCE_DEVICE_KEY_PREFIX}${(deviceKey || DEFAULT_DEVICE_KEY).slice(0, 120)}`;
 }
 
 function userTimeZone(user: RequestUser): string {
